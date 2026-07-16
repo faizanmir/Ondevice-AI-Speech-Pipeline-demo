@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.aiagent.engine.litertlm" >
+
+    <uses-sdk android:minSdkVersion="31" />
+
+    <application>
+
+        <!--
+             Without these the GPU backend crashes on Adreno parts when it tries to dlopen OpenCL.
+             android:required="false" keeps the app installable on devices that lack them.
+        -->
+        <uses-native-library
+            android:name="libOpenCL.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libOpenCL-car.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libOpenCL-pixel.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libvndksupport.so"
+            android:required="false" />
+
+        <!-- NPU delegation (Qualcomm Hexagon, Google Tensor). -->
+        <uses-native-library
+            android:name="libcdsprpc.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libedgetpu_litert.so"
+            android:required="false" />
+    </application>
+
+</manifest>

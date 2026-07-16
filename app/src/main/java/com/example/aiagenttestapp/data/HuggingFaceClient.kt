@@ -1,0 +1,342 @@
+package com.example.aiagenttestapp.data
+
+import com.example.aiagent.engine.core.Accelerator
+import com.example.aiagent.engine.core.ModelFile
+import com.example.aiagent.engine.core.ModelFormat
+import com.example.aiagent.engine.core.ModelSpec
+import com.example.aiagent.engine.core.Quantization
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.io.IOException
+import java.net.URLEncoder
+import java.util.concurrent.TimeUnit
+
+/** A repository in HuggingFace search results. */
+data class HfRepo(
+    val id: String,
+    val author: String,
+    val downloads: Long,
+    val likes: Int,
+    /** True when the repo needs a signed-in HuggingFace account to download from. */
+    val gated: Boolean,
+)
+
+/**
+ * One downloadable model inside a repo. Usually one literal file; for MNN -- whose "model" is the
+ * whole repo -- this is a synthetic entry whose [path] is the config.json entry point, [sizeBytes]
+ * the repo total, and [components] every file that must actually be downloaded.
+ */
+data class HfModelFile(
+    val path: String,
+    val sizeBytes: Long,
+    val format: ModelFormat,
+    val quantization: Quantization,
+    val components: List<ModelFile> = emptyList(),
+)
+
+data class HfRepoDetail(
+    val id: String,
+    val gated: Boolean,
+    val license: String,
+    /** Null when HuggingFace does not publish a parameter count for the repo. */
+    val paramsBillions: Double?,
+    val contextTokens: Int?,
+    val architecture: String?,
+    val files: List<HfModelFile>,
+)
+
+/**
+ * Reads the HuggingFace Hub API.
+ *
+ * Works signed out, and works better signed in. Gated repos -- every Gemma-branded and Llama repo,
+ * among others -- are always *shown*, because a search for "gemma" that silently returns nothing is
+ * far more confusing than one that says "needs sign-in". [HuggingFaceAuth] supplies a bearer token
+ * when the user has one, which both unlocks those downloads and lifts the Hub's rate limits.
+ */
+class HuggingFaceClient(
+    private val auth: HuggingFaceAuth,
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build(),
+) {
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /**
+     * Searches the Hub for repos containing models this app can actually run.
+     *
+     * The filter is by file format, because that is what decides which engine can load the result:
+     * GGUF goes to llama.cpp, `.litertlm` to LiteRT-LM. There is no Hub-wide tag for LiteRT-LM, so
+     * that search is scoped to the `litert-community` org, which is where Google publishes them.
+     */
+    suspend fun search(query: String, format: ModelFormat): List<HfRepo> = withContext(Dispatchers.IO) {
+        val encoded = URLEncoder.encode(query, "UTF-8")
+
+        val url = when (format) {
+            ModelFormat.GGUF ->
+                "$API/models?search=$encoded&filter=gguf&limit=$SEARCH_LIMIT" +
+                    "&sort=downloads&direction=-1"
+
+            ModelFormat.LITERTLM ->
+                "$API/models?search=$encoded&author=litert-community&limit=$SEARCH_LIMIT" +
+                    "&sort=downloads&direction=-1"
+
+            // Same story as LiteRT-LM: no Hub-wide tag, but Alibaba publishes its MNN LLM
+            // exports under one org, so the search is scoped there.
+            ModelFormat.MNN ->
+                "$API/models?search=$encoded&author=taobao-mnn&limit=$SEARCH_LIMIT" +
+                    "&sort=downloads&direction=-1"
+
+            // Unreachable: the Hub search UI only offers the downloadable formats. Gemini Nano is
+            // delivered by the OS, not by HuggingFace.
+            ModelFormat.AICORE ->
+                throw IllegalArgumentException("AICore models cannot be searched on HuggingFace")
+        }
+
+        val body = get(url)
+        val array = json.parseToJsonElement(body).jsonArray
+
+        array.mapNotNull { element ->
+            val obj = element.jsonObject
+            val id = obj.string("id") ?: obj.string("modelId") ?: return@mapNotNull null
+            HfRepo(
+                id = id,
+                author = obj.string("author") ?: id.substringBefore('/'),
+                downloads = obj.long("downloads") ?: 0L,
+                likes = obj.int("likes") ?: 0,
+                gated = obj.isGated(),
+            )
+        }
+    }
+
+    /** Everything needed to turn a repo into runnable [ModelSpec]s: metadata plus the file list. */
+    suspend fun repoDetail(repoId: String): HfRepoDetail = withContext(Dispatchers.IO) {
+        val info = json.parseToJsonElement(get("$API/models/$repoId")).jsonObject
+        val tree = json.parseToJsonElement(get("$API/models/$repoId/tree/main?recursive=true"))
+            .jsonArray
+
+        // GGUF repos carry parsed metadata under `gguf`, which is the good case: a real parameter
+        // count and a real context length rather than something guessed from the repo name.
+        val gguf = info["gguf"]?.jsonObject
+        val paramCount = gguf?.long("total")
+            ?: info["safetensors"]?.jsonObject?.long("total")
+
+        HfRepoDetail(
+            id = repoId,
+            gated = info.isGated(),
+            license = info.licenseFromTags(),
+            paramsBillions = paramCount?.let { it / 1_000_000_000.0 }
+                // No published count: fall back to the parameter size in the repo name, which
+                // authors reliably encode ("Qwen2.5-1.5B-Instruct", "SmolLM2-360M").
+                ?: parseParamsFromName(repoId),
+            contextTokens = gguf?.int("context_length"),
+            architecture = gguf?.string("architecture"),
+            files = tree.toModelFiles() + listOfNotNull(tree.toMnnModel(repoId)),
+        )
+    }
+
+    /**
+     * An MNN export is a whole repo, not a file: config.json (the entry point the engine loads)
+     * plus weights, graph and tokenizer alongside it. When the tree has that shape, this collapses
+     * it into one synthetic [HfModelFile] sized as the total, so the rest of the pipeline -- the
+     * file picker, the fit check, the download -- can treat it like any other pickable model.
+     */
+    private fun JsonArray.toMnnModel(repoId: String): HfModelFile? {
+        val fileEntries = mapNotNull { element ->
+            val obj = element.jsonObject
+            if (obj.string("type") == "directory") return@mapNotNull null
+            val path = obj.string("path") ?: return@mapNotNull null
+            // Repo housekeeping, not model data.
+            if (path.startsWith(".") || path.substringAfterLast('/').startsWith(".")) {
+                return@mapNotNull null
+            }
+            if (path.endsWith(".md", ignoreCase = true)) return@mapNotNull null
+            val size = obj["lfs"]?.jsonObject?.long("size") ?: obj.long("size")
+                ?: return@mapNotNull null
+            path to size
+        }
+
+        val looksLikeMnn = fileEntries.any { it.first == "config.json" } &&
+            fileEntries.any { it.first.endsWith(".mnn") }
+        if (!looksLikeMnn) return null
+
+        // Namespaced by repo on disk, same reason as single-file models: every MNN repo ships a
+        // file literally called config.json.
+        val dir = repoId.replace('/', '_')
+        return HfModelFile(
+            path = "config.json",
+            sizeBytes = fileEntries.sumOf { it.second },
+            format = ModelFormat.MNN,
+            quantization = Quantization.fromFileName(repoId) ?: Quantization.Q4,
+            components = fileEntries.map { (path, size) ->
+                ModelFile(
+                    url = "https://huggingface.co/$repoId/resolve/main/$path?download=true",
+                    relativePath = "$dir/$path",
+                    sizeBytes = size,
+                )
+            },
+        )
+    }
+
+    private fun JsonArray.toModelFiles(): List<HfModelFile> = mapNotNull { element ->
+        val obj = element.jsonObject
+        val path = obj.string("path") ?: return@mapNotNull null
+
+        val format = when {
+            path.endsWith(".gguf", ignoreCase = true) -> ModelFormat.GGUF
+            path.endsWith(".litertlm", ignoreCase = true) -> ModelFormat.LITERTLM
+            else -> return@mapNotNull null
+        }
+
+        // Multi-part GGUF ("-00001-of-00003.gguf") needs all shards downloaded and stitched, which
+        // this app does not do. Skipping them beats offering a download that cannot ever load.
+        if (SPLIT_FILE.containsMatchIn(path)) return@mapNotNull null
+
+        // LFS size is the real one; `size` on an LFS pointer is the size of the pointer file.
+        val size = obj["lfs"]?.jsonObject?.long("size") ?: obj.long("size") ?: return@mapNotNull null
+
+        HfModelFile(
+            path = path,
+            sizeBytes = size,
+            format = format,
+            quantization = Quantization.fromFileName(path) ?: Quantization.Q4,
+        )
+    }.sortedBy { it.sizeBytes }
+
+    private fun get(url: String): String {
+        val request = Request.Builder()
+            .url(url)
+            .apply {
+                // Signing in also makes gated repos visible to search, so results stop being
+                // silently truncated for anyone who has an account.
+                auth.authHeader()?.let { (name, value) -> header(name, value) }
+            }
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IOException(
+                    when (response.code) {
+                        401, 403 -> "This repository requires a HuggingFace sign-in"
+                        404 -> "Not found on HuggingFace"
+                        429 -> "HuggingFace is rate-limiting; wait a moment and try again"
+                        else -> "HuggingFace returned HTTP ${response.code}"
+                    },
+                )
+            }
+            return response.body?.string() ?: throw IOException("Empty response from HuggingFace")
+        }
+    }
+
+    private companion object {
+        const val API = "https://huggingface.co/api"
+        const val SEARCH_LIMIT = 30
+
+        val SPLIT_FILE = Regex("""-\d{5}-of-\d{5}\.""")
+
+        /** `gated` is `false`, `"auto"`, or `"manual"` -- a boolean *or* a string, so test both. */
+        fun JsonObject.isGated(): Boolean {
+            val element = this["gated"]?.jsonPrimitive ?: return false
+            element.booleanOrNull?.let { return it }
+            return element.contentOrNull != null && element.contentOrNull != "false"
+        }
+
+        fun JsonObject.licenseFromTags(): String =
+            this["tags"]?.jsonArray
+                ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                ?.firstOrNull { it.startsWith("license:") }
+                ?.removePrefix("license:")
+                ?: "See model card"
+
+        fun JsonObject.string(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
+        fun JsonObject.long(key: String): Long? = this[key]?.jsonPrimitive?.longOrNull
+        fun JsonObject.int(key: String): Int? = this[key]?.jsonPrimitive?.intOrNull
+    }
+}
+
+/** Pulls "1.5B" / "360M" out of a repo name, for repos with no published parameter count. */
+private val PARAMS_IN_NAME = Regex("""(\d+(?:\.\d+)?)\s*([BbMm])(?![a-zA-Z])""")
+
+/** Shared by the HuggingFace and MNN-market clients, whose repo names follow the same convention. */
+internal fun parseParamsFromName(name: String): Double? =
+    PARAMS_IN_NAME.findAll(name)
+        // Take the largest match: "Qwen2.5-1.5B" would otherwise match the "2.5" in the
+        // family name before reaching the parameter count.
+        .mapNotNull { result ->
+            val value = result.groupValues[1].toDoubleOrNull() ?: return@mapNotNull null
+            when (result.groupValues[2].lowercase()) {
+                "b" -> value
+                "m" -> value / 1000.0
+                else -> null
+            }
+        }
+        .maxOrNull()
+
+/**
+ * Builds a runnable [ModelSpec] from a file the user picked out of a HuggingFace repo.
+ *
+ * `minDeviceMemoryGb = 0` is the important part: nobody has hand-vetted this model on real
+ * hardware the way Google's allowlist tiers were, so it carries no curated tier and the fit check
+ * falls through to the computed RAM formula, which is the only honest authority available here.
+ */
+fun HfRepoDetail.toModelSpec(file: HfModelFile): ModelSpec {
+    val name = id.substringAfter('/')
+
+    return ModelSpec(
+        id = "hf:$id:${file.path}",
+        name = name,
+        vendor = id.substringBefore('/'),
+        // A missing parameter count only affects the KV-cache term. Infer from file size rather
+        // than give up: at this quantization, bytes/param is at least a usable approximation.
+        paramsBillions = paramsBillions
+            ?: (file.sizeBytes / 1_000_000_000.0 / file.quantization.bytesPerWeight),
+        quantization = file.quantization,
+        format = file.format,
+        downloadUrl = "https://huggingface.co/$id/resolve/main/${file.path}?download=true",
+        // Namespaced by repo: two repos both shipping "model.gguf" must not collide on disk, and
+        // engines that cache compiled graphs key on filename alone. A multi-file MNN model gets a
+        // repo-named *directory* instead, with config.json -- the file the engine loads -- inside.
+        fileName = if (file.components.isEmpty()) {
+            "${id.replace('/', '_')}_${file.path.substringAfterLast('/')}"
+        } else {
+            "${id.replace('/', '_')}/${file.path}"
+        },
+        sizeBytes = file.sizeBytes,
+        // Cap the context we actually allocate. Modern GGUFs advertise 32K or 128K, and honouring
+        // that would reserve gigabytes of KV cache on a phone -- far more than the weights.
+        contextTokens = (contextTokens ?: DEFAULT_CONTEXT).coerceAtMost(MAX_CONTEXT),
+        minDeviceMemoryGb = 0,
+        accelerators = when (file.format) {
+            ModelFormat.GGUF -> setOf(Accelerator.CPU)
+            ModelFormat.LITERTLM -> setOf(Accelerator.GPU, Accelerator.CPU)
+            ModelFormat.MNN -> setOf(Accelerator.CPU)
+            // Unreachable: toModelFiles only ever assigns the downloadable formats.
+            ModelFormat.AICORE -> error("AICore models cannot come from HuggingFace")
+        },
+        license = license,
+        description = buildString {
+            append("Added from HuggingFace")
+            architecture?.let { append(" · $it") }
+            append(" · ${file.path.substringAfterLast('/')}")
+        },
+        isCustom = true,
+        repoId = id,
+        requiresAuth = gated,
+        files = file.components,
+    )
+}
+
+private const val DEFAULT_CONTEXT = 4096
+private const val MAX_CONTEXT = 4096

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The app in one glyph: a chat bubble with a spark punched out of it, on-device AI you talk
+     to. The spark is a cut-out (fillType evenOdd), not a second colour, so the same drawable
+     works as the themed/monochrome icon, where only the alpha survives. Everything stays inside
+     the 66dp adaptive-icon safe zone (centre 54,54, radius 33). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M44,32 H64 A12,12 0 0 1 76,44 V60 A12,12 0 0 1 64,72 H44 L32,84 V44 A12,12 0 0 1 44,32 Z M54,38 L58,48 L68,52 L58,56 L54,66 L50,56 L40,52 L50,48 Z" />
+</vector>

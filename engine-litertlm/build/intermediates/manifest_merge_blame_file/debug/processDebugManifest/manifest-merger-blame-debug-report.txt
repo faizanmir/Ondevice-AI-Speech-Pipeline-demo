@@ -1,0 +1,56 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.example.aiagent.engine.litertlm" >
+4
+5    <uses-sdk android:minSdkVersion="31" />
+5-->INJECTED
+5-->INJECTED
+6
+7    <application>
+7-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:4:5-15:19
+8
+9        <!--
+10             Without these the GPU backend crashes on Adreno parts when it tries to dlopen OpenCL.
+11             android:required="false" keeps the app installable on devices that lack them.
+12        -->
+13        <uses-native-library
+13-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:9-85
+14            android:name="libOpenCL.so"
+14-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:30-57
+15            android:required="false" />
+15-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:58-82
+16        <uses-native-library
+16-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:9-85
+17            android:name="libOpenCL-car.so"
+17-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:30-57
+18            android:required="false" />
+18-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:58-82
+19        <uses-native-library
+19-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:9-85
+20            android:name="libOpenCL-pixel.so"
+20-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:30-57
+21            android:required="false" />
+21-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:58-82
+22        <uses-native-library
+22-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:9-85
+23            android:name="libvndksupport.so"
+23-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:30-57
+24            android:required="false" />
+24-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:58-82
+25
+26        <!-- NPU delegation (Qualcomm Hexagon, Google Tensor). -->
+27        <uses-native-library
+27-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:9-85
+28            android:name="libcdsprpc.so"
+28-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:30-57
+29            android:required="false" />
+29-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:58-82
+30        <uses-native-library
+30-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:9-85
+31            android:name="libedgetpu_litert.so"
+31-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:30-57
+32            android:required="false" />
+32-->/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:58-82
+33    </application>
+34
+35</manifest>

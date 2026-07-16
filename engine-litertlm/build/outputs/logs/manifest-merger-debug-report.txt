@@ -1,0 +1,24 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:2:1-17:12
+INJECTED from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:2:1-17:12
+	package
+		INJECTED from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:2:11-69
+application
+ADDED from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:4:5-15:19
+uses-native-library
+ADDED from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:9-85
+	android:required
+		ADDED from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:58-82
+	android:name
+		ADDED from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml:7:30-57
+uses-sdk
+INJECTED from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml
+INJECTED from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-litertlm/src/main/AndroidManifest.xml

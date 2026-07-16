@@ -1,0 +1,823 @@
+com.android.ide.common.process.ProcessException: ninja: Entering directory `/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/w1y5f4vy/arm64-v8a'
+[0/2] Re-checking globbed directories...
+[1/472] Building C object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.o
+[2/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-threading.cpp.o
+[3/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/hbm.cpp.o
+[4/472] Building C object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.c.o
+[5/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.o
+[6/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/traits.cpp.o
+[7/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.cpp.o
+[8/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/mmq.cpp.o
+[9/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/amx.cpp.o
+[10/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-opt.cpp.o
+[11/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend.cpp.o
+[12/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/vec.cpp.o
+[13/472] Building C object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/quants.c.o
+[14/472] Creating directories for 'vulkan-shaders-gen'
+[15/472] No download step for 'vulkan-shaders-gen'
+[16/472] No update step for 'vulkan-shaders-gen'
+[17/472] Building C object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml.c.o
+[18/472] Building C object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/quants.c.o
+[19/472] No patch step for 'vulkan-shaders-gen'
+[20/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/repack.cpp.o
+[21/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/binary-ops.cpp.o
+[22/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend-meta.cpp.o
+[23/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.o
+[24/472] Performing configure step for 'vulkan-shaders-gen'
+-- The C compiler identification is AppleClang 21.0.0.21000101
+-- The CXX compiler identification is AppleClang 21.0.0.21000101
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/clang - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/clang++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Looking for pthread.h
+-- Looking for pthread.h - found
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE  
+-- Enabling coopmat glslc support
+-- Enabling coopmat2 glslc support
+-- Enabling dot glslc support
+-- Enabling bfloat16 glslc support
+-- Enabling E4M3 glslc support
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/w1y5f4vy/arm64-v8a/llama.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build
+[25/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/unary-ops.cpp.o
+[26/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/repack.cpp.o
+[27/472] Building C object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.o
+[28/472] Linking CXX shared library bin/libggml-base.so
+[29/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ops.cpp.o
+[30/472] Linking CXX shared library bin/libggml-cpu.so
+[31/472] Performing build step for 'vulkan-shaders-gen'
+[1/2] Building CXX object CMakeFiles/vulkan-shaders-gen.dir/vulkan-shaders-gen.cpp.o
+[2/2] Linking CXX executable vulkan-shaders-gen
+[32/472] Performing install step for 'vulkan-shaders-gen'
+-- Installing: /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/w1y5f4vy/arm64-v8a/Release/./vulkan-shaders-gen
+[33/472] Completed 'vulkan-shaders-gen'
+[34/472] Generate vulkan shaders header
+[35/472] Generate vulkan shaders for acc.comp
+[36/472] Generate vulkan shaders for argsort.comp
+[37/472] Generate vulkan shaders for argmax.comp
+[38/472] Generate vulkan shaders for col2im_1d.comp
+[39/472] Generate vulkan shaders for arange.comp
+[40/472] Generate vulkan shaders for add1.comp
+[41/472] Generate vulkan shaders for conv2d_dw.comp
+[42/472] Generate vulkan shaders for concat.comp
+[43/472] Generate vulkan shaders for add_id.comp
+[44/472] Generate vulkan shaders for argsort_large.comp
+[45/472] Generate vulkan shaders for contig_copy.comp
+[46/472] Generate vulkan shaders for conv_transpose_1d.comp
+[47/472] Generate vulkan shaders for add.comp
+[48/472] Generate vulkan shaders for count_equal.comp
+[49/472] Generate vulkan shaders for conv3d_mm.comp
+[50/472] Generate vulkan shaders for cumsum.comp
+[51/472] Generate vulkan shaders for count_experts.comp
+[52/472] Generate vulkan shaders for copy.comp
+[53/472] Generate vulkan shaders for copy_transpose.comp
+[54/472] Generate vulkan shaders for copy_from_quant.comp
+[55/472] Generate vulkan shaders for cumsum_multipass1.comp
+[56/472] Generate vulkan shaders for cumsum_multipass2.comp
+[57/472] Generate vulkan shaders for dequant_f32.comp
+[58/472] Generate vulkan shaders for conv2d_mm.comp
+[59/472] Generate vulkan shaders for dequant_iq3_s.comp
+[60/472] Generate vulkan shaders for dequant_iq1_s.comp
+[61/472] Generate vulkan shaders for dequant_iq4_nl.comp
+[62/472] Generate vulkan shaders for dequant_mxfp4.comp
+[63/472] Generate vulkan shaders for dequant_iq4_xs.comp
+[64/472] Generate vulkan shaders for dequant_iq2_xxs.comp
+[65/472] Generate vulkan shaders for dequant_iq2_s.comp
+[66/472] Generate vulkan shaders for dequant_q1_0.comp
+[67/472] Generate vulkan shaders for dequant_iq2_xs.comp
+[68/472] Generate vulkan shaders for dequant_nvfp4.comp
+[69/472] Generate vulkan shaders for dequant_iq3_xxs.comp
+[70/472] Generate vulkan shaders for dequant_q4_0.comp
+[71/472] Generate vulkan shaders for dequant_q4_1.comp
+[72/472] Generate vulkan shaders for dequant_q2_k.comp
+[73/472] Generate vulkan shaders for dequant_q3_k.comp
+[74/472] Generate vulkan shaders for dequant_iq1_m.comp
+[75/472] Generate vulkan shaders for dequant_q6_k.comp
+[76/472] Generate vulkan shaders for dequant_q5_k.comp
+[77/472] Generate vulkan shaders for dequant_q4_k.comp
+[78/472] Generate vulkan shaders for dequant_q5_1.comp
+[79/472] Generate vulkan shaders for dequant_q5_0.comp
+[80/472] Generate vulkan shaders for dequant_q8_0.comp
+[81/472] Generate vulkan shaders for diag.comp
+[82/472] Generate vulkan shaders for diag_mask_inf.comp
+[83/472] Generate vulkan shaders for flash_attn_split_k_reduce.comp
+[84/472] Generate vulkan shaders for flash_attn_cm1.comp
+[85/472] Generate vulkan shaders for fill.comp
+[86/472] Generate vulkan shaders for flash_attn_mask_opt.comp
+[87/472] Generate vulkan shaders for geglu_erf.comp
+[88/472] Generate vulkan shaders for div.comp
+[89/472] Generate vulkan shaders for geglu.comp
+[90/472] Generate vulkan shaders for gated_delta_net.comp
+[91/472] Generate vulkan shaders for fwht.comp
+[92/472] Generate vulkan shaders for get_rows_back.comp
+[93/472] Generate vulkan shaders for l2_norm.comp
+[94/472] Generate vulkan shaders for flash_attn_cm2.comp
+[95/472] Generate vulkan shaders for group_norm.comp
+[96/472] Generate vulkan shaders for get_rows.comp
+[97/472] Generate vulkan shaders for geglu_quick.comp
+[98/472] Generate vulkan shaders for copy_to_quant.comp
+[99/472] Generate vulkan shaders for mul_mat_split_k_reduce.comp
+[100/472] Generate vulkan shaders for im2col.comp
+[101/472] Generate vulkan shaders for mul.comp
+[102/472] Generate vulkan shaders for im2col_3d.comp
+[103/472] Generate vulkan shaders for log.comp
+[104/472] Generate vulkan shaders for mul_mat_vec_iq1_s.comp
+[105/472] Generate vulkan shaders for mul_mat_vec_p021.comp
+[106/472] Generate vulkan shaders for mul_mat_vec_nc.comp
+[107/472] Generate vulkan shaders for mul_mat_vec_iq1_m.comp
+[108/472] Generate vulkan shaders for mul_mat_vec_iq2_s.comp
+[109/472] Generate vulkan shaders for flash_attn.comp
+[110/472] Generate vulkan shaders for mul_mat_vec_iq2_xs.comp
+[111/472] Generate vulkan shaders for mul_mat_vec_iq2_xxs.comp
+[112/472] Generate vulkan shaders for mul_mat_vec_iq3_s.comp
+[113/472] Generate vulkan shaders for mul_mat_vec_iq3_xxs.comp
+[114/472] Generate vulkan shaders for multi_add.comp
+[115/472] Generate vulkan shaders for mul_mat_vec_q4_k.comp
+[116/472] Generate vulkan shaders for mul_mat_vec_q5_k.comp
+[117/472] Generate vulkan shaders for mul_mat_vec_q2_k.comp
+[118/472] Generate vulkan shaders for mul_mat_vec_q3_k.comp
+[119/472] Generate vulkan shaders for norm.comp
+[120/472] Generate vulkan shaders for mul_mat_vec_q6_k.comp
+[121/472] Generate vulkan shaders for opt_step_sgd.comp
+[122/472] Generate vulkan shaders for pool2d.comp
+[123/472] Generate vulkan shaders for get_rows_quant.comp
+[124/472] Generate vulkan shaders for opt_step_adamw.comp
+[125/472] Generate vulkan shaders for reglu.comp
+[126/472] Generate vulkan shaders for pad.comp
+[127/472] Generate vulkan shaders for quantize_q8_1.comp
+[128/472] Generate vulkan shaders for repeat_back.comp
+[129/472] Generate vulkan shaders for repeat.comp
+[130/472] Generate vulkan shaders for rms_norm_back.comp
+[131/472] Generate vulkan shaders for roll.comp
+[132/472] Generate vulkan shaders for rms_norm_partials.comp
+[133/472] Generate vulkan shaders for rope_multi.comp
+[134/472] Generate vulkan shaders for rope_vision.comp
+[135/472] Generate vulkan shaders for scale.comp
+[136/472] Generate vulkan shaders for rope_neox.comp
+[137/472] Generate vulkan shaders for rope_norm.comp
+[138/472] Generate vulkan shaders for silu_back.comp
+[139/472] Generate vulkan shaders for soft_max_back.comp
+[140/472] Generate vulkan shaders for soft_max_large1.comp
+[141/472] Generate vulkan shaders for snake.comp
+[142/472] Generate vulkan shaders for soft_max_large3.comp
+[143/472] Generate vulkan shaders for rms_norm.comp
+[144/472] Generate vulkan shaders for solve_tri.comp
+[145/472] Generate vulkan shaders for soft_max_large2.comp
+[146/472] Generate vulkan shaders for sum_rows.comp
+[147/472] Generate vulkan shaders for ssm_conv.comp
+[148/472] Generate vulkan shaders for swiglu_oai.comp
+[149/472] Generate vulkan shaders for swiglu.comp
+[150/472] Generate vulkan shaders for ssm_scan.comp
+[151/472] Generate vulkan shaders for sub.comp
+[152/472] Generate vulkan shaders for timestep_embedding.comp
+[153/472] Generate vulkan shaders for topk_argsort.comp
+[154/472] Generate vulkan shaders for topk_nary_search.comp
+[155/472] Generate vulkan shaders for topk_moe.comp
+[156/472] Generate vulkan shaders for tri.comp
+[157/472] Generate vulkan shaders for soft_max.comp
+[158/472] Generate vulkan shaders for upscale.comp
+[159/472] Generate vulkan shaders for wkv6.comp
+[160/472] Generate vulkan shaders for wkv7.comp
+[161/472] Generate vulkan shaders for mul_mmq.comp
+[162/472] Generate vulkan shaders for unary.comp
+[163/472] Generate vulkan shaders for mul_mat_vecq.comp
+[164/472] Generate vulkan shaders for mul_mm_cm2.comp
+[165/472] Generate vulkan shaders for mul_mat_vec.comp
+[166/472] Generate vulkan shaders for mul_mm.comp
+[167/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu_erf.comp.cpp.o
+[168/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_mask_opt.comp.cpp.o
+[169/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/fwht.comp.cpp.o
+[170/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/fill.comp.cpp.o
+[171/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu.comp.cpp.o
+[172/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/get_rows.comp.cpp.o
+[173/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu_quick.comp.cpp.o
+[174/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_split_k_reduce.comp.cpp.o
+[175/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/gated_delta_net.comp.cpp.o
+[176/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/get_rows_back.comp.cpp.o
+[177/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/group_norm.comp.cpp.o
+[178/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/im2col.comp.cpp.o
+[179/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/l2_norm.comp.cpp.o
+[180/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/log.comp.cpp.o
+[181/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_split_k_reduce.comp.cpp.o
+[182/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_cm2.comp.cpp.o
+[183/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/im2col_3d.comp.cpp.o
+[184/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul.comp.cpp.o
+[185/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_nc.comp.cpp.o
+[186/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_p021.comp.cpp.o
+[187/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq3_xxs.comp.cpp.o
+[188/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_cm1.comp.cpp.o
+[189/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_xxs.comp.cpp.o
+[190/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq3_s.comp.cpp.o
+[191/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq1_s.comp.cpp.o
+[192/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q2_k.comp.cpp.o
+[193/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_xs.comp.cpp.o
+[194/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q4_k.comp.cpp.o
+[195/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q5_k.comp.cpp.o
+[196/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q6_k.comp.cpp.o
+[197/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_s.comp.cpp.o
+[198/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/norm.comp.cpp.o
+[199/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q3_k.comp.cpp.o
+[200/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/opt_step_adamw.comp.cpp.o
+[201/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/multi_add.comp.cpp.o
+[202/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq1_m.comp.cpp.o
+[203/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/opt_step_sgd.comp.cpp.o
+[204/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/pad.comp.cpp.o
+[205/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/pool2d.comp.cpp.o
+[206/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/reglu.comp.cpp.o
+[207/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/quantize_q8_1.comp.cpp.o
+[208/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/repeat_back.comp.cpp.o
+[209/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/repeat.comp.cpp.o
+[210/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm_back.comp.cpp.o
+[211/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm_partials.comp.cpp.o
+[212/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/get_rows_quant.comp.cpp.o
+[213/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/roll.comp.cpp.o
+[214/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rope_multi.comp.cpp.o
+[215/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/scale.comp.cpp.o
+[216/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rope_neox.comp.cpp.o
+[217/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rope_vision.comp.cpp.o
+[218/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rope_norm.comp.cpp.o
+[219/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm.comp.cpp.o
+[220/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/silu_back.comp.cpp.o
+[221/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/soft_max_back.comp.cpp.o
+[222/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/snake.comp.cpp.o
+[223/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/soft_max_large1.comp.cpp.o
+[224/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/soft_max_large2.comp.cpp.o
+[225/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/solve_tri.comp.cpp.o
+[226/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ssm_conv.comp.cpp.o
+[227/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/soft_max_large3.comp.cpp.o
+[228/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ssm_scan.comp.cpp.o
+[229/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/swiglu.comp.cpp.o
+[230/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/sum_rows.comp.cpp.o
+[231/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/timestep_embedding.comp.cpp.o
+[232/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/swiglu_oai.comp.cpp.o
+[233/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/sub.comp.cpp.o
+[234/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/topk_argsort.comp.cpp.o
+[235/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/topk_nary_search.comp.cpp.o
+[236/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/tri.comp.cpp.o
+[237/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/topk_moe.comp.cpp.o
+[238/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/soft_max.comp.cpp.o
+[239/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/upscale.comp.cpp.o
+[240/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/wkv6.comp.cpp.o
+[241/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/wkv7.comp.cpp.o
+[242/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn.comp.cpp.o
+[243/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/acc.comp.cpp.o
+[244/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add.comp.cpp.o
+[245/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add1.comp.cpp.o
+[246/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add_id.comp.cpp.o
+[247/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/unary.comp.cpp.o
+[248/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/arange.comp.cpp.o
+[249/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argmax.comp.cpp.o
+[250/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argsort.comp.cpp.o
+[251/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argsort_large.comp.cpp.o
+[252/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/col2im_1d.comp.cpp.o
+[253/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/concat.comp.cpp.o
+[254/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/contig_copy.comp.cpp.o
+[255/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_dw.comp.cpp.o
+[256/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv3d_mm.comp.cpp.o
+[257/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml.dir/ggml-backend-dl.cpp.o
+[258/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_mm.comp.cpp.o
+[259/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv_transpose_1d.comp.cpp.o
+[260/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o
+FAILED: llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o 
+/Users/faizan.mir/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/clang++ --target=aarch64-none-linux-android31 --sysroot=/Users/faizan.mir/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/sysroot -DGGML_BACKEND_BUILD -DGGML_BACKEND_SHARED -DGGML_SCHED_MAX_COPIES=4 -DGGML_SHARED -DGGML_VULKAN_BFLOAT16_GLSLC_SUPPORT -DGGML_VULKAN_COOPMAT2_GLSLC_SUPPORT -DGGML_VULKAN_COOPMAT_GLSLC_SUPPORT -DGGML_VULKAN_FLOAT_E4M3_GLSLC_SUPPORT -DGGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -Dggml_vulkan_EXPORTS -I/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/third_party/llama.cpp/ggml/src/ggml-vulkan/.. -I/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/w1y5f4vy/arm64-v8a/llama.cpp/ggml/src/ggml-vulkan -I/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/third_party/llama.cpp/ggml/src/../include -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -O3 -fexceptions -frtti -O3 -DNDEBUG  -fPIC -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wunreachable-code-break -Wunreachable-code-return -Wmissing-prototypes -Wextra-semi -std=gnu++17 -MD -MT llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -MF llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o.d -o llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -c /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/third_party/llama.cpp/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/third_party/llama.cpp/ggml/src/ggml-vulkan/ggml-vulkan.cpp:22:10: fatal error: 'vulkan/vulkan.hpp' file not found
+   22 | #include <vulkan/vulkan.hpp>
+      |          ^~~~~~~~~~~~~~~~~~~
+1 error generated.
+[261/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy.comp.cpp.o
+[262/472] Building CXX object llama.cpp/src/CMakeFiles/llama.dir/models/bitnet.cpp.o
+[263/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy_from_quant.comp.cpp.o
+[264/472] Building CXX object CMakeFiles/llamajni.dir/llama_jni.cpp.o
+[265/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy_to_quant.comp.cpp.o
+[266/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mmq.comp.cpp.o
+[267/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml.dir/ggml-backend-reg.cpp.o
+[268/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vecq.comp.cpp.o
+[269/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mm_cm2.comp.cpp.o
+[270/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec.comp.cpp.o
+[271/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mm.comp.cpp.o
+ninja: build stopped: subcommand failed.
+
+C++ build system [build] failed while executing:
+    /Users/faizan.mir/Library/Android/sdk/cmake/3.22.1/bin/ninja \
+      -C \
+      /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/w1y5f4vy/arm64-v8a \
+      ggml \
+      ggml-base \
+      ggml-cpu \
+      ggml-vulkan \
+      llama \
+      llamajni
+  from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp
+com.android.ide.common.process.ProcessException: ninja: Entering directory `/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/w1y5f4vy/arm64-v8a'
+[0/2] Re-checking globbed directories...
+[1/472] Building C object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.o
+[2/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-threading.cpp.o
+[3/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/hbm.cpp.o
+[4/472] Building C object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.c.o
+[5/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.o
+[6/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/traits.cpp.o
+[7/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.cpp.o
+[8/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/mmq.cpp.o
+[9/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/amx.cpp.o
+[10/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-opt.cpp.o
+[11/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend.cpp.o
+[12/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/vec.cpp.o
+[13/472] Building C object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/quants.c.o
+[14/472] Creating directories for 'vulkan-shaders-gen'
+[15/472] No download step for 'vulkan-shaders-gen'
+[16/472] No update step for 'vulkan-shaders-gen'
+[17/472] Building C object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml.c.o
+[18/472] Building C object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/quants.c.o
+[19/472] No patch step for 'vulkan-shaders-gen'
+[20/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/repack.cpp.o
+[21/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/binary-ops.cpp.o
+[22/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend-meta.cpp.o
+[23/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.o
+[24/472] Performing configure step for 'vulkan-shaders-gen'
+-- The C compiler identification is AppleClang 21.0.0.21000101
+-- The CXX compiler identification is AppleClang 21.0.0.21000101
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/clang - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/clang++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Looking for pthread.h
+-- Looking for pthread.h - found
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE  
+-- Enabling coopmat glslc support
+-- Enabling coopmat2 glslc support
+-- Enabling dot glslc support
+-- Enabling bfloat16 glslc support
+-- Enabling E4M3 glslc support
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/w1y5f4vy/arm64-v8a/llama.cpp/ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build
+[25/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/unary-ops.cpp.o
+[26/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/repack.cpp.o
+[27/472] Building C object llama.cpp/ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.o
+[28/472] Linking CXX shared library bin/libggml-base.so
+[29/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ops.cpp.o
+[30/472] Linking CXX shared library bin/libggml-cpu.so
+[31/472] Performing build step for 'vulkan-shaders-gen'
+[1/2] Building CXX object CMakeFiles/vulkan-shaders-gen.dir/vulkan-shaders-gen.cpp.o
+[2/2] Linking CXX executable vulkan-shaders-gen
+[32/472] Performing install step for 'vulkan-shaders-gen'
+-- Installing: /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/w1y5f4vy/arm64-v8a/Release/./vulkan-shaders-gen
+[33/472] Completed 'vulkan-shaders-gen'
+[34/472] Generate vulkan shaders header
+[35/472] Generate vulkan shaders for acc.comp
+[36/472] Generate vulkan shaders for argsort.comp
+[37/472] Generate vulkan shaders for argmax.comp
+[38/472] Generate vulkan shaders for col2im_1d.comp
+[39/472] Generate vulkan shaders for arange.comp
+[40/472] Generate vulkan shaders for add1.comp
+[41/472] Generate vulkan shaders for conv2d_dw.comp
+[42/472] Generate vulkan shaders for concat.comp
+[43/472] Generate vulkan shaders for add_id.comp
+[44/472] Generate vulkan shaders for argsort_large.comp
+[45/472] Generate vulkan shaders for contig_copy.comp
+[46/472] Generate vulkan shaders for conv_transpose_1d.comp
+[47/472] Generate vulkan shaders for add.comp
+[48/472] Generate vulkan shaders for count_equal.comp
+[49/472] Generate vulkan shaders for conv3d_mm.comp
+[50/472] Generate vulkan shaders for cumsum.comp
+[51/472] Generate vulkan shaders for count_experts.comp
+[52/472] Generate vulkan shaders for copy.comp
+[53/472] Generate vulkan shaders for copy_transpose.comp
+[54/472] Generate vulkan shaders for copy_from_quant.comp
+[55/472] Generate vulkan shaders for cumsum_multipass1.comp
+[56/472] Generate vulkan shaders for cumsum_multipass2.comp
+[57/472] Generate vulkan shaders for dequant_f32.comp
+[58/472] Generate vulkan shaders for conv2d_mm.comp
+[59/472] Generate vulkan shaders for dequant_iq3_s.comp
+[60/472] Generate vulkan shaders for dequant_iq1_s.comp
+[61/472] Generate vulkan shaders for dequant_iq4_nl.comp
+[62/472] Generate vulkan shaders for dequant_mxfp4.comp
+[63/472] Generate vulkan shaders for dequant_iq4_xs.comp
+[64/472] Generate vulkan shaders for dequant_iq2_xxs.comp
+[65/472] Generate vulkan shaders for dequant_iq2_s.comp
+[66/472] Generate vulkan shaders for dequant_q1_0.comp
+[67/472] Generate vulkan shaders for dequant_iq2_xs.comp
+[68/472] Generate vulkan shaders for dequant_nvfp4.comp
+[69/472] Generate vulkan shaders for dequant_iq3_xxs.comp
+[70/472] Generate vulkan shaders for dequant_q4_0.comp
+[71/472] Generate vulkan shaders for dequant_q4_1.comp
+[72/472] Generate vulkan shaders for dequant_q2_k.comp
+[73/472] Generate vulkan shaders for dequant_q3_k.comp
+[74/472] Generate vulkan shaders for dequant_iq1_m.comp
+[75/472] Generate vulkan shaders for dequant_q6_k.comp
+[76/472] Generate vulkan shaders for dequant_q5_k.comp
+[77/472] Generate vulkan shaders for dequant_q4_k.comp
+[78/472] Generate vulkan shaders for dequant_q5_1.comp
+[79/472] Generate vulkan shaders for dequant_q5_0.comp
+[80/472] Generate vulkan shaders for dequant_q8_0.comp
+[81/472] Generate vulkan shaders for diag.comp
+[82/472] Generate vulkan shaders for diag_mask_inf.comp
+[83/472] Generate vulkan shaders for flash_attn_split_k_reduce.comp
+[84/472] Generate vulkan shaders for flash_attn_cm1.comp
+[85/472] Generate vulkan shaders for fill.comp
+[86/472] Generate vulkan shaders for flash_attn_mask_opt.comp
+[87/472] Generate vulkan shaders for geglu_erf.comp
+[88/472] Generate vulkan shaders for div.comp
+[89/472] Generate vulkan shaders for geglu.comp
+[90/472] Generate vulkan shaders for gated_delta_net.comp
+[91/472] Generate vulkan shaders for fwht.comp
+[92/472] Generate vulkan shaders for get_rows_back.comp
+[93/472] Generate vulkan shaders for l2_norm.comp
+[94/472] Generate vulkan shaders for flash_attn_cm2.comp
+[95/472] Generate vulkan shaders for group_norm.comp
+[96/472] Generate vulkan shaders for get_rows.comp
+[97/472] Generate vulkan shaders for geglu_quick.comp
+[98/472] Generate vulkan shaders for copy_to_quant.comp
+[99/472] Generate vulkan shaders for mul_mat_split_k_reduce.comp
+[100/472] Generate vulkan shaders for im2col.comp
+[101/472] Generate vulkan shaders for mul.comp
+[102/472] Generate vulkan shaders for im2col_3d.comp
+[103/472] Generate vulkan shaders for log.comp
+[104/472] Generate vulkan shaders for mul_mat_vec_iq1_s.comp
+[105/472] Generate vulkan shaders for mul_mat_vec_p021.comp
+[106/472] Generate vulkan shaders for mul_mat_vec_nc.comp
+[107/472] Generate vulkan shaders for mul_mat_vec_iq1_m.comp
+[108/472] Generate vulkan shaders for mul_mat_vec_iq2_s.comp
+[109/472] Generate vulkan shaders for flash_attn.comp
+[110/472] Generate vulkan shaders for mul_mat_vec_iq2_xs.comp
+[111/472] Generate vulkan shaders for mul_mat_vec_iq2_xxs.comp
+[112/472] Generate vulkan shaders for mul_mat_vec_iq3_s.comp
+[113/472] Generate vulkan shaders for mul_mat_vec_iq3_xxs.comp
+[114/472] Generate vulkan shaders for multi_add.comp
+[115/472] Generate vulkan shaders for mul_mat_vec_q4_k.comp
+[116/472] Generate vulkan shaders for mul_mat_vec_q5_k.comp
+[117/472] Generate vulkan shaders for mul_mat_vec_q2_k.comp
+[118/472] Generate vulkan shaders for mul_mat_vec_q3_k.comp
+[119/472] Generate vulkan shaders for norm.comp
+[120/472] Generate vulkan shaders for mul_mat_vec_q6_k.comp
+[121/472] Generate vulkan shaders for opt_step_sgd.comp
+[122/472] Generate vulkan shaders for pool2d.comp
+[123/472] Generate vulkan shaders for get_rows_quant.comp
+[124/472] Generate vulkan shaders for opt_step_adamw.comp
+[125/472] Generate vulkan shaders for reglu.comp
+[126/472] Generate vulkan shaders for pad.comp
+[127/472] Generate vulkan shaders for quantize_q8_1.comp
+[128/472] Generate vulkan shaders for repeat_back.comp
+[129/472] Generate vulkan shaders for repeat.comp
+[130/472] Generate vulkan shaders for rms_norm_back.comp
+[131/472] Generate vulkan shaders for roll.comp
+[132/472] Generate vulkan shaders for rms_norm_partials.comp
+[133/472] Generate vulkan shaders for rope_multi.comp
+[134/472] Generate vulkan shaders for rope_vision.comp
+[135/472] Generate vulkan shaders for scale.comp
+[136/472] Generate vulkan shaders for rope_neox.comp
+[137/472] Generate vulkan shaders for rope_norm.comp
+[138/472] Generate vulkan shaders for silu_back.comp
+[139/472] Generate vulkan shaders for soft_max_back.comp
+[140/472] Generate vulkan shaders for soft_max_large1.comp
+[141/472] Generate vulkan shaders for snake.comp
+[142/472] Generate vulkan shaders for soft_max_large3.comp
+[143/472] Generate vulkan shaders for rms_norm.comp
+[144/472] Generate vulkan shaders for solve_tri.comp
+[145/472] Generate vulkan shaders for soft_max_large2.comp
+[146/472] Generate vulkan shaders for sum_rows.comp
+[147/472] Generate vulkan shaders for ssm_conv.comp
+[148/472] Generate vulkan shaders for swiglu_oai.comp
+[149/472] Generate vulkan shaders for swiglu.comp
+[150/472] Generate vulkan shaders for ssm_scan.comp
+[151/472] Generate vulkan shaders for sub.comp
+[152/472] Generate vulkan shaders for timestep_embedding.comp
+[153/472] Generate vulkan shaders for topk_argsort.comp
+[154/472] Generate vulkan shaders for topk_nary_search.comp
+[155/472] Generate vulkan shaders for topk_moe.comp
+[156/472] Generate vulkan shaders for tri.comp
+[157/472] Generate vulkan shaders for soft_max.comp
+[158/472] Generate vulkan shaders for upscale.comp
+[159/472] Generate vulkan shaders for wkv6.comp
+[160/472] Generate vulkan shaders for wkv7.comp
+[161/472] Generate vulkan shaders for mul_mmq.comp
+[162/472] Generate vulkan shaders for unary.comp
+[163/472] Generate vulkan shaders for mul_mat_vecq.comp
+[164/472] Generate vulkan shaders for mul_mm_cm2.comp
+[165/472] Generate vulkan shaders for mul_mat_vec.comp
+[166/472] Generate vulkan shaders for mul_mm.comp
+[167/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu_erf.comp.cpp.o
+[168/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_mask_opt.comp.cpp.o
+[169/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/fwht.comp.cpp.o
+[170/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/fill.comp.cpp.o
+[171/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu.comp.cpp.o
+[172/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/get_rows.comp.cpp.o
+[173/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu_quick.comp.cpp.o
+[174/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_split_k_reduce.comp.cpp.o
+[175/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/gated_delta_net.comp.cpp.o
+[176/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/get_rows_back.comp.cpp.o
+[177/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/group_norm.comp.cpp.o
+[178/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/im2col.comp.cpp.o
+[179/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/l2_norm.comp.cpp.o
+[180/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/log.comp.cpp.o
+[181/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_split_k_reduce.comp.cpp.o
+[182/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_cm2.comp.cpp.o
+[183/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/im2col_3d.comp.cpp.o
+[184/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul.comp.cpp.o
+[185/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_nc.comp.cpp.o
+[186/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_p021.comp.cpp.o
+[187/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq3_xxs.comp.cpp.o
+[188/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_cm1.comp.cpp.o
+[189/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_xxs.comp.cpp.o
+[190/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq3_s.comp.cpp.o
+[191/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq1_s.comp.cpp.o
+[192/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q2_k.comp.cpp.o
+[193/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_xs.comp.cpp.o
+[194/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q4_k.comp.cpp.o
+[195/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q5_k.comp.cpp.o
+[196/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q6_k.comp.cpp.o
+[197/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_s.comp.cpp.o
+[198/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/norm.comp.cpp.o
+[199/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q3_k.comp.cpp.o
+[200/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/opt_step_adamw.comp.cpp.o
+[201/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/multi_add.comp.cpp.o
+[202/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq1_m.comp.cpp.o
+[203/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/opt_step_sgd.comp.cpp.o
+[204/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/pad.comp.cpp.o
+[205/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/pool2d.comp.cpp.o
+[206/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/reglu.comp.cpp.o
+[207/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/quantize_q8_1.comp.cpp.o
+[208/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/repeat_back.comp.cpp.o
+[209/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/repeat.comp.cpp.o
+[210/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm_back.comp.cpp.o
+[211/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm_partials.comp.cpp.o
+[212/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/get_rows_quant.comp.cpp.o
+[213/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/roll.comp.cpp.o
+[214/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rope_multi.comp.cpp.o
+[215/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/scale.comp.cpp.o
+[216/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rope_neox.comp.cpp.o
+[217/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rope_vision.comp.cpp.o
+[218/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rope_norm.comp.cpp.o
+[219/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm.comp.cpp.o
+[220/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/silu_back.comp.cpp.o
+[221/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/soft_max_back.comp.cpp.o
+[222/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/snake.comp.cpp.o
+[223/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/soft_max_large1.comp.cpp.o
+[224/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/soft_max_large2.comp.cpp.o
+[225/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/solve_tri.comp.cpp.o
+[226/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ssm_conv.comp.cpp.o
+[227/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/soft_max_large3.comp.cpp.o
+[228/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ssm_scan.comp.cpp.o
+[229/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/swiglu.comp.cpp.o
+[230/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/sum_rows.comp.cpp.o
+[231/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/timestep_embedding.comp.cpp.o
+[232/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/swiglu_oai.comp.cpp.o
+[233/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/sub.comp.cpp.o
+[234/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/topk_argsort.comp.cpp.o
+[235/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/topk_nary_search.comp.cpp.o
+[236/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/tri.comp.cpp.o
+[237/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/topk_moe.comp.cpp.o
+[238/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/soft_max.comp.cpp.o
+[239/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/upscale.comp.cpp.o
+[240/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/wkv6.comp.cpp.o
+[241/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/wkv7.comp.cpp.o
+[242/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn.comp.cpp.o
+[243/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/acc.comp.cpp.o
+[244/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add.comp.cpp.o
+[245/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add1.comp.cpp.o
+[246/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add_id.comp.cpp.o
+[247/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/unary.comp.cpp.o
+[248/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/arange.comp.cpp.o
+[249/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argmax.comp.cpp.o
+[250/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argsort.comp.cpp.o
+[251/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argsort_large.comp.cpp.o
+[252/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/col2im_1d.comp.cpp.o
+[253/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/concat.comp.cpp.o
+[254/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/contig_copy.comp.cpp.o
+[255/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_dw.comp.cpp.o
+[256/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv3d_mm.comp.cpp.o
+[257/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml.dir/ggml-backend-dl.cpp.o
+[258/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_mm.comp.cpp.o
+[259/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv_transpose_1d.comp.cpp.o
+[260/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o
+FAILED: llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o 
+/Users/faizan.mir/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/clang++ --target=aarch64-none-linux-android31 --sysroot=/Users/faizan.mir/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/sysroot -DGGML_BACKEND_BUILD -DGGML_BACKEND_SHARED -DGGML_SCHED_MAX_COPIES=4 -DGGML_SHARED -DGGML_VULKAN_BFLOAT16_GLSLC_SUPPORT -DGGML_VULKAN_COOPMAT2_GLSLC_SUPPORT -DGGML_VULKAN_COOPMAT_GLSLC_SUPPORT -DGGML_VULKAN_FLOAT_E4M3_GLSLC_SUPPORT -DGGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -Dggml_vulkan_EXPORTS -I/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/third_party/llama.cpp/ggml/src/ggml-vulkan/.. -I/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/w1y5f4vy/arm64-v8a/llama.cpp/ggml/src/ggml-vulkan -I/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/third_party/llama.cpp/ggml/src/../include -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -O3 -fexceptions -frtti -O3 -DNDEBUG  -fPIC -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wunreachable-code-break -Wunreachable-code-return -Wmissing-prototypes -Wextra-semi -std=gnu++17 -MD -MT llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -MF llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o.d -o llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -c /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/third_party/llama.cpp/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/third_party/llama.cpp/ggml/src/ggml-vulkan/ggml-vulkan.cpp:22:10: fatal error: 'vulkan/vulkan.hpp' file not found
+   22 | #include <vulkan/vulkan.hpp>
+      |          ^~~~~~~~~~~~~~~~~~~
+1 error generated.
+[261/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy.comp.cpp.o
+[262/472] Building CXX object llama.cpp/src/CMakeFiles/llama.dir/models/bitnet.cpp.o
+[263/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy_from_quant.comp.cpp.o
+[264/472] Building CXX object CMakeFiles/llamajni.dir/llama_jni.cpp.o
+[265/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy_to_quant.comp.cpp.o
+[266/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mmq.comp.cpp.o
+[267/472] Building CXX object llama.cpp/ggml/src/CMakeFiles/ggml.dir/ggml-backend-reg.cpp.o
+[268/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vecq.comp.cpp.o
+[269/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mm_cm2.comp.cpp.o
+[270/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec.comp.cpp.o
+[271/472] Building CXX object llama.cpp/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mm.comp.cpp.o
+ninja: build stopped: subcommand failed.
+
+C++ build system [build] failed while executing:
+    /Users/faizan.mir/Library/Android/sdk/cmake/3.22.1/bin/ninja \
+      -C \
+      /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/w1y5f4vy/arm64-v8a \
+      ggml \
+      ggml-base \
+      ggml-cpu \
+      ggml-vulkan \
+      llama \
+      llamajni
+  from /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp
+	at com.android.build.gradle.internal.cxx.process.ExecuteProcessKt.execute(ExecuteProcess.kt:241)
+	at com.android.build.gradle.internal.cxx.process.ExecuteProcessKt$executeProcess$1.invoke(ExecuteProcess.kt:95)
+	at com.android.build.gradle.internal.cxx.process.ExecuteProcessKt$executeProcess$1.invoke(ExecuteProcess.kt:93)
+	at com.android.build.gradle.internal.cxx.timing.TimingEnvironmentKt.time(TimingEnvironment.kt:28)
+	at com.android.build.gradle.internal.cxx.process.ExecuteProcessKt.executeProcess(ExecuteProcess.kt:93)
+	at com.android.build.gradle.internal.cxx.process.ExecuteProcessKt.executeProcess$default(ExecuteProcess.kt:70)
+	at com.android.build.gradle.internal.cxx.build.CxxRegularBuilder.executeProcessBatch(CxxRegularBuilder.kt:283)
+	at com.android.build.gradle.internal.cxx.build.CxxRegularBuilder.build(CxxRegularBuilder.kt:107)
+	at com.android.build.gradle.tasks.ExternalNativeBuildTask.doTaskAction(ExternalNativeBuildTask.kt:61)
+	at com.android.build.gradle.internal.tasks.UnsafeOutputsTask$taskAction$$inlined$recordTaskAction$1.invoke(BaseTask.kt:71)
+	at com.android.build.gradle.internal.tasks.Blocks.recordSpan(Blocks.java:51)
+	at com.android.build.gradle.internal.tasks.UnsafeOutputsTask.taskAction(UnsafeOutputsTask.kt:72)
+	at jdk.internal.reflect.GeneratedMethodAccessor747.invoke(Unknown Source)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:569)
+	at org.gradle.internal.reflect.JavaMethod.invoke(JavaMethod.java:125)
+	at org.gradle.api.internal.project.taskfactory.StandardTaskAction.doExecute(StandardTaskAction.java:58)
+	at org.gradle.api.internal.project.taskfactory.StandardTaskAction.execute(StandardTaskAction.java:51)
+	at org.gradle.api.internal.project.taskfactory.StandardTaskAction.execute(StandardTaskAction.java:29)
+	at org.gradle.api.internal.tasks.execution.TaskExecution$3.run(TaskExecution.java:259)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$1.execute(DefaultBuildOperationRunner.java:30)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$1.execute(DefaultBuildOperationRunner.java:27)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:67)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:60)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:167)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:60)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.run(DefaultBuildOperationRunner.java:48)
+	at org.gradle.api.internal.tasks.execution.TaskExecution.executeAction(TaskExecution.java:244)
+	at org.gradle.api.internal.tasks.execution.TaskExecution.executeActions(TaskExecution.java:227)
+	at org.gradle.api.internal.tasks.execution.TaskExecution.executeWithPreviousOutputFiles(TaskExecution.java:210)
+	at org.gradle.api.internal.tasks.execution.TaskExecution.execute(TaskExecution.java:176)
+	at org.gradle.internal.execution.steps.ExecuteStep.executeInternal(ExecuteStep.java:167)
+	at org.gradle.internal.execution.steps.ExecuteStep.access$000(ExecuteStep.java:47)
+	at org.gradle.internal.execution.steps.ExecuteStep$1.call(ExecuteStep.java:137)
+	at org.gradle.internal.execution.steps.ExecuteStep$1.call(ExecuteStep.java:134)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$CallableBuildOperationWorker.execute(DefaultBuildOperationRunner.java:210)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$CallableBuildOperationWorker.execute(DefaultBuildOperationRunner.java:205)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:67)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:60)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:167)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:60)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.call(DefaultBuildOperationRunner.java:54)
+	at org.gradle.internal.execution.steps.ExecuteStep.execute(ExecuteStep.java:134)
+	at org.gradle.internal.execution.steps.ExecuteStep$Mutable.execute(ExecuteStep.java:80)
+	at org.gradle.internal.execution.steps.CancelExecutionStep.execute(CancelExecutionStep.java:42)
+	at org.gradle.internal.execution.steps.TimeoutStep.executeWithoutTimeout(TimeoutStep.java:75)
+	at org.gradle.internal.execution.steps.TimeoutStep.execute(TimeoutStep.java:55)
+	at org.gradle.internal.execution.steps.PreCreateOutputParentsStep.execute(PreCreateOutputParentsStep.java:51)
+	at org.gradle.internal.execution.steps.PreCreateOutputParentsStep.execute(PreCreateOutputParentsStep.java:29)
+	at org.gradle.internal.execution.steps.RemovePreviousOutputsStep.executeMutable(RemovePreviousOutputsStep.java:67)
+	at org.gradle.internal.execution.steps.RemovePreviousOutputsStep.executeMutable(RemovePreviousOutputsStep.java:39)
+	at org.gradle.internal.execution.steps.MutableStep.execute(MutableStep.java:26)
+	at org.gradle.internal.execution.steps.BroadcastChangingOutputsStep.execute(BroadcastChangingOutputsStep.java:42)
+	at org.gradle.internal.execution.steps.BroadcastChangingOutputsStep.execute(BroadcastChangingOutputsStep.java:24)
+	at org.gradle.internal.execution.steps.CaptureOutputsAfterExecutionStep.execute(CaptureOutputsAfterExecutionStep.java:69)
+	at org.gradle.internal.execution.steps.CaptureOutputsAfterExecutionStep.execute(CaptureOutputsAfterExecutionStep.java:46)
+	at org.gradle.internal.execution.steps.ResolveInputChangesStep.executeMutable(ResolveInputChangesStep.java:39)
+	at org.gradle.internal.execution.steps.ResolveInputChangesStep.executeMutable(ResolveInputChangesStep.java:28)
+	at org.gradle.internal.execution.steps.MutableStep.execute(MutableStep.java:26)
+	at org.gradle.internal.execution.steps.BuildCacheStep.executeWithoutCache(BuildCacheStep.java:189)
+	at org.gradle.internal.execution.steps.BuildCacheStep.lambda$execute$1(BuildCacheStep.java:76)
+	at org.gradle.internal.Either$Right.fold(Either.java:176)
+	at org.gradle.internal.execution.caching.CachingState.fold(CachingState.java:62)
+	at org.gradle.internal.execution.steps.BuildCacheStep.execute(BuildCacheStep.java:74)
+	at org.gradle.internal.execution.steps.BuildCacheStep.execute(BuildCacheStep.java:49)
+	at org.gradle.internal.execution.steps.StoreExecutionStateStep.executeMutable(StoreExecutionStateStep.java:46)
+	at org.gradle.internal.execution.steps.StoreExecutionStateStep.executeMutable(StoreExecutionStateStep.java:35)
+	at org.gradle.internal.execution.steps.MutableStep.execute(MutableStep.java:26)
+	at org.gradle.internal.execution.steps.SkipUpToDateStep.executeBecause(SkipUpToDateStep.java:75)
+	at org.gradle.internal.execution.steps.SkipUpToDateStep.lambda$execute$2(SkipUpToDateStep.java:53)
+	at java.base/java.util.Optional.orElseGet(Optional.java:364)
+	at org.gradle.internal.execution.steps.SkipUpToDateStep.execute(SkipUpToDateStep.java:53)
+	at org.gradle.internal.execution.steps.SkipUpToDateStep.execute(SkipUpToDateStep.java:35)
+	at org.gradle.internal.execution.steps.legacy.MarkSnapshottingInputsFinishedStep.execute(MarkSnapshottingInputsFinishedStep.java:37)
+	at org.gradle.internal.execution.steps.legacy.MarkSnapshottingInputsFinishedStep.execute(MarkSnapshottingInputsFinishedStep.java:27)
+	at org.gradle.internal.execution.steps.ResolveMutableCachingStateStep.executeDelegate(ResolveMutableCachingStateStep.java:70)
+	at org.gradle.internal.execution.steps.ResolveMutableCachingStateStep.executeDelegate(ResolveMutableCachingStateStep.java:32)
+	at org.gradle.internal.execution.steps.AbstractResolveCachingStateStep.execute(AbstractResolveCachingStateStep.java:69)
+	at org.gradle.internal.execution.steps.AbstractResolveCachingStateStep.execute(AbstractResolveCachingStateStep.java:37)
+	at org.gradle.internal.execution.steps.ResolveChangesStep.executeMutable(ResolveChangesStep.java:63)
+	at org.gradle.internal.execution.steps.ResolveChangesStep.executeMutable(ResolveChangesStep.java:34)
+	at org.gradle.internal.execution.steps.MutableStep.execute(MutableStep.java:26)
+	at org.gradle.internal.execution.steps.ValidateStep$Mutable.executeDelegate(ValidateStep.java:79)
+	at org.gradle.internal.execution.steps.ValidateStep$Mutable.executeDelegate(ValidateStep.java:65)
+	at org.gradle.internal.execution.steps.ValidateStep.execute(ValidateStep.java:99)
+	at org.gradle.internal.execution.steps.ValidateStep$Mutable.execute(ValidateStep.java:65)
+	at org.gradle.internal.execution.steps.CaptureMutableStateBeforeExecutionStep.executeMutable(CaptureMutableStateBeforeExecutionStep.java:86)
+	at org.gradle.internal.execution.steps.CaptureMutableStateBeforeExecutionStep.execute(CaptureMutableStateBeforeExecutionStep.java:65)
+	at org.gradle.internal.execution.steps.CaptureMutableStateBeforeExecutionStep.execute(CaptureMutableStateBeforeExecutionStep.java:45)
+	at org.gradle.internal.execution.steps.SkipEmptyMutableWorkStep.executeWithNonEmptySources(SkipEmptyMutableWorkStep.java:210)
+	at org.gradle.internal.execution.steps.SkipEmptyMutableWorkStep.executeMutable(SkipEmptyMutableWorkStep.java:85)
+	at org.gradle.internal.execution.steps.SkipEmptyMutableWorkStep.executeMutable(SkipEmptyMutableWorkStep.java:53)
+	at org.gradle.internal.execution.steps.MutableStep.execute(MutableStep.java:26)
+	at org.gradle.internal.execution.steps.legacy.MarkSnapshottingInputsStartedStep.execute(MarkSnapshottingInputsStartedStep.java:38)
+	at org.gradle.internal.execution.steps.LoadPreviousExecutionStateStep.executeMutable(LoadPreviousExecutionStateStep.java:36)
+	at org.gradle.internal.execution.steps.LoadPreviousExecutionStateStep.executeMutable(LoadPreviousExecutionStateStep.java:23)
+	at org.gradle.internal.execution.steps.MutableStep.execute(MutableStep.java:26)
+	at org.gradle.internal.execution.steps.HandleStaleOutputsStep.executeMutable(HandleStaleOutputsStep.java:77)
+	at org.gradle.internal.execution.steps.HandleStaleOutputsStep.executeMutable(HandleStaleOutputsStep.java:43)
+	at org.gradle.internal.execution.steps.MutableStep.execute(MutableStep.java:26)
+	at org.gradle.internal.execution.steps.AssignMutableWorkspaceStep.lambda$executeMutable$0(AssignMutableWorkspaceStep.java:34)
+	at org.gradle.api.internal.tasks.execution.TaskExecution$4.withWorkspace(TaskExecution.java:305)
+	at org.gradle.internal.execution.steps.AssignMutableWorkspaceStep.executeMutable(AssignMutableWorkspaceStep.java:30)
+	at org.gradle.internal.execution.steps.AssignMutableWorkspaceStep.executeMutable(AssignMutableWorkspaceStep.java:21)
+	at org.gradle.internal.execution.steps.MutableStep.execute(MutableStep.java:26)
+	at org.gradle.internal.execution.steps.ChoosePipelineStep.execute(ChoosePipelineStep.java:40)
+	at org.gradle.internal.execution.steps.ChoosePipelineStep.execute(ChoosePipelineStep.java:23)
+	at org.gradle.internal.execution.steps.ExecuteWorkBuildOperationFiringStep.lambda$execute$2(ExecuteWorkBuildOperationFiringStep.java:67)
+	at java.base/java.util.Optional.orElseGet(Optional.java:364)
+	at org.gradle.internal.execution.steps.ExecuteWorkBuildOperationFiringStep.execute(ExecuteWorkBuildOperationFiringStep.java:67)
+	at org.gradle.internal.execution.steps.ExecuteWorkBuildOperationFiringStep.execute(ExecuteWorkBuildOperationFiringStep.java:39)
+	at org.gradle.internal.execution.steps.IdentityCacheStep.execute(IdentityCacheStep.java:46)
+	at org.gradle.internal.execution.steps.IdentityCacheStep.execute(IdentityCacheStep.java:34)
+	at org.gradle.internal.execution.steps.IdentifyStep.execute(IdentifyStep.java:56)
+	at org.gradle.internal.execution.steps.IdentifyStep.execute(IdentifyStep.java:38)
+	at org.gradle.internal.execution.impl.DefaultExecutionEngine$1.execute(DefaultExecutionEngine.java:68)
+	at org.gradle.api.internal.tasks.execution.ExecuteActionsTaskExecuter.executeIfValid(ExecuteActionsTaskExecuter.java:132)
+	at org.gradle.api.internal.tasks.execution.ExecuteActionsTaskExecuter.execute(ExecuteActionsTaskExecuter.java:121)
+	at org.gradle.api.internal.tasks.execution.ProblemsTaskPathTrackingTaskExecuter.execute(ProblemsTaskPathTrackingTaskExecuter.java:41)
+	at org.gradle.api.internal.tasks.execution.ResolveTaskExecutionModeExecuter.execute(ResolveTaskExecutionModeExecuter.java:51)
+	at org.gradle.api.internal.tasks.execution.FinalizePropertiesTaskExecuter.execute(FinalizePropertiesTaskExecuter.java:46)
+	at org.gradle.api.internal.tasks.execution.SkipTaskWithNoActionsExecuter.execute(SkipTaskWithNoActionsExecuter.java:57)
+	at org.gradle.api.internal.tasks.execution.SkipOnlyIfTaskExecuter.execute(SkipOnlyIfTaskExecuter.java:74)
+	at org.gradle.api.internal.tasks.execution.CatchExceptionTaskExecuter.execute(CatchExceptionTaskExecuter.java:36)
+	at org.gradle.api.internal.tasks.execution.EventFiringTaskExecuter$1.executeTask(EventFiringTaskExecuter.java:77)
+	at org.gradle.api.internal.tasks.execution.EventFiringTaskExecuter$1.call(EventFiringTaskExecuter.java:55)
+	at org.gradle.api.internal.tasks.execution.EventFiringTaskExecuter$1.call(EventFiringTaskExecuter.java:52)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$CallableBuildOperationWorker.execute(DefaultBuildOperationRunner.java:210)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$CallableBuildOperationWorker.execute(DefaultBuildOperationRunner.java:205)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:67)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:60)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:167)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:60)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.call(DefaultBuildOperationRunner.java:54)
+	at org.gradle.api.internal.tasks.execution.EventFiringTaskExecuter.execute(EventFiringTaskExecuter.java:52)
+	at org.gradle.execution.plan.DefaultNodeExecutor.executeLocalTaskNode(DefaultNodeExecutor.java:55)
+	at org.gradle.execution.plan.DefaultNodeExecutor.execute(DefaultNodeExecutor.java:34)
+	at org.gradle.execution.taskgraph.DefaultTaskExecutionGraph$InvokeNodeExecutorsAction.execute(DefaultTaskExecutionGraph.java:355)
+	at org.gradle.execution.taskgraph.DefaultTaskExecutionGraph$InvokeNodeExecutorsAction.execute(DefaultTaskExecutionGraph.java:343)
+	at org.gradle.execution.taskgraph.DefaultTaskExecutionGraph$BuildOperationAwareExecutionAction.lambda$execute$0(DefaultTaskExecutionGraph.java:339)
+	at org.gradle.internal.operations.CurrentBuildOperationRef.with(CurrentBuildOperationRef.java:84)
+	at org.gradle.execution.taskgraph.DefaultTaskExecutionGraph$BuildOperationAwareExecutionAction.execute(DefaultTaskExecutionGraph.java:339)
+	at org.gradle.execution.taskgraph.DefaultTaskExecutionGraph$BuildOperationAwareExecutionAction.execute(DefaultTaskExecutionGraph.java:328)
+	at org.gradle.execution.plan.DefaultPlanExecutor$ExecutorWorker.execute(DefaultPlanExecutor.java:459)
+	at org.gradle.execution.plan.DefaultPlanExecutor$ExecutorWorker.run(DefaultPlanExecutor.java:376)
+	at org.gradle.execution.plan.DefaultPlanExecutor.process(DefaultPlanExecutor.java:111)
+	at org.gradle.execution.taskgraph.DefaultTaskExecutionGraph.executeWithServices(DefaultTaskExecutionGraph.java:146)
+	at org.gradle.execution.taskgraph.DefaultTaskExecutionGraph.execute(DefaultTaskExecutionGraph.java:131)
+	at org.gradle.execution.SelectedTaskExecutionAction.execute(SelectedTaskExecutionAction.java:35)
+	at org.gradle.execution.BuildOperationFiringBuildWorkerExecutor$ExecuteTasks.call(BuildOperationFiringBuildWorkerExecutor.java:54)
+	at org.gradle.execution.BuildOperationFiringBuildWorkerExecutor$ExecuteTasks.call(BuildOperationFiringBuildWorkerExecutor.java:43)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$CallableBuildOperationWorker.execute(DefaultBuildOperationRunner.java:210)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$CallableBuildOperationWorker.execute(DefaultBuildOperationRunner.java:205)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:67)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:60)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:167)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:60)
+	at org.gradle.internal.operations.DefaultBuildOperationRunner.call(DefaultBuildOperationRunner.java:54)
+	at org.gradle.execution.BuildOperationFiringBuildWorkerExecutor.execute(BuildOperationFiringBuildWorkerExecutor.java:40)
+	at org.gradle.internal.build.DefaultBuildLifecycleController.lambda$executeTasks$11(DefaultBuildLifecycleController.java:323)
+	at org.gradle.internal.model.StateTransitionController.doTransition(StateTransitionController.java:304)
+	at org.gradle.internal.model.StateTransitionController.lambda$tryTransition$9(StateTransitionController.java:215)
+	at org.gradle.internal.work.DefaultSynchronizer.withLock(DefaultSynchronizer.java:45)
+	at org.gradle.internal.model.StateTransitionController.tryTransition(StateTransitionController.java:215)
+	at org.gradle.internal.build.DefaultBuildLifecycleController.executeTasks(DefaultBuildLifecycleController.java:314)
+	at org.gradle.internal.build.DefaultBuildWorkGraphController$DefaultBuildWorkGraph.runWork(DefaultBuildWorkGraphController.java:220)
+	at org.gradle.internal.work.DefaultWorkerLeaseService.lambda$withLocksAcquired$0(DefaultWorkerLeaseService.java:275)
+	at org.gradle.internal.work.ResourceLockStatistics$1.measure(ResourceLockStatistics.java:43)
+	at org.gradle.internal.work.DefaultWorkerLeaseService.withLocksAcquired(DefaultWorkerLeaseService.java:273)
+	at org.gradle.internal.work.DefaultWorkerLeaseService.withLocks(DefaultWorkerLeaseService.java:265)
+	at org.gradle.internal.work.DefaultWorkerLeaseService.runAsWorkerThread(DefaultWorkerLeaseService.java:128)
+	at org.gradle.composite.internal.DefaultBuildController.doRun(DefaultBuildController.java:182)
+	at org.gradle.composite.internal.DefaultBuildController.access$000(DefaultBuildController.java:50)
+	at org.gradle.composite.internal.DefaultBuildController$BuildOpRunnable.lambda$run$0(DefaultBuildController.java:199)
+	at org.gradle.internal.operations.CurrentBuildOperationRef.with(CurrentBuildOperationRef.java:84)
+	at org.gradle.composite.internal.DefaultBuildController$BuildOpRunnable.run(DefaultBuildController.java:199)
+	at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:539)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:264)
+	at org.gradle.internal.concurrent.ExecutorPolicy$CatchAndRecordFailures.onExecute(ExecutorPolicy.java:64)
+	at org.gradle.internal.concurrent.AbstractManagedExecutor$1.run(AbstractManagedExecutor.java:47)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1136)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:635)
+	at java.base/java.lang.Thread.run(Thread.java:840)

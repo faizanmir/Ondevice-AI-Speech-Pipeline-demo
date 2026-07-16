@@ -1,0 +1,9 @@
+ninja: Entering directory `/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/552o2md4/arm64-v8a'
+[0/2] Re-checking globbed directories...
+[1/5] Performing build step for 'vulkan-shaders-gen'
+ninja: no work to do.
+[2/5] Performing install step for 'vulkan-shaders-gen'
+-- Up-to-date: /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/552o2md4/arm64-v8a/Release/./vulkan-shaders-gen
+[3/5] Completed 'vulkan-shaders-gen'
+[4/5] Building CXX object CMakeFiles/llamajni.dir/llama_jni.cpp.o
+[5/5] Linking CXX shared library /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/build/intermediates/cxx/Release/552o2md4/obj/arm64-v8a/libllamajni.so

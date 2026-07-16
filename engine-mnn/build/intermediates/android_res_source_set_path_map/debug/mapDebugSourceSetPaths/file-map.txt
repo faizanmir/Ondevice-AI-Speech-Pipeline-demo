@@ -1,0 +1,9 @@
+com.example.aiagent.engine.mnn.engine-mnn-pngs-0 /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-mnn/build/generated/res/pngs/debug
+com.example.aiagent.engine.mnn.engine-mnn-updated_navigation_xml-1 /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-mnn/build/generated/updated_navigation_xml/debug
+com.example.aiagent.engine.mnn.engine-mnn-mergeDebugResources-2 /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-mnn/build/intermediates/incremental/debug/mergeDebugResources/merged.dir
+com.example.aiagent.engine.mnn.engine-mnn-mergeDebugResources-3 /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-mnn/build/intermediates/incremental/debug/mergeDebugResources/stripped.dir
+com.example.aiagent.engine.mnn.engine-mnn-debug-4 /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-mnn/build/intermediates/merged_res/debug/mergeDebugResources
+com.example.aiagent.engine.mnn.engine-mnn-debug-5 /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-mnn/build/intermediates/packaged_res/debug/packageDebugResources
+com.example.aiagent.engine.mnn.engine-mnn-debug-6 /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-mnn/src/debug/res
+com.example.aiagent.engine.mnn.engine-mnn-main-7 /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-mnn/src/main/res
+gradleHome-0 /Users/faizan.mir/.gradle

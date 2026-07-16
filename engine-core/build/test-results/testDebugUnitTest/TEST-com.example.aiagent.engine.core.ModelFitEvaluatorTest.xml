@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.aiagent.engine.core.ModelFitEvaluatorTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-07-16T09:52:21.521Z" hostname="Mirs-MacBook-Pro.local" time="0.015">
+  <properties/>
+  <testcase name="an engine that cannot read the format reports unsupported" classname="com.example.aiagent.engine.core.ModelFitEvaluatorTest" time="0.012"/>
+  <testcase name="a downloaded model ignores free storage" classname="com.example.aiagent.engine.core.ModelFitEvaluatorTest" time="0.001"/>
+  <testcase name="an 8gb phone can run a model tiered at 8gb" classname="com.example.aiagent.engine.core.ModelFitEvaluatorTest" time="0.0"/>
+  <testcase name="meeting the tier exactly reads as tight, not comfortable" classname="com.example.aiagent.engine.core.ModelFitEvaluatorTest" time="0.0"/>
+  <testcase name="no disk space blocks the download outright" classname="com.example.aiagent.engine.core.ModelFitEvaluatorTest" time="0.0"/>
+  <testcase name="switching engine can change the verdict for the same model" classname="com.example.aiagent.engine.core.ModelFitEvaluatorTest" time="0.001"/>
+  <testcase name="a 32-bit device is unsupported" classname="com.example.aiagent.engine.core.ModelFitEvaluatorTest" time="0.0"/>
+  <testcase name="evaluateBest picks the most favourable accelerator" classname="com.example.aiagent.engine.core.ModelFitEvaluatorTest" time="0.0"/>
+  <testcase name="a 6gb phone is refused a model tiered at 8gb" classname="com.example.aiagent.engine.core.ModelFitEvaluatorTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

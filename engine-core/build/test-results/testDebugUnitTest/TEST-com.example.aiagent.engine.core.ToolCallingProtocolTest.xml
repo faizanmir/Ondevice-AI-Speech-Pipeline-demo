@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.aiagent.engine.core.ToolCallingProtocolTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-07-16T09:52:21.545Z" hostname="Mirs-MacBook-Pro.local" time="0.016">
+  <properties/>
+  <testcase name="survives chatter around the json" classname="com.example.aiagent.engine.core.ToolCallingProtocolTest" time="0.015"/>
+  <testcase name="unbalanced json does not hang or throw" classname="com.example.aiagent.engine.core.ToolCallingProtocolTest" time="0.0"/>
+  <testcase name="plain prose is not a tool call" classname="com.example.aiagent.engine.core.ToolCallingProtocolTest" time="0.0"/>
+  <testcase name="the prompt names every tool and parameter" classname="com.example.aiagent.engine.core.ToolCallingProtocolTest" time="0.001"/>
+  <testcase name="parses a clean call" classname="com.example.aiagent.engine.core.ToolCallingProtocolTest" time="0.0"/>
+  <testcase name="skips a leading non-tool json object" classname="com.example.aiagent.engine.core.ToolCallingProtocolTest" time="0.0"/>
+  <testcase name="handles the nested args object" classname="com.example.aiagent.engine.core.ToolCallingProtocolTest" time="0.0"/>
+  <testcase name="no tools means no instructions" classname="com.example.aiagent.engine.core.ToolCallingProtocolTest" time="0.0"/>
+  <testcase name="handles braces inside argument values" classname="com.example.aiagent.engine.core.ToolCallingProtocolTest" time="0.0"/>
+  <testcase name="parses arguments" classname="com.example.aiagent.engine.core.ToolCallingProtocolTest" time="0.0"/>
+  <testcase name="survives a code fence" classname="com.example.aiagent.engine.core.ToolCallingProtocolTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

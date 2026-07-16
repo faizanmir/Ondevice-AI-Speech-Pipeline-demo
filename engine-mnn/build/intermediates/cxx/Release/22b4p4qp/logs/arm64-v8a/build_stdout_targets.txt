@@ -1,0 +1,2 @@
+ninja: Entering directory `/Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-mnn/.cxx/Release/22b4p4qp/arm64-v8a'
+ninja: no work to do.

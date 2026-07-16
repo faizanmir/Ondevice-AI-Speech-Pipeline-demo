@@ -1,0 +1,31 @@
+# Toolchain for building llama.cpp's `vulkan-shaders-gen` for the HOST machine, while everything
+# else in this project cross-compiles for Android.
+#
+# The shader generator is a build-time tool: it runs on the developer's machine to turn ggml's GLSL
+# compute shaders into SPIR-V that gets embedded in the Android library. It must therefore be a
+# native macOS/Linux binary, not an ARM Android one.
+#
+# llama.cpp ships its own version of this file and will generate it automatically -- but that one
+# does not set CMAKE_MAKE_PROGRAM, and that is fatal here. ExternalProject passes the *generator*
+# (Ninja) down to the sub-build but not the *path* to it, and the Android SDK keeps its ninja in
+# a directory that is not on PATH. The sub-build then dies with:
+#
+#   CMake Error: CMake was unable to find a build program corresponding to "Ninja".
+#
+# So we supply our own toolchain file that pins the same ninja the outer build is already using.
+
+set(CMAKE_BUILD_TYPE Release)
+set(CMAKE_C_FLAGS -O2)
+set(CMAKE_CXX_FLAGS -O2)
+
+# The outer build uses the Android NDK toolchain, which confines find_program()/find_library() to
+# the NDK sysroot. This is a host build, so lift that -- otherwise CMake goes looking for the macOS
+# compiler inside the Android sysroot.
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE NEVER)
+
+set(CMAKE_C_COMPILER "@HOST_C_COMPILER@")
+set(CMAKE_CXX_COMPILER "@HOST_CXX_COMPILER@")
+
+set(CMAKE_MAKE_PROGRAM "@CMAKE_MAKE_PROGRAM@" CACHE FILEPATH "build tool for the host sub-build" FORCE)

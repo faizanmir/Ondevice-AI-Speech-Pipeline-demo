@@ -1,0 +1,26 @@
+-- llamajni: Vulkan backend ENABLED
+-- llamajni: host compiler for vulkan-shaders-gen: /usr/bin/clang++
+-- llama.cpp: using vendored checkout at /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/src/main/cpp/../../../third_party/llama.cpp
+-- Setting GGML_NATIVE_DEFAULT to OFF
+-- Warning: ccache not found - consider installing it for faster compilation or disable this warning with GGML_CCACHE=OFF
+-- CMAKE_SYSTEM_PROCESSOR: aarch64
+-- GGML_SYSTEM_ARCH: ARM
+-- Including CPU backend
+-- ARM detected
+-- Checking for ARM features using flags:
+-- Adding CPU backend variant ggml-cpu:  
+-- Vulkan found
+-- GL_KHR_cooperative_matrix supported by glslc
+-- GL_NV_cooperative_matrix2 supported by glslc
+-- GL_NV_cooperative_matrix_decode_vector not supported by glslc
+-- GL_EXT_integer_dot_product supported by glslc
+-- GL_EXT_bfloat16 supported by glslc
+-- GL_EXT_float_e2m1 not supported by glslc
+-- GL_EXT_float_e4m3 supported by glslc
+-- vulkan-shaders-gen toolchain file: /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/552o2md4/arm64-v8a/llamajni-host-toolchain.cmake
+-- Including Vulkan backend
+-- ggml version: 0.16.0
+-- ggml commit:  47c7869
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/552o2md4/arm64-v8a

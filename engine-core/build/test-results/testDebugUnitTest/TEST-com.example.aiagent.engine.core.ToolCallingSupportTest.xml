@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.aiagent.engine.core.ToolCallingSupportTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-07-16T09:52:21.562Z" hostname="Mirs-MacBook-Pro.local" time="0.001">
+  <properties/>
+  <testcase name="models below the size floor are not supported even in a tool-trained family" classname="com.example.aiagent.engine.core.ToolCallingSupportTest" time="0.0"/>
+  <testcase name="families never trained for tools are never supported" classname="com.example.aiagent.engine.core.ToolCallingSupportTest" time="0.0"/>
+  <testcase name="tool-trained families above the size floor are supported" classname="com.example.aiagent.engine.core.ToolCallingSupportTest" time="0.0"/>
+  <testcase name="hugging face ids are matched too" classname="com.example.aiagent.engine.core.ToolCallingSupportTest" time="0.0"/>
+  <testcase name="reasoning distills are excluded despite being large enough" classname="com.example.aiagent.engine.core.ToolCallingSupportTest" time="0.0"/>
+  <testcase name="small tool-trained models are supported down to the floor" classname="com.example.aiagent.engine.core.ToolCallingSupportTest" time="0.0"/>
+  <testcase name="an unknown family is not assumed to support tools" classname="com.example.aiagent.engine.core.ToolCallingSupportTest" time="0.001"/>
+  <testcase name="FunctionGemma is supported despite being tiny" classname="com.example.aiagent.engine.core.ToolCallingSupportTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
