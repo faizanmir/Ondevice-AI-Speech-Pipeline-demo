@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.example.aiagenttestapp.data.audit.AuditAnalysis
 import com.example.aiagenttestapp.data.audit.AuditFinding
 import com.example.aiagenttestapp.data.audit.AuditMode
+import com.example.aiagenttestapp.data.audit.AuditResultType
 import com.example.aiagenttestapp.data.audit.AuditSeverity
 import com.example.aiagenttestapp.ui.components.formatDuration
 
@@ -284,7 +285,13 @@ private fun AuditFindingsCard(title: String, findings: List<AuditFinding>, empty
                         modifier = Modifier.width(24.dp),
                     )
                     Column {
-                        if (finding.severity.isNotBlank()) {
+                        // The shared vocabulary wins when the model gave one; the old three-way
+                        // grade is the fallback while both are in play.
+                        val resultType = finding.resultType
+                        if (resultType != null) {
+                            ResultBadge(resultType)
+                            Spacer(Modifier.height(4.dp))
+                        } else if (finding.severity.isNotBlank()) {
                             SeverityBadge(finding.severity)
                             Spacer(Modifier.height(4.dp))
                         }
@@ -383,5 +390,63 @@ private fun StandardChip(text: String) {
             Spacer(Modifier.width(4.dp))
             Text(text, style = MaterialTheme.typography.labelMedium)
         }
+    }
+}
+
+/**
+ * The badge for a conclusion in the shared vocabulary.
+ *
+ * Deliberately not merged with [SeverityBadge]: the two are different scales with different
+ * consequences, and while both are in play a reader needs to see which one a finding was judged on.
+ * The colours match where the meanings do -- a major is a major on either -- so the report does not
+ * appear to change its mind mid-list.
+ *
+ * There is no badge for a *null* result. It would land on every action too, since actions are
+ * ungraded by design and blank on both scales, and labelling a commitment "unclassified" is worse
+ * than labelling it nothing. Distinguishing them needs findings and actions to be separate kinds,
+ * which is what the protocol-element split brings.
+ */
+@Composable
+private fun ResultBadge(resultType: AuditResultType) {
+    val (container, content, label) = when (resultType) {
+        AuditResultType.MAJOR_NONCONFORMITY -> Triple(
+            MaterialTheme.colorScheme.errorContainer,
+            MaterialTheme.colorScheme.onErrorContainer,
+            "Major",
+        )
+
+        AuditResultType.MINOR_NONCONFORMITY -> Triple(
+            MaterialTheme.colorScheme.tertiaryContainer,
+            MaterialTheme.colorScheme.onTertiaryContainer,
+            "Minor",
+        )
+
+        // Reads as a qualified pass rather than a failure, because that is what it is: the activity
+        // was sound and only its paperwork was not.
+        AuditResultType.OK_FOR_DOCUMENTATION -> Triple(
+            MaterialTheme.colorScheme.secondaryContainer,
+            MaterialTheme.colorScheme.onSecondaryContainer,
+            "OK · documentation",
+        )
+
+        AuditResultType.POTENTIAL_IMPROVEMENT -> Triple(
+            MaterialTheme.colorScheme.surfaceVariant,
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            "Improvement",
+        )
+
+        AuditResultType.OK -> Triple(
+            MaterialTheme.colorScheme.surfaceVariant,
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            "OK",
+        )
+    }
+    Surface(shape = RoundedCornerShape(6.dp), color = container, contentColor = content) {
+        Text(
+            label.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+        )
     }
 }

@@ -10,6 +10,7 @@ import android.text.TextPaint
 import com.example.aiagenttestapp.data.audit.AuditAnalysis
 import com.example.aiagenttestapp.data.audit.AuditFinding
 import com.example.aiagenttestapp.data.audit.AuditMode
+import com.example.aiagenttestapp.data.audit.AuditResultType
 import com.example.aiagenttestapp.data.audit.AuditSeverity
 import com.example.aiagenttestapp.ui.components.formatDuration
 import java.io.ByteArrayOutputStream
@@ -136,7 +137,8 @@ object AuditPdf {
         ordered.forEachIndexed { index, finding ->
             // Keep the badge and title from straddling a page break; the prose below may split.
             reserve(36f)
-            severityColours(finding.severity)?.let { (bg, fg, label) -> badge(label, bg, fg) }
+            val tag = finding.resultType?.let(::resultColours) ?: severityColours(finding.severity)
+            tag?.let { (bg, fg, label) -> badge(label, bg, fg) }
             text("${index + 1}. ${finding.title}", BODY_BOLD, spacingAfter = 2f)
             if (finding.detail.isNotBlank()) {
                 text(finding.detail, MUTED_BODY, indent = INDENT, spacingAfter = 2f)
@@ -154,6 +156,17 @@ object AuditPdf {
             }
             spacer(if (index == ordered.lastIndex) 16f else 10f)
         }
+    }
+
+    /** The PDF's copy of the screen's result badge -- same words, same colours, printed. */
+    private fun resultColours(resultType: AuditResultType): Triple<Int, Int, String> = when (resultType) {
+        AuditResultType.MAJOR_NONCONFORMITY -> Triple(0xFFF9DEDC.toInt(), 0xFF410E0B.toInt(), "MAJOR")
+        AuditResultType.MINOR_NONCONFORMITY -> Triple(0xFFFFD8E4.toInt(), 0xFF31111D.toInt(), "MINOR")
+        AuditResultType.OK_FOR_DOCUMENTATION ->
+            Triple(0xFFE8DEF8.toInt(), 0xFF1D192B.toInt(), "OK · DOCUMENTATION")
+        AuditResultType.POTENTIAL_IMPROVEMENT ->
+            Triple(0xFFE7E0EC.toInt(), 0xFF49454F.toInt(), "IMPROVEMENT")
+        AuditResultType.OK -> Triple(0xFFE7E0EC.toInt(), 0xFF49454F.toInt(), "OK")
     }
 
     private fun severityColours(severity: String): Triple<Int, Int, String>? = when (severity) {
