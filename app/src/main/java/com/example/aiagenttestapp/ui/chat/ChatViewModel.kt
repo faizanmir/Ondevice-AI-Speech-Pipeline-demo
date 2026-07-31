@@ -12,7 +12,7 @@ import com.example.aiagent.engine.core.HistoryTurn
 import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagent.engine.core.ToolCall
-import com.example.aiagent.engine.core.ToolCallingProtocol
+import com.example.aiagent.engine.llamacpp.ToolCallingProtocol
 import com.example.aiagent.engine.core.ToolRunner
 import com.example.aiagenttestapp.functions.AppFunctionDeps
 import com.example.aiagenttestapp.data.ChatLoadPlan

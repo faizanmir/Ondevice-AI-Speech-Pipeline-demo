@@ -1,4 +1,7 @@
-package com.example.aiagent.engine.core
+package com.example.aiagent.engine.llamacpp
+
+import com.example.aiagent.engine.core.ToolDefinition
+import com.example.aiagent.engine.core.ToolParameter
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

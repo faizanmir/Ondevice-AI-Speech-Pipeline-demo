@@ -1,7 +1,11 @@
 package com.example.aiagent.engine.core
 
 /**
- * Whether a model can plausibly drive the app through [ToolCallingProtocol].
+ * Whether a model can plausibly drive the app through tool calling.
+ *
+ * Engine-agnostic, and shared for that reason: this asks about the *model*, not the runtime. A
+ * family that was never trained to emit a function call will not start because the runtime has a
+ * tool API, and one that was will manage either mechanism.
  *
  * Two things have to be true, and they are independent:
  *

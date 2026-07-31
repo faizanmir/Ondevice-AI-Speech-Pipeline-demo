@@ -1,44 +1,24 @@
-package com.example.aiagent.engine.core
+package com.example.aiagent.engine.llamacpp
 
-import kotlinx.serialization.Serializable
+import com.example.aiagent.engine.core.ToolCall
+import com.example.aiagent.engine.core.ToolDefinition
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-@Serializable
-data class ToolParameter(
-    val name: String,
-    val description: String,
-    /** One of "string", "number", "boolean". Kept deliberately small -- see [ToolCallingProtocol]. */
-    val type: String = "string",
-    val required: Boolean = true,
-    /** When set, the model must pick one of these values. */
-    val allowedValues: List<String>? = null,
-)
-
-/** One capability the app exposes to the model. */
-@Serializable
-data class ToolDefinition(
-    val name: String,
-    /** Written for the model, not the user. It is the only thing telling it *when* to call this. */
-    val description: String,
-    val parameters: List<ToolParameter> = emptyList(),
-)
-
-/** A model's request to run a tool. Arguments arrive as strings and are coerced by the caller. */
-data class ToolCall(
-    val name: String,
-    val arguments: Map<String, String> = emptyMap(),
-)
-
 /**
- * How the app and the model agree to talk about tools.
+ * How this app and a llama.cpp model agree to talk about tools.
  *
- * Deliberately protocol-over-prompt rather than using either engine's native tool API. LiteRT-LM
- * has a real tool-calling interface and llama.cpp does not, so anything built on the native path
- * would work on one engine and not the other -- and "the model can control the app" turning on and
- * off depending on which runtime you picked is exactly the kind of leak the [InferenceEngine]
- * abstraction exists to prevent. A prompt protocol is engine-agnostic by construction.
+ * Tool calling here is arranged entirely in the prompt: the tools are described in the system
+ * prompt, the model answers with a JSON object instead of prose, and the result is fed back as a
+ * new turn. That is not a preference, it is the only option -- llama.cpp exposes no tool API to
+ * call, so the format has to live somewhere the model can see it.
+ *
+ * It lives in this module rather than in engine-core because it is llama.cpp's mechanism and
+ * nobody else's. LiteRT-LM declares tools to its runtime as schemas
+ * (`AppFunctionTool`), which is a better deal wherever it is available: the model is trained
+ * against its own tool format, and the runtime runs the call itself. Keeping this in the shared
+ * module implied both engines used it, which stopped being true.
  *
  * The format is the simplest thing a 0.5B model can reliably emit: a single JSON object. No nested
  * schemas, no arrays of calls, no XML tags to balance. Small models fail at all of those.
@@ -153,21 +133,4 @@ object ToolCallingProtocol {
 
         return null
     }
-}
-
-/**
- * Runs one tool the model asked for, for a runtime that executes tool calls itself.
- *
- * Synchronous on purpose, and the reason is not style. LiteRT-LM's automatic tool calling invokes
- * the tool from inside its own decode loop and waits for the string before it carries on
- * generating, so there is no suspension point to hand back to. An implementation must therefore do
- * its work and return -- it must never bounce onto the main thread and wait for the result, which
- * deadlocks if that thread is what started generation.
- *
- * The return value is fed back to the model verbatim, so it should be JSON, or at least something a
- * model can read. Failures are results too: return an object saying what went wrong rather than
- * throwing, and the model gets a chance to recover instead of the turn dying.
- */
-fun interface ToolRunner {
-    fun run(call: ToolCall): String
 }

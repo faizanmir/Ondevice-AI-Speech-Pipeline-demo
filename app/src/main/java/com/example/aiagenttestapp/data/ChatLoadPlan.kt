@@ -2,7 +2,7 @@ package com.example.aiagenttestapp.data
 
 import com.example.aiagent.engine.core.LoadRequest
 import com.example.aiagent.engine.core.ModelSpec
-import com.example.aiagent.engine.core.ToolCallingProtocol
+import com.example.aiagent.engine.llamacpp.ToolCallingProtocol
 import com.example.aiagent.engine.core.ToolDefinition
 import com.example.aiagenttestapp.functions.AppFunctions
 import com.example.aiagenttestapp.prompts.ChatPrompts

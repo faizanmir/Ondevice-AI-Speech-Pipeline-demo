@@ -20,9 +20,9 @@ data class EngineDescriptor(
      * The runtime has a real tool-calling API: tools are declared to it as schemas and it emits and
      * executes calls itself.
      *
-     * False means tool calling has to be arranged in the prompt instead ([ToolCallingProtocol]).
-     * The chat layer branches on this to decide which of the two to set up -- it must not do both,
-     * or the model is told about its tools twice in two different languages.
+     * False means tool calling has to be arranged in the prompt instead -- see llama.cpp's
+     * `ToolCallingProtocol`. The chat layer branches on this to decide which of the two to set up;
+     * it must not do both, or the model is told about its tools twice in two different languages.
      */
     val supportsNativeTools: Boolean = false,
     val blurb: String,
