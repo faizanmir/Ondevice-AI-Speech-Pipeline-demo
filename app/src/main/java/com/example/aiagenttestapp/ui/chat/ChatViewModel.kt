@@ -42,6 +42,8 @@ import kotlin.time.Duration.Companion.milliseconds
 import com.example.aiagenttestapp.data.ModelResidency
 import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.chat.ChatDao
+import com.example.aiagent.engine.core.ToolRunner
+import com.example.aiagenttestapp.data.chat.StoredMessage
 import com.example.aiagenttestapp.stt.AudioRecorder
 import com.example.aiagenttestapp.stt.SpeechModelRepository
 import com.example.aiagenttestapp.stt.SpeechRecognizer
@@ -188,9 +190,9 @@ class ChatViewModel @Inject constructor(
     // Implemented rather than passed as a lambda: this is a real collaborator of
     // AppFunctionRunner, called on the runtime's thread, and worth being findable as one.
     AppFunctionObserver,
-    ChatDictation.Listener {
+    ChatDictation.Listener,
+    ChatSession.Listener {
 
-    private var engine: InferenceEngine? = null
     private var generationJob: Job? = null
     private val messageIds = ChatMessageIds()
 
@@ -236,18 +238,16 @@ class ChatViewModel @Inject constructor(
     private val attachment = ChatAttachment(fileTextExtractor)
 
     /** Whether app functions were switched on when this chat's model was loaded. */
-    private var toolsEnabled = false
 
     /**
-     * How this model's engine is offered the app's functions.
+     * How this model's session.engine is offered the app's functions.
      *
      * Held rather than re-derived because it is fixed for the life of the loaded model, like the
-     * tools themselves. A [ToolCallingStrategy.PromptDriven] engine needs the hop loop below -- each
+     * tools themselves. A [ToolCallingStrategy.PromptDriven] session.engine needs the hop loop below -- each
      * call arrives as JSON in the model's *output* and its result has to be fed back as a new turn.
      * A runtime-driven one needs none of it: the runtime does all of that inside one generate and
      * hands back only the final answer.
      */
-    private var toolStrategy: ToolCallingStrategy = PromptToolCalling
 
     /**
      * The bubble a turn is streaming into right now, so a natively-executed tool can slot its chip
@@ -258,196 +258,109 @@ class ChatViewModel @Inject constructor(
     private var streamingReplyId: Long? = null
 
     /**
-     * The engine this chat handed a runner to, so teardown can hand it back empty.
+     * The session.engine this chat handed a runner to, so teardown can hand it back empty.
      *
-     * Held rather than looked up again: the resident engine may have been swapped by another
+     * Held rather than looked up again: the resident session.engine may have been swapped by another
      * screen in between, and clearing a runner off the wrong one would leave this chat's runner
-     * live on the engine it actually bound.
+     * live on the session.engine it actually bound.
      */
-    private var boundEngine: NativeToolEngine? = null
 
     /** The persisted conversation this chat is writing to. Null until the first message creates it. */
     /** Everything this chat writes down. Created when the model is known, so it can be named. */
-    private var transcript: ChatTranscriptStore? = null
+    /** This chat's model, from opening it to handing it back. */
+    private val session = ChatSession(
+        planner = chatLoadPlanner,
+        chatDao = chatDao,
+        residency = modelResidency,
+        scope = viewModelScope,
+        listener = this,
+    )
 
     /** The model this chat is for, so a new conversation row records which model it belongs to. */
     private var currentModelId: String? = null
 
     /** Whether this chat registered itself with the residency manager, so onCleared detaches once. */
-    private var attachedResidency = false
 
     /**
-     * Loads [modelId] into an engine and gets the chat ready.
+     * Loads [modelId] into an session.engine and gets the chat ready.
      *
-     * How the engine, accelerator and system prompt are chosen lives in [planChatLoad], shared with
+     * How the session.engine, accelerator and system prompt are chosen lives in [planChatLoad], shared with
      * the startup [com.example.aiagenttestapp.data.ModelResidency] so the two agree exactly -- that
      * agreement is what lets a fresh chat reuse the resident model with a reset instead of a load.
      */
-    private fun openChat(modelId: String, resumeConversationId: Long?) {
-        // planChatLoad looks in the built-in catalogue *and* the user's added models -- a model
-        // pulled from HuggingFace has to open a chat exactly like a built-in one.
-        val plan = when (val result = chatLoadPlanner.plan(modelId)) {
-            is ChatLoadPlan.UnknownModel -> {
-                setState { copy(loadState = ModelLoadState.Failed("Unknown model")) }
-                return
-            }
-            is ChatLoadPlan.NoEngine -> {
-                setState {
-                    copy(
-                        model = result.model,
-                        loadState = ModelLoadState.Failed(
-                            "No engine in this build can load ${result.model.format.label} files",
-                        ),
-                    )
-                }
-                return
-            }
-            is ChatLoadPlan.Ready -> result
+    private fun openChat(modelId: String, resumeConversationId: Long?) =
+        session.open(modelId, resumeConversationId)
+
+    override fun onUnloadable(plan: ChatLoadPlan) = setState {
+        when (plan) {
+            is ChatLoadPlan.NoEngine -> copy(
+                model = plan.model,
+                loadState = ModelLoadState.Failed(
+                    "No session.engine in this build can load ${plan.model.format.label} files",
+                ),
+            )
+
+            else -> copy(loadState = ModelLoadState.Failed("Unknown model"))
         }
+    }
 
+    override fun onPlanned(plan: ChatLoadPlan.Ready) {
         val model = plan.model
-        val selected = plan.engine
-        val accelerator = plan.accelerator
+        currentModelId = model.id
 
-        // Publish which engine and accelerator we settled on *before* anything can fail, so the
-        // title bar reads "LiteRT-LM · GPU" even on the error screens. Filling it in only on the
-        // success path leaves a failed load captioned with a bare "· CPU".
+        // Published before the load is attempted, so the title bar reads "LiteRT-LM · GPU" even on
+        // an error screen. Filling it in only on success leaves a failed load captioned "· CPU".
         setState {
             ChatUiState(
                 model = model,
                 engineId = plan.engineId,
                 engineName = plan.engineName,
-                accelerator = accelerator,
-                loadState = ModelLoadState.Loading("Loading ${model.name} on ${accelerator.label}"),
+                accelerator = plan.accelerator,
+                loadState = ModelLoadState.Loading(
+                    "Loading ${model.name} on ${plan.accelerator.label}",
+                ),
                 contextTotal = model.contextTokens,
                 // Fixed for the life of the loaded model, like tools: the thinking setting is baked
                 // into the system prompt, so a mid-chat toggle cannot change how this chat renders.
                 showThinking = settingsStore.settings.value.thinkingEnabled,
                 // Dictation readiness is not part of the conversation, so carry it across the reset
-                // rather than briefly flashing the mic button as unavailable on every model open.
+                // rather than flashing the mic button as unavailable on every model open.
                 speechModelState = speechModelState,
                 speechModelSizeBytes = speechModelSizeBytes,
-            )
-        }
-
-        // Tools go into the system prompt, so this is fixed for the life of the loaded model --
-        // toggling the setting mid-chat cannot retroactively give the model tools it was never told
-        // about. (Whether this model gets the tool section at all is decided in planChatLoad.)
-        toolsEnabled = plan.toolsEnabled
-        toolStrategy = ToolCallingStrategy.forEngine(plan.engine.descriptor)
-        setState {
-            copy(
                 toolsActive = plan.toolsEnabled,
                 toolsUnavailableReason = plan.toolsUnavailableReason,
             )
         }
+    }
 
-        if (!plan.downloaded) {
-            setState {
-                copy(loadState = ModelLoadState.Failed("${model.name} is not downloaded"))
-            }
-            return
-        }
-
-        engine = selected
-        currentModelId = modelId
-        transcript = ChatTranscriptStore(chatDao, modelId)
-
-        // Tell the residency manager a chat is now using the engine, so it will not release the
-        // resident model under memory pressure while this chat is on screen. Balanced by onCleared.
-        if (!attachedResidency) {
-            modelResidency.attach()
-            attachedResidency = true
-        }
-
-        viewModelScope.launch {
-            // Reopen a specific saved conversation (from the history list), or start fresh. The whole
-            // transcript is restored to the display; only a fitted tail is fed to the model, with the
-            // rolling summary of the older turns folded into the system prompt ahead of it.
-            val restored = resumeConversationId
-                ?.let { id -> runCatching { chatDao.conversationById(id) }.getOrNull() }
-            val pastMessages = restored?.messages.orEmpty().sortedBy { it.id }
-            restored?.conversation?.id?.let { transcript?.resume(it) }
-            if (pastMessages.isNotEmpty()) {
-                // Reuse the DB ids as bubble ids (unique), and start new bubbles past them.
-                messageIds.startAfter(pastMessages.maxOf { it.id })
-                setState {
-                    copy(
-                        messages = pastMessages.map { m ->
-                            ChatMessage(
-                                id = m.id,
-                                isUser = m.role == HistoryTurn.ROLE_USER,
-                                text = m.content,
-                            )
-                        },
+    override fun onRestored(messages: List<StoredMessage>) {
+        // Reuse the DB ids as bubble ids (unique), and start new bubbles past them.
+        messageIds.startAfter(messages.maxOf { it.id })
+        setState {
+            copy(
+                messages = messages.map { m ->
+                    ChatMessage(
+                        id = m.id,
+                        isUser = m.role == HistoryTurn.ROLE_USER,
+                        text = m.content,
                     )
-                }
-            }
-
-            val effectiveSystemPrompt =
-                ChatResume.systemPrompt(plan.systemPrompt, restored?.conversation?.summary)
-
-            val initialHistory = ChatResume.fittedHistory(
-                past = pastMessages.map { it.toHistoryTurn() },
-                contextTokens = model.contextTokens,
-                systemPrompt = effectiveSystemPrompt,
+                },
             )
-
-            // A fresh chat's request is exactly plan.freshLoadRequest(), which is what the model was
-            // warmed with -- so the residency manager can hand it back with just a conversation reset,
-            // no load. A resumed chat overrides the system prompt (summary folded in) and seeds the
-            // restored history, so it always loads.
-            val request = plan.freshLoadRequest().copy(
-                systemPrompt = effectiveSystemPrompt,
-                initialHistory = initialHistory,
-            )
-
-            try {
-                modelResidency.open(
-                    plan = plan.resolved,
-                    request = request,
-                    reuseWhenResident = resumeConversationId == null,
-                )
-                // After open(), not as part of the request: the model may well have been warmed in
-                // the background before this screen existed, and the runner belongs to this screen.
-                // Only a NativeToolEngine has anywhere to put this. The cast cannot silently
-                // miss: an engine that claims native tool support without implementing it is
-                // rejected when EngineRegistry is built.
-                boundEngine = selected as? NativeToolEngine
-                boundEngine?.toolRunner =
-                    if (toolsEnabled && toolStrategy is ToolCallingStrategy.RuntimeDriven) {
-                        AppFunctionRunner(appFunctions, appFunctionDeps, this@ChatViewModel)
-                    } else {
-                        null
-                    }
-                setState {
-                    copy(
-                        loadState = ModelLoadState.Ready,
-                        // The engine may have fallen back (GPU -> CPU) if the requested accelerator
-                        // turned out to be unusable. Show what actually happened, not what we asked
-                        // for -- otherwise the speed the user sees has no explanation.
-                        accelerator = selected.activeAccelerator ?: accelerator,
-                    )
-                }
-            } catch (e: EngineException.OutOfMemory) {
-                setState {
-                    copy(
-                        loadState = ModelLoadState.Failed(
-                            "${model.name} ran out of memory while loading. Close other apps and " +
-                                "try again, or pick a smaller model.",
-                        ),
-                    )
-                }
-            } catch (e: Exception) {
-                setState {
-                    copy(
-                        loadState = ModelLoadState.Failed(
-                            e.message ?: "Could not load ${model.name}",
-                        ),
-                    )
-                }
-            }
         }
+    }
+
+    override fun createToolRunner(): ToolRunner =
+        AppFunctionRunner(appFunctions, appFunctionDeps, this)
+
+    override fun onReady(accelerator: Accelerator) = setState {
+        // What the engine actually used: it may have fallen back (GPU -> CPU) if the requested
+        // accelerator turned out to be unusable, and telling the user otherwise makes the speed
+        // they observe inexplicable.
+        copy(loadState = ModelLoadState.Ready, accelerator = accelerator)
+    }
+
+    override fun onFailed(message: String) = setState {
+        copy(loadState = ModelLoadState.Failed(message))
     }
 
     private fun attachFile(uri: Uri) {
@@ -489,7 +402,7 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun send() {
-        val activeEngine = engine ?: return
+        val activeEngine = session.engine ?: return
         val typed = currentState.draft.trim()
         if (!currentState.canSend || typed.isBlank()) return
 
@@ -533,7 +446,7 @@ class ChatViewModel @Inject constructor(
 
         generationJob = viewModelScope.launch {
             try {
-                transcript?.append(HistoryTurn.ROLE_USER, userText, title = userText)
+                session.transcript?.append(HistoryTurn.ROLE_USER, userText, title = userText)
 
                 // Let the send transition settle before prefill starts. The keyboard is dismissed on
                 // send, and prefill is the heaviest CPU/GPU burst of the whole turn; starting it while
@@ -552,8 +465,8 @@ class ChatViewModel @Inject constructor(
                 // since the user has been moved.
                 // Only a prompt-driven engine has a loop to drive: its calls arrive as text
                 // the app has to read. A runtime-driven one has already run them all.
-                val prompted = toolStrategy as? ToolCallingStrategy.PromptDriven
-                if (toolsEnabled && prompted != null) {
+                val prompted = session.toolStrategy as? ToolCallingStrategy.PromptDriven
+                if (session.toolsEnabled && prompted != null) {
                     response = ChatToolLoop(
                         functions = appFunctions,
                         deps = appFunctionDeps,
@@ -570,7 +483,7 @@ class ChatViewModel @Inject constructor(
                 }
 
                 // Tool-call chips are not persisted, but the model's final answer is.
-                transcript?.append(HistoryTurn.ROLE_ASSISTANT, response, title = userText)
+                session.transcript?.append(HistoryTurn.ROLE_ASSISTANT, response, title = userText)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } finally {
@@ -672,7 +585,7 @@ class ChatViewModel @Inject constructor(
      * The screen, as [ChatToolLoop] sees it.
      *
      * An inner class so it can reach the streaming and message-list machinery, but a named type
-     * rather than an anonymous one: it is bound to a single engine for the length of a turn, and
+     * rather than an anonymous one: it is bound to a single session.engine for the length of a turn, and
      * that is worth saying in its constructor.
      */
     private inner class ChatToolHost(
@@ -727,7 +640,7 @@ class ChatViewModel @Inject constructor(
     )
 
     private fun stopGenerating() {
-        engine?.cancel()
+        session.engine?.cancel()
         generationJob?.cancel()
     }
 
@@ -774,10 +687,10 @@ class ChatViewModel @Inject constructor(
     private fun resetConversation() {
         viewModelScope.launch {
             stopGenerating()
-            runCatching { engine?.resetConversation() }
+            runCatching { session.engine?.resetConversation() }
             // Detach from the saved conversation: the next message starts a fresh one, and the old
             // conversation stays in history.
-            transcript = ChatTranscriptStore(chatDao, currentModelId.orEmpty())
+            session.resetConversation(currentModelId.orEmpty())
             setState { copy(messages = emptyList(), contextUsed = 0, replyingTo = null) }
         }
     }
@@ -812,49 +725,17 @@ class ChatViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
 
-        // Hand the engine back without a runner. The model stays resident by design, so a runner
-        // left behind would keep this view model -- and everything it holds -- alive inside a
-        // singleton, and would still execute functions for a screen that no longer exists.
-        boundEngine?.toolRunner = null
-        boundEngine = null
+        // viewModelScope is already cancelled here, so both of these need a scope that outlives it:
+        // the recogniser's release waits on any decode still running, and the session's close may
+        // have a conversation summary to write on the loaded model before it lets go.
+        val teardown = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob())
 
-        // viewModelScope is already cancelled here, so the recogniser's release -- which waits on
-        // any decode still running -- needs a scope that outlives this one.
-        dictation.releaseRecogniserIfOwned(
-            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()),
+        dictation.releaseRecogniserIfOwned(teardown)
+        session.close(
+            teardownScope = teardown,
+            isGenerating = currentState.isGenerating,
+            contextTotal = currentState.contextTotal,
         )
-
-        val active = engine
-        val store = transcript
-        active?.cancel() // stop any in-flight decode before the engine is reused for the summary
-
-        // Roll the conversation up into a stored summary on the way out -- but only once it has grown
-        // enough to need one, and not mid-turn. The loaded model already holds the conversation, so
-        // it summarises itself in a single turn; and because its context is [previous summary] +
-        // recent turns, each close produces an *updated* rolling summary rather than starting over.
-        val shouldSummarise = active != null && store != null && !currentState.isGenerating &&
-            store.needsSummary(active, currentState.contextTotal)
-
-        engine = null
-
-        if (!attachedResidency) return
-        attachedResidency = false
-
-        // viewModelScope is already cancelled, so this outlives it. Summarise under the residency
-        // lock so a chat opening right now waits rather than resetting the model mid-summary, then
-        // detach -- staying attached until the summary is done keeps the model from being released
-        // out from under it. No unload: the model stays resident for the next chat.
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()).launch {
-            try {
-                if (shouldSummarise && active != null && store != null) {
-                    modelResidency.runExclusive {
-                        runCatching { store.rollUpSummary(active) }
-                    }
-                }
-            } finally {
-                modelResidency.detach()
-            }
-        }
     }
 
     /** True once the live context is over half full -- the point where older turns start falling off. */
