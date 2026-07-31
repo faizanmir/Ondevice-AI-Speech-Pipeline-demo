@@ -46,7 +46,7 @@ sealed interface AuditModelPlan {
          * every caller that sizes anything, so the load, the chunking and the budgets cannot disagree
          * about how big the window is.
          */
-        val contextTokens: Int = AuditChunker.auditContextTokens(resolved.model.contextTokens)
+        val contextTokens: Int = AuditChunker.auditContextTokens(resolved.contextTokens)
 
         /**
          * The load an audit run performs: the audit system prompt, and the extraction temperature
@@ -111,10 +111,10 @@ class AuditLoadPlanner @Inject constructor(
                 // overflow -- producing a finished-looking report from sections the model only ever
                 // saw the tail of. Measured against RICH, the same worst case AuditQueue reserves
                 // for, so the gate and the chunk sizing can never disagree.
-                AuditChunker.auditContextTokens(plan.model.contextTokens) < MIN_CONTEXT_TOKENS ->
+                AuditChunker.auditContextTokens(plan.contextTokens) < MIN_CONTEXT_TOKENS ->
                     AuditModelPlan.Unavailable(
                         "${plan.model.name} has too small a context window to audit with " +
-                            "(${plan.model.contextTokens} tokens; about $MIN_CONTEXT_TOKENS are needed).",
+                            "(${plan.contextTokens} tokens; about $MIN_CONTEXT_TOKENS are needed).",
                     )
 
                 else -> AuditModelPlan.Ready(
