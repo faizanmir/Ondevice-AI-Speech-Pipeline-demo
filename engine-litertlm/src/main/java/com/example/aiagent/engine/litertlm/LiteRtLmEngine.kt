@@ -23,6 +23,7 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.ExperimentalApi
+import com.google.ai.edge.litertlm.ExperimentalFlags
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.tool
@@ -98,49 +99,82 @@ class LiteRtLmEngine : InferenceEngine {
             EngineAvailability.Unavailable("LiteRT-LM native library is missing from this build")
         }
 
+    /**
+     * Loads with speculative decoding on, and again without it if that is what stopped the model
+     * loading.
+     *
+     * Speculative decoding drafts several tokens with a small model and has the real one check them
+     * in a single pass, which is close to free throughput when it works. It only works when the
+     * `.litertlm` bundle actually carries a draft model, and the flag that turns it on is a
+     * process-wide experimental switch rather than something the runtime negotiates per model --
+     * so on a bundle without one it is a way to fail a load that would otherwise have succeeded.
+     * Retrying without it turns "this model will not open" into "this model opens at normal speed",
+     * which is the right trade for an optional speed-up.
+     *
+     * The retry is remembered for the process: the second load of an unsupporting model should not
+     * pay for another failed engine initialisation, which costs seconds.
+     */
+    @OptIn(ExperimentalApi::class)
     override suspend fun load(request: LoadRequest) = withContext(Dispatchers.IO) {
         lifecycleLock.withLock {
             unloadLocked()
 
-            // Cascade down to the CPU rather than failing outright.
-            //
-            // Asking for the GPU is a request, not a guarantee: the driver may be missing OpenCL,
-            // the model may have no GPU-compiled graph, an emulator may have no usable GPU at all,
-            // and the NPU path is gated on vendor libraries that most devices do not ship. All of
-            // those surface as an exception from initialize(), and every one of them is survivable
-            // by simply running on the CPU -- slower, but working. Refusing to load at all would
-            // turn a performance problem into a broken app.
-            val ladder = buildList {
-                add(request.accelerator)
-                if (request.accelerator == Accelerator.NPU) add(Accelerator.GPU)
-                if (request.accelerator != Accelerator.CPU) add(Accelerator.CPU)
-            }.distinct()
+            ExperimentalFlags.enableSpeculativeDecoding = speculativeDecodingUsable
 
-            var lastFailure: Throwable? = null
+            try {
+                loadOnBestAccelerator(request)
+            } catch (t: Throwable) {
+                if (!speculativeDecodingUsable) throw t
 
-            for (accelerator in ladder) {
-                try {
-                    loadOn(accelerator, request)
-                    activeAccelerator = accelerator
-                    loadedModelPath = request.modelPath
-                    if (accelerator != request.accelerator) {
-                        Log.w(
-                            TAG,
-                            "${request.accelerator.label} unavailable, fell back to " +
-                                accelerator.label,
-                        )
-                    }
-                    return@withLock
-                } catch (t: Throwable) {
-                    Log.w(TAG, "load on ${accelerator.label} failed: ${t.message}")
-                    lastFailure = t
-                    unloadLocked()
-                }
+                Log.w(TAG, "load failed with speculative decoding; retrying without it", t)
+                speculativeDecodingUsable = false
+                ExperimentalFlags.enableSpeculativeDecoding = false
+                loadOnBestAccelerator(request)
             }
-
-            throw (lastFailure ?: IllegalStateException("Unknown error"))
-                .asEngineException(request)
         }
+    }
+
+    /**
+     * Walks down to the CPU rather than failing outright. Caller must hold [lifecycleLock].
+     *
+     * Asking for the GPU is a request, not a guarantee: the driver may be missing OpenCL, the model
+     * may have no GPU-compiled graph, an emulator may have no usable GPU at all, and the NPU path
+     * is gated on vendor libraries that most devices do not ship. All of those surface as an
+     * exception from initialize(), and every one of them is survivable by simply running on the
+     * CPU -- slower, but working. Refusing to load at all would turn a performance problem into a
+     * broken app.
+     */
+    private fun loadOnBestAccelerator(request: LoadRequest) {
+        val ladder = buildList {
+            add(request.accelerator)
+            if (request.accelerator == Accelerator.NPU) add(Accelerator.GPU)
+            if (request.accelerator != Accelerator.CPU) add(Accelerator.CPU)
+        }.distinct()
+
+        var lastFailure: Throwable? = null
+
+        for (accelerator in ladder) {
+            try {
+                loadOn(accelerator, request)
+                activeAccelerator = accelerator
+                loadedModelPath = request.modelPath
+                if (accelerator != request.accelerator) {
+                    Log.w(
+                        TAG,
+                        "${request.accelerator.label} unavailable, fell back to " +
+                            accelerator.label,
+                    )
+                }
+                return
+            } catch (t: Throwable) {
+                Log.w(TAG, "load on ${accelerator.label} failed: ${t.message}")
+                lastFailure = t
+                unloadLocked()
+            }
+        }
+
+        throw (lastFailure ?: IllegalStateException("Unknown error"))
+            .asEngineException(request)
     }
 
     /** Caller must hold [lifecycleLock]. Throws if this accelerator cannot run the model. */
@@ -346,6 +380,16 @@ class LiteRtLmEngine : InferenceEngine {
 
     private companion object {
         const val TAG = "LiteRtLmEngine"
+
+        /**
+         * Whether speculative decoding is still worth asking for in this process.
+         *
+         * Process-wide rather than per-engine because the flag it drives is: `ExperimentalFlags` is
+         * a singleton read by the runtime at engine initialisation, so two engines cannot hold
+         * different answers anyway. Cleared the first time a load fails with it on.
+         */
+        @Volatile
+        var speculativeDecodingUsable = true
 
         val OOM_MARKERS = listOf(
             "out of memory", "oom", "alloc", "bad_alloc", "insufficient", "resource_exhausted",
