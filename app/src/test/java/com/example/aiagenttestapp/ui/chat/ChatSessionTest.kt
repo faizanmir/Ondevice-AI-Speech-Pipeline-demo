@@ -266,6 +266,38 @@ class ChatSessionTest {
         assertEquals(false, session.compactIfNeeded(contextTotal = 1000))
     }
 
+    @Test
+    fun `a turn that ends on the ceiling is treated as having run out`() = runTest {
+        val engine = FakeEngine(contextUsed = 1000)
+        val session = session(readyPlan(engine), FakeResidency(engine), RecordingListener(), this)
+        session.open("m", null)
+        advanceUntilIdle()
+
+        // Neither engine reports a stop reason -- llama.cpp returns the same null for a full window
+        // as for an end-of-sequence token -- so landing on the limit is the only evidence there is.
+        assertTrue(session.ranOutOfContext(contextTotal = 1000))
+    }
+
+    @Test
+    fun `a turn that ended well short of the ceiling has not run out`() = runTest {
+        val engine = FakeEngine(contextUsed = 600)
+        val session = session(readyPlan(engine), FakeResidency(engine), RecordingListener(), this)
+        session.open("m", null)
+        advanceUntilIdle()
+
+        // A model that stops on its own almost never lands on the limit; treating this as a
+        // truncation would make it continue a reply it had already finished.
+        assertTrue(!session.ranOutOfContext(contextTotal = 1000))
+    }
+
+    @Test
+    fun `nothing has run out before a model is loaded`() = runTest {
+        val engine = FakeEngine(contextUsed = 1000)
+        val session = session(readyPlan(engine), FakeResidency(engine), RecordingListener(), this)
+
+        assertTrue(!session.ranOutOfContext(contextTotal = 1000))
+    }
+
     // ---- fixtures -----------------------------------------------------------------------------
 
     private fun session(

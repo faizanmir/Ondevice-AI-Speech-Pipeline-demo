@@ -480,6 +480,29 @@ class ChatViewModel @Inject constructor(
 
                 var response = runTurn(activeEngine, modelPrompt)
 
+                // A reply that stopped because the window filled looks exactly like one that
+                // finished, so the user would be left mid-sentence with nothing to act on. Compact
+                // and carry on in the same bubble instead: they see an answer that paused, not a
+                // broken one. Bounded, because a conversation whose *recent* turns alone fill the
+                // window would compact forever without making progress.
+                var continuations = 0
+                while (
+                    continuations < MAX_CONTINUATIONS &&
+                    session.ranOutOfContext(currentState.contextTotal) &&
+                    pendingReplyId != null
+                ) {
+                    setState { copy(isCompacting = true) }
+                    val compacted = try {
+                        session.compactIfNeeded(currentState.contextTotal)
+                    } finally {
+                        setState { copy(isCompacting = false) }
+                    }
+                    if (!compacted) break
+
+                    continuations++
+                    response = runTurn(activeEngine, CONTINUE_PROMPT, into = pendingReplyId)
+                }
+
                 // Let the model chain a few tool calls per turn -- search, read a result, search
                 // again -- and then answer, instead of stopping after one. Kept bounded and guarded:
                 // the hop cap stops runaway chaining, an identical repeated call (a small model
@@ -520,14 +543,29 @@ class ChatViewModel @Inject constructor(
     }
 
     /** Streams one model response into a fresh bubble and returns the full text. */
-    private suspend fun runTurn(activeEngine: InferenceEngine, prompt: String): String {
-        val replyId = messageIds.next()
-        setState {
-            copy(messages = messages + ChatMessage(id = replyId, isUser = false, text = ""))
+    /**
+     * Streams one turn into a bubble.
+     *
+     * [into] continues an existing one rather than starting a new one, which is what a reply
+     * resumed after a compaction needs: the user sees one answer that paused, not two half answers.
+     * The text already there is kept and the new tokens append to it.
+     */
+    private suspend fun runTurn(
+        activeEngine: InferenceEngine,
+        prompt: String,
+        into: Long? = null,
+    ): String {
+        val replyId = into ?: messageIds.next()
+        val existing =
+            if (into == null) "" else currentState.messages.firstOrNull { it.id == into }?.text.orEmpty()
+        if (into == null) {
+            setState {
+                copy(messages = messages + ChatMessage(id = replyId, isUser = false, text = ""))
+            }
         }
         streamingReplyId = replyId
 
-        val buffer = StringBuilder()
+        val buffer = StringBuilder(existing)
         var lastUiMs = 0L
         try {
             activeEngine.generate(prompt).collect { event ->
@@ -773,6 +811,20 @@ class ChatViewModel @Inject constructor(
          * prefill runs into seconds regardless.
          */
         const val SEND_SETTLE_MS = 1000L
+
+        /**
+         * How many times one reply may be resumed after a compaction.
+         *
+         * More than one is worth having -- a long answer can outlive two windows -- but this has to
+         * terminate: if the recent turns alone fill the window, compacting frees nothing and the
+         * loop would run forever, so it gives up and leaves the user the answer it has.
+         */
+        const val MAX_CONTINUATIONS = 2
+
+        /** Asked after a compaction, so the reply picks up rather than starting again. */
+        const val CONTINUE_PROMPT =
+            "Continue your previous answer from exactly where it stopped. Do not repeat what you " +
+                "have already written, and do not start again."
 
     }
 }

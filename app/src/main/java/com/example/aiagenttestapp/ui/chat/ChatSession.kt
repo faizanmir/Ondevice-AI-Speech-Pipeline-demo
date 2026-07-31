@@ -136,6 +136,22 @@ class ChatSession(
      *
      * Returns true when it compacted, so the screen can say why the turn is slow.
      */
+    /**
+     * Whether the last turn ended because the window filled rather than because the model finished.
+     *
+     * Inferred from the runtime's own counter rather than from a stop reason, because neither
+     * engine gives one: llama.cpp's next-token call returns null at `n_past >= n_ctx`, which is the
+     * same signal as an end-of-sequence token, so a reply that ran into the wall is indistinguishable
+     * from one that simply ended. Sitting within a hair of the ceiling afterwards is the only
+     * evidence there is -- and it is good evidence, since a model that stops on its own almost never
+     * lands exactly on the limit.
+     */
+    fun ranOutOfContext(contextTotal: Int): Boolean {
+        val active = engine ?: return false
+        if (contextTotal <= 0) return false
+        return active.contextTokensUsed() >= contextTotal - EXHAUSTED_MARGIN
+    }
+
     suspend fun compactIfNeeded(contextTotal: Int): Boolean {
         val plan = loadedPlan ?: return false
         val active = engine ?: return false
@@ -216,6 +232,15 @@ class ChatSession(
          * alternative is a reply that stops mid-sentence.
          */
         const val COMPACT_AT = 0.85f
+
+        /**
+         * How close to the ceiling counts as having hit it.
+         *
+         * A few tokens of slack, because the counter is read after the turn and the last decode
+         * step may not have committed. Too wide and an ordinary reply looks truncated; too narrow
+         * and a genuine truncation is missed and the user is left with half a sentence.
+         */
+        const val EXHAUSTED_MARGIN = 16
     }
 
     /** Forgets the conversation without touching the loaded model. */
