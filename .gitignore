@@ -15,8 +15,6 @@ build/
 local.properties
 .kotlin/
 
-# llama.cpp and MNN are cloned at build time by tools/fetch_llama_cpp.sh and tools/fetch_mnn.sh
-# (~550 MB of upstream source, each with its own .git). They are inputs to the build, not part of
-# this repository.
+# llama.cpp is cloned at build time by tools/fetch_llama_cpp.sh (~200 MB of upstream source, with
+# its own .git). It is an input to the build, not part of this repository.
 /engine-llamacpp/third_party/
-/engine-mnn/third_party/

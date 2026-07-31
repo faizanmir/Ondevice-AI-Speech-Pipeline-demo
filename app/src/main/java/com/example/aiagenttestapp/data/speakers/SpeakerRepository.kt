@@ -106,7 +106,7 @@ class SpeakerRepository(
      *
      * Samples written by a *different* embedding model are skipped, not silently loaded. Vectors from
      * another model are not detectably wrong -- they simply match nobody -- so without this check
-     * swapping the model would look like the app forgetting everyone it knew.
+     * swapping the model would look like the app forgetting everyone    it knew.
      */
     suspend fun prepare(): Boolean = lock.withLock { prepareLocked() }
 

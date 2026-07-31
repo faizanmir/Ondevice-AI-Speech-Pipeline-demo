@@ -7,17 +7,18 @@ anything.
 
 ## Highlights
 
-- **Four inference engines behind one interface.** The chat layer never knows which runtime it
+- **Two inference engines behind one interface.** The chat layer never knows which runtime it
   is talking to; adding a backend means implementing one interface and registering it.
 - **A curated catalog plus open search.** Built-in models from Google, Alibaba, Meta, DeepSeek
-  and HuggingFace, or add any compatible model from the HuggingFace Hub and Alibaba's MNN
-  market. Downloads are resumable and survive the app being killed.
+  and HuggingFace, or add any compatible model from the HuggingFace Hub. Downloads are
+  resumable and survive the app being killed.
 - **Memory-fit verdicts.** Every model is judged against the device's RAM budget before
   download — "runs comfortably", "tight fit", or "too large" — using measured file sizes and
   per-engine weight-residency modelling, not guesses.
 - **Tool calling (app functions).** Capable models can drive the app: open screens, change
-  settings, search the web (with a Tavily key), all through a JSON protocol with the raw calls
-  rendered as function chips in the transcript.
+  settings, search the web (with a Tavily key). LiteRT-LM uses its native tool API; llama.cpp
+  uses a prompt protocol. Either way the calls are rendered as function chips in the
+  transcript.
 - **Voice notes with on-device speech-to-text.** Record, correct the transcript, and have your
   chosen model summarise it. Two speech models to pick from in Settings: SenseVoice (fast;
   English, Chinese, Japanese, Korean, Cantonese) or Whisper Small (slower; ~100 languages,
@@ -33,13 +34,10 @@ anything.
 |---|---|---|---|
 | **LiteRT-LM** | `.litertlm` | CPU / GPU / NPU | Google Maven AAR |
 | **llama.cpp** | `.gguf` | CPU | built from source with the NDK |
-| **MNN** | MNN export (directory) | CPU | built from source with the NDK |
-| **AICore** | system-managed | NPU | ML Kit GenAI Prompt API |
 
-The AICore engine runs **Gemini Nano** inside Android's AICore system service: nothing to
-download, out-of-process inference, and almost no memory billed to the app. It needs a device on
-Google's allowlist (recent Pixel or Galaxy flagships) — the app detects support at load time and
-explains when it is missing.
+LiteRT-LM is the primary engine: it is Google's supported successor to the deprecated MediaPipe
+LLM Inference API, runs on GPU and NPU, and is the only one of the two with a native tool-calling
+API. llama.cpp is kept for the breadth of the GGUF catalogue.
 
 ## Project structure
 
@@ -49,9 +47,7 @@ engine-core/         Engine-agnostic contracts: InferenceEngine, ModelSpec, fit 
                      context-window budgeting, tool-calling protocol
 engine-litertlm/     LiteRT-LM backend
 engine-llamacpp/     llama.cpp backend (native build)
-engine-mnn/          MNN backend (native build)
-engine-aicore/       Gemini Nano via AICore / ML Kit GenAI
-tools/               fetch scripts for the native engines' upstream sources
+tools/               fetch script for llama.cpp's upstream source
 ```
 
 ## Building
@@ -59,11 +55,10 @@ tools/               fetch scripts for the native engines' upstream sources
 Requirements: Android Studio with the NDK and CMake, and a JDK 11+ toolchain (resolved
 automatically via Gradle toolchains).
 
-1. Fetch the native engines' sources (not vendored in this repository):
+1. Fetch llama.cpp's source (not vendored in this repository):
 
    ```sh
    tools/fetch_llama_cpp.sh
-   tools/fetch_mnn.sh
    ```
 
 2. Build:
@@ -72,10 +67,9 @@ automatically via Gradle toolchains).
    ./gradlew :app:assembleDebug
    ```
 
-The first build compiles llama.cpp and MNN from source and takes several minutes; every build
-after that is incremental. Both native engines can be excluded in `gradle.properties`
-(`enableLlamaCpp=false`, `enableMnn=false`) — the app still builds and reports them as
-unavailable at runtime.
+The first build compiles llama.cpp from source and takes several minutes; every build after
+that is incremental. It can be excluded in `gradle.properties` (`enableLlamaCpp=false`) — the
+app still builds and reports the engine as unavailable at runtime.
 
 - **minSdk 31**, arm64-v8a only. Below API 31 there is no reliable way to identify the chipset,
   the accelerated backends are not dependable, and no such device has the RAM to run anything in

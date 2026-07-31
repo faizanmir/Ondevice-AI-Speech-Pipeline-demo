@@ -241,20 +241,6 @@ class ParamBudgetTest {
     }
 
     @Test
-    fun `aicore context is unbounded because its cache is out of process`() {
-        // AICore hosts the KV cache in the system service, so the app must not shrink it to fit a
-        // budget it does not pay -- the sentinel says "do not cap".
-        val ctx = ParamBudget.maxRunnableContext(
-            budgetBytes = gb(0.1),
-            weightsBytes = gb(2.0),
-            paramsBillions = 3.0,
-            engine = EngineId.AICORE,
-            accelerator = Accelerator.CPU,
-        )
-        assertEquals(Int.MAX_VALUE, ctx)
-    }
-
-    @Test
     fun `weights that already blow the budget yield no context rather than a negative one`() {
         val ctx = ParamBudget.maxRunnableContext(
             budgetBytes = gb(0.5),

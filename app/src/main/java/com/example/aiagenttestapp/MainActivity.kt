@@ -35,7 +35,6 @@ import com.example.aiagenttestapp.ui.audit.AuditScreen
 import com.example.aiagenttestapp.ui.audit.AuditViewModel
 import com.example.aiagenttestapp.ui.catalog.CatalogScreen
 import com.example.aiagenttestapp.ui.catalog.CatalogViewModel
-import com.example.aiagenttestapp.ui.catalog.MnnMarketViewModel
 import com.example.aiagenttestapp.ui.chat.ChatEffect
 import com.example.aiagenttestapp.ui.chat.ChatIntent
 import com.example.aiagenttestapp.ui.chat.ChatScreen
@@ -218,11 +217,9 @@ private fun AppNavHost(
         composable(Routes.CATALOG) {
             val catalogViewModel: CatalogViewModel = hiltViewModel()
             val hubViewModel: HubViewModel = hiltViewModel()
-            val mnnMarketViewModel: MnnMarketViewModel = hiltViewModel()
             CatalogScreen(
                 viewModel = catalogViewModel,
                 hubViewModel = hubViewModel,
-                mnnMarketViewModel = mnnMarketViewModel,
                 // Chatting from Manage models also makes that model the active one for new chats.
                 onOpenChat = {
                     settingsStore.update { s -> s.copy(activeModelId = it.id) }

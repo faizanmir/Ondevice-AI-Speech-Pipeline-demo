@@ -37,9 +37,9 @@ data class HfRepo(
 )
 
 /**
- * One downloadable model inside a repo. Usually one literal file; for MNN -- whose "model" is the
- * whole repo -- this is a synthetic entry whose [path] is the config.json entry point, [sizeBytes]
- * the repo total, and [components] every file that must actually be downloaded.
+ * One downloadable model inside a repo. Usually one literal file; a model that ships as several
+ * carries every one of them in [components], with [path] naming the entry point the engine loads
+ * and [sizeBytes] the total.
  */
 data class HfModelFile(
     val path: String,
@@ -114,15 +114,6 @@ class HuggingFaceClient(
             ModelFormat.LITERTLM ->
                 "$API/models?search=$encoded&author=litert-community&limit=$limit$order"
 
-            // Same story as LiteRT-LM: no Hub-wide tag, but Alibaba publishes its MNN LLM
-            // exports under one org, so the search is scoped there.
-            ModelFormat.MNN ->
-                "$API/models?search=$encoded&author=taobao-mnn&limit=$limit$order"
-
-            // Unreachable: the Hub search UI only offers the downloadable formats. Gemini Nano is
-            // delivered by the OS, not by HuggingFace.
-            ModelFormat.AICORE ->
-                throw IllegalArgumentException("AICore models cannot be searched on HuggingFace")
         }
     }
 
@@ -183,50 +174,7 @@ class HuggingFaceClient(
                 ?: parseParamsFromName(repoId),
             contextTokens = gguf?.int("context_length"),
             architecture = gguf?.string("architecture"),
-            files = tree.toModelFiles() + listOfNotNull(tree.toMnnModel(repoId)),
-        )
-    }
-
-    /**
-     * An MNN export is a whole repo, not a file: config.json (the entry point the engine loads)
-     * plus weights, graph and tokenizer alongside it. When the tree has that shape, this collapses
-     * it into one synthetic [HfModelFile] sized as the total, so the rest of the pipeline -- the
-     * file picker, the fit check, the download -- can treat it like any other pickable model.
-     */
-    private fun JsonArray.toMnnModel(repoId: String): HfModelFile? {
-        val fileEntries = mapNotNull { element ->
-            val obj = element.jsonObject
-            if (obj.string("type") == "directory") return@mapNotNull null
-            val path = obj.string("path") ?: return@mapNotNull null
-            // Repo housekeeping, not model data.
-            if (path.startsWith(".") || path.substringAfterLast('/').startsWith(".")) {
-                return@mapNotNull null
-            }
-            if (path.endsWith(".md", ignoreCase = true)) return@mapNotNull null
-            val size = obj["lfs"]?.jsonObject?.long("size") ?: obj.long("size")
-                ?: return@mapNotNull null
-            path to size
-        }
-
-        val looksLikeMnn = fileEntries.any { it.first == "config.json" } &&
-            fileEntries.any { it.first.endsWith(".mnn") }
-        if (!looksLikeMnn) return null
-
-        // Namespaced by repo on disk, same reason as single-file models: every MNN repo ships a
-        // file literally called config.json.
-        val dir = repoId.replace('/', '_')
-        return HfModelFile(
-            path = "config.json",
-            sizeBytes = fileEntries.sumOf { it.second },
-            format = ModelFormat.MNN,
-            quantization = Quantization.fromFileName(repoId) ?: Quantization.Q4,
-            components = fileEntries.map { (path, size) ->
-                ModelFile(
-                    url = "https://huggingface.co/$repoId/resolve/main/$path?download=true",
-                    relativePath = "$dir/$path",
-                    sizeBytes = size,
-                )
-            },
+            files = tree.toModelFiles(),
         )
     }
 
@@ -345,7 +293,7 @@ internal fun parseHuggingFaceRef(input: String): HfRef? {
 /** Pulls "1.5B" / "360M" out of a repo name, for repos with no published parameter count. */
 private val PARAMS_IN_NAME = Regex("""(\d+(?:\.\d+)?)\s*([BbMm])(?![a-zA-Z])""")
 
-/** Shared by the HuggingFace and MNN-market clients, whose repo names follow the same convention. */
+/** Parses "1.5B"/"360M" out of a repo name, which is where authors reliably encode it. */
 internal fun parseParamsFromName(name: String): Double? =
     PARAMS_IN_NAME.findAll(name)
         // Take the largest match: "Qwen2.5-1.5B" would otherwise match the "2.5" in the
@@ -384,8 +332,8 @@ fun HfRepoDetail.toModelSpec(file: HfModelFile, device: DeviceMemoryProfile): Mo
         format = file.format,
         downloadUrl = "https://huggingface.co/$id/resolve/main/${file.path}?download=true",
         // Namespaced by repo: two repos both shipping "model.gguf" must not collide on disk, and
-        // engines that cache compiled graphs key on filename alone. A multi-file MNN model gets a
-        // repo-named *directory* instead, with config.json -- the file the engine loads -- inside.
+        // engines that cache compiled graphs key on filename alone. A multi-file model gets a
+        // repo-named *directory* instead, with the entry-point file inside.
         fileName = if (file.components.isEmpty()) {
             "${id.replace('/', '_')}_${file.path.substringAfterLast('/')}"
         } else {
@@ -407,9 +355,6 @@ fun HfRepoDetail.toModelSpec(file: HfModelFile, device: DeviceMemoryProfile): Mo
         accelerators = when (file.format) {
             ModelFormat.GGUF -> setOf(Accelerator.CPU)
             ModelFormat.LITERTLM -> setOf(Accelerator.GPU, Accelerator.CPU)
-            ModelFormat.MNN -> setOf(Accelerator.CPU)
-            // Unreachable: toModelFiles only ever assigns the downloadable formats.
-            ModelFormat.AICORE -> error("AICore models cannot come from HuggingFace")
         },
         license = license,
         description = buildString {
@@ -444,9 +389,6 @@ private fun deviceContext(
     val engine = when (file.format) {
         ModelFormat.GGUF -> EngineId.LLAMA_CPP
         ModelFormat.LITERTLM -> EngineId.LITE_RT_LM
-        ModelFormat.MNN -> EngineId.MNN
-        // Unreachable: AICore models never come from HuggingFace. Nothing to size -- honour as-is.
-        ModelFormat.AICORE -> return advertised
     }
     val deviceMax = ParamBudget.maxRunnableContext(
         budgetBytes = device.modelRamBudgetBytes,

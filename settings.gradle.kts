@@ -40,7 +40,5 @@ dependencyResolutionManagement {
 rootProject.name = "AI Agent Test App"
 include(":app")
 include(":engine-core")
-include(":engine-aicore")
 include(":engine-litertlm")
 include(":engine-llamacpp")
-include(":engine-mnn")

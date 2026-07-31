@@ -3,6 +3,5 @@
   <component name="VcsDirectoryMappings">
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/engine-llamacpp/third_party/llama.cpp" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/engine-mnn/third_party/MNN" vcs="Git" />
   </component>
 </project>

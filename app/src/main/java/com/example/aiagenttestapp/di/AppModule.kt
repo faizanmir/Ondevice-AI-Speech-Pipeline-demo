@@ -1,18 +1,15 @@
 package com.example.aiagenttestapp.di
 
 import android.content.Context
-import com.example.aiagent.engine.aicore.AiCoreEngine
 import com.example.aiagent.engine.core.DeviceMemoryProfile
 import com.example.aiagent.engine.core.DeviceMemoryProbe
 import com.example.aiagent.engine.core.EngineRegistry
 import com.example.aiagent.engine.litertlm.LiteRtLmEngine
 import com.example.aiagent.engine.llamacpp.LlamaCppEngine
-import com.example.aiagent.engine.mnn.MnnEngine
 import com.example.aiagenttestapp.data.CustomModelStore
 import com.example.aiagenttestapp.data.FileTextExtractor
 import com.example.aiagenttestapp.data.HuggingFaceAuth
 import com.example.aiagenttestapp.data.HuggingFaceClient
-import com.example.aiagenttestapp.data.MnnMarketClient
 import com.example.aiagenttestapp.data.ModelRepository
 import com.example.aiagenttestapp.data.NetworkMonitor
 import com.example.aiagenttestapp.data.SettingsStore
@@ -53,10 +50,9 @@ annotation class NativeLibraryDir
 object AppModule {
 
     /**
-     * Registration order is the fallback order: a `.litertlm` model goes to LiteRT-LM, a `.gguf`
-     * to llama.cpp, an MNN export to MNN, and the system-managed Gemini Nano to AICore, because
-     * those are the only engines that can load each. Adding a backend means adding it to this
-     * list and nothing else.
+     * Registration order is the fallback order: a `.litertlm` model goes to LiteRT-LM and a
+     * `.gguf` to llama.cpp, because those are the only engines that can load each. Adding a
+     * backend means adding it to this list and nothing else.
      */
     @Provides
     @Singleton
@@ -64,8 +60,6 @@ object AppModule {
         listOf(
             LiteRtLmEngine(),
             LlamaCppEngine(),
-            MnnEngine(),
-            AiCoreEngine(),
         ),
     )
 
@@ -95,11 +89,6 @@ object AppModule {
     @Provides
     @Singleton
     fun huggingFaceClient(auth: HuggingFaceAuth) = HuggingFaceClient(auth)
-
-    /** Alibaba's MNN model market -- the catalogue behind the Models screen's MNN tab. */
-    @Provides
-    @Singleton
-    fun mnnMarketClient() = MnnMarketClient()
 
     /** Lets a tool-capable model search the web via Tavily, when a key is set in Settings. */
     @Provides

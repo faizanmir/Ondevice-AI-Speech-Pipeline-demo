@@ -140,11 +140,6 @@ fun HubContent(
                     onClick = { viewModel.onIntent(HubIntent.FormatChanged(ModelFormat.LITERTLM)) },
                     label = { Text("LiteRT-LM") },
                 )
-                FilterChip(
-                    selected = state.format == ModelFormat.MNN,
-                    onClick = { viewModel.onIntent(HubIntent.FormatChanged(ModelFormat.MNN)) },
-                    label = { Text("MNN") },
-                )
             }
 
             val ref = state.pastedRef
@@ -512,14 +507,6 @@ private fun EmptyResults(format: ModelFormat) {
 
                 ModelFormat.LITERTLM -> "No LiteRT-LM models matched. Google publishes these under " +
                     "the litert-community organisation, so the selection is much smaller than GGUF."
-
-                ModelFormat.MNN -> "No MNN models matched. Alibaba publishes these under the " +
-                    "taobao-mnn organisation -- try a Qwen family name."
-
-                // Unreachable -- the format tabs above never offer AICore -- but a composable
-                // should degrade to an explanation rather than crash if that ever changes.
-                ModelFormat.AICORE -> "Gemini Nano is built into Android and managed by the OS. " +
-                    "There is nothing to search for on HuggingFace."
             },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

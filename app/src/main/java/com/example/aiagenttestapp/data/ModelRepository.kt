@@ -92,12 +92,8 @@ class ModelRepository(
      * A model counts as downloaded only when every one of its files is exactly the size
      * HuggingFace advertises. A truncated file left behind by a kill would otherwise be handed to
      * the engine, which surfaces as an unexplained native crash rather than a failed download.
-     *
-     * A system-managed model (AICore's Gemini Nano) has no files of ours to check and is always
-     * "downloaded" from the app's point of view -- whether the *OS* has it is AICore's business,
-     * asked and answered by the engine at load time.
      */
-    fun isDownloaded(model: ModelSpec): Boolean = model.systemManaged || model.allFiles.all { spec ->
+    fun isDownloaded(model: ModelSpec): Boolean = model.allFiles.all { spec ->
         val file = fileFor(spec)
         file.exists() && file.length() == spec.sizeBytes
     }
@@ -168,9 +164,6 @@ class ModelRepository(
     }
 
     suspend fun delete(model: ModelSpec) = withContext(Dispatchers.IO) {
-        // Nothing of a system-managed model is on our disk; there is nothing to delete.
-        if (model.systemManaged) return@withContext
-
         cancelDownload(model) // in case one is mid-flight
         model.allFiles.forEach { file ->
             fileFor(file).delete()
@@ -191,7 +184,7 @@ class ModelRepository(
      * files when present. Throws [IOException] on failure and propagates cancellation (leaving the
      * `.part` in place for a later resume). Called only from [ModelDownloadWorker].
      *
-     * Multi-file models (MNN) download file by file; progress is reported against the model's
+     * Multi-file models download file by file; progress is reported against the model's
      * total size so the UI shows one bar, not one per file. Files already complete on disk are
      * skipped, which makes a failed multi-file download resume from the file it died in.
      */
@@ -235,8 +228,8 @@ class ModelRepository(
                 if (alreadyHave > 0) header("Range", "bytes=$alreadyHave-")
                 // Attached to every HuggingFace download, not only gated ones: HF gives
                 // authenticated traffic higher rate limits, so signing in speeds up public models
-                // too. But ONLY HuggingFace -- MNN-market models download from ModelScope, and
-                // sending the HF bearer token to another host would leak the user's credential.
+                // too. But ONLY HuggingFace -- a model can be hosted anywhere, and sending the HF
+                // bearer token to another host would leak the user's credential.
                 if (spec.url.startsWith("https://huggingface.co/")) {
                     auth.authHeader()?.let { (name, value) -> header(name, value) }
                 }

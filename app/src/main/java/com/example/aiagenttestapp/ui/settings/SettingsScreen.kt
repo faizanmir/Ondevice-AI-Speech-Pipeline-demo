@@ -410,7 +410,7 @@ fun SettingsScreen(
                         label = "CPU threads",
                         value = settings.threadCount.toFloat(),
                         range = 0f..8f,
-                        hint = "Decode threads for the CPU engines (llama.cpp, MNN). " +
+                        hint = "Decode threads for the CPU engine (llama.cpp). " +
                             "\"Automatic\" leaves the little cores free. No effect on GPU or NPU.",
                         format = { if (it < 1f) "Automatic" else it.toInt().toString() },
                         onChange = { value ->

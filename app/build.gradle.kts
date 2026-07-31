@@ -117,10 +117,8 @@ dependencies {
     ksp(libs.androidx.hilt.compiler)
 
     implementation(project(":engine-core"))
-    implementation(project(":engine-aicore"))
     implementation(project(":engine-litertlm"))
     implementation(project(":engine-llamacpp"))
-    implementation(project(":engine-mnn"))
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)

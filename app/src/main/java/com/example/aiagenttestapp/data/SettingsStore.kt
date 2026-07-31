@@ -36,7 +36,7 @@ data class AppSettings(
      */
     val speechModelId: String? = null,
     /**
-     * CPU decode threads for llama.cpp and MNN. 0 = automatic (the engine picks from the core
+     * CPU decode threads for llama.cpp. 0 = automatic (the engine picks from the core
      * count). Carried into [com.example.aiagent.engine.core.LoadRequest.threadCount].
      */
     val threadCount: Int = 0,

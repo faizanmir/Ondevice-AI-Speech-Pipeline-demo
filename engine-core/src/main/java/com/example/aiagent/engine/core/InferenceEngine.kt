@@ -6,8 +6,6 @@ import kotlinx.coroutines.flow.Flow
 enum class EngineId(val slug: String) {
     LITE_RT_LM("litertlm"),
     LLAMA_CPP("llamacpp"),
-    MNN("mnn"),
-    AICORE("aicore"),
 }
 
 /** Static description of what an engine can do. Safe to read without the engine being loaded. */
@@ -99,7 +97,7 @@ data class LoadRequest(
      */
     val initialHistory: List<HistoryTurn> = emptyList(),
     /**
-     * CPU decode threads for the engines that run on the CPU (llama.cpp, MNN). [AUTO] (the default)
+     * CPU decode threads for the engines that run on the CPU (llama.cpp). [AUTO] (the default)
      * lets the engine choose from the core count. Ignored by GPU/NPU engines.
      */
     val threadCount: Int = AUTO,

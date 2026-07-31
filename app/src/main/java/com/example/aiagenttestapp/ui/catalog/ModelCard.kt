@@ -138,9 +138,7 @@ fun ModelCard(
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Tag(model.paramsLabel, emphasised = true)
                 Tag(model.quantization.label)
-                // A system-managed model has no download of ours to weigh; "0 B" would read as a
-                // bug, so say what it actually is instead.
-                if (model.systemManaged) Tag("Built-in") else Tag(formatBytes(model.sizeBytes))
+                Tag(formatBytes(model.sizeBytes))
                 if (model.multimodal) Tag("Vision")
                 // Says the model can drive the app -- open screens, change settings. Worth its own
                 // badge because it is the difference between a chatbot and something that can act.
@@ -192,9 +190,7 @@ fun ModelCard(
             //  - "Remove from catalogue" un-adds a model entirely, and only makes sense for models
             //    the user added themselves. The built-ins are the app's identity; letting someone
             //    delete "Gemma 4" out of the list with no way back would be a trap.
-            // System-managed models are "downloaded" but hold none of our disk -- offering to
-            // "Free 0 B" of an OS-owned model would be nonsense, so they get neither action.
-            val isDownloaded = entry.downloadState is DownloadState.Downloaded && !model.systemManaged
+            val isDownloaded = entry.downloadState is DownloadState.Downloaded
             if (isDownloaded || model.isCustom) {
                 Row(
                     Modifier.fillMaxWidth(),

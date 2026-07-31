@@ -58,10 +58,6 @@ commonsCompress = "1.27.1"
 # LiteRT-LM is the successor to the (now deprecated) MediaPipe LLM Inference API.
 # Published on Google Maven only -- it is NOT on Maven Central.
 litertlm = "0.14.0"
-# ML Kit's GenAI Prompt API: the supported way to reach Gemini Nano through the AICore system
-# service. (The older com.google.ai.edge.aicore experimental SDK is prototyping-only; Google's
-# guidance is to ship on ML Kit.) Google Maven only.
-mlkitGenaiPrompt = "1.0.0-beta3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -89,7 +85,6 @@ androidx-paging-runtime = { group = "androidx.paging", name = "paging-runtime-kt
 androidx-paging-compose = { group = "androidx.paging", name = "paging-compose", version.ref = "paging" }
 pdfbox-android = { group = "com.tom-roush", name = "pdfbox-android", version.ref = "pdfbox" }
 litertlm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
-mlkit-genai-prompt = { group = "com.google.mlkit", name = "genai-prompt", version.ref = "mlkitGenaiPrompt" }
 androidx-appfunctions = { group = "androidx.appfunctions", name = "appfunctions", version.ref = "appfunctions" }
 androidx-appfunctions-service = { group = "androidx.appfunctions", name = "appfunctions-service", version.ref = "appfunctions" }
 androidx-appfunctions-compiler = { group = "androidx.appfunctions", name = "appfunctions-compiler", version.ref = "appfunctions" }

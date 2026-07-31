@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import java.io.File
 
 /**
@@ -25,20 +26,46 @@ class CustomModelStore(context: Context) {
     private val _models = MutableStateFlow(load())
     val models: StateFlow<List<ModelSpec>> = _models.asStateFlow()
 
+    /**
+     * Reads the list one entry at a time, keeping whatever still parses.
+     *
+     * Decoding the array in one go would be shorter but throws away far too much: a single entry
+     * the current build cannot represent fails the whole decode, and the user loses every model
+     * they ever added. That is not hypothetical -- dropping an engine drops its [ModelFormat],
+     * and any saved model in that format becomes an unknown enum value overnight. Those entries
+     * are genuinely dead (nothing left can load them), but the ones beside them are not.
+     */
     private fun load(): List<ModelSpec> {
         if (!file.exists()) return emptyList()
-        return try {
-            json.decodeFromString(serializer, file.readText())
+
+        val elements = try {
+            json.parseToJsonElement(file.readText()).jsonArray
         } catch (e: Exception) {
-            // A schema change or a truncated write should not brick the catalogue. Losing the
-            // user's added-model list is recoverable; refusing to start is not.
+            // A truncated write should not brick the catalogue. Losing the user's added-model list
+            // is recoverable; refusing to start is not.
             Log.e(TAG, "custom model list is unreadable, discarding it", e)
-            emptyList()
+            return emptyList()
         }
+
+        val models = elements.mapNotNull { element ->
+            runCatching { json.decodeFromJsonElement(ModelSpec.serializer(), element) }
+                .onFailure { Log.w(TAG, "dropping a custom model this build cannot load", it) }
+                .getOrNull()
+        }
+        if (models.size < elements.size) {
+            // Rewrite now rather than on the next add, so the dead entries stop being re-parsed
+            // (and re-logged) on every launch.
+            persistToDisk(models)
+        }
+        return models
     }
 
     private fun persist(models: List<ModelSpec>) {
         _models.value = models
+        persistToDisk(models)
+    }
+
+    private fun persistToDisk(models: List<ModelSpec>) {
         runCatching { file.writeText(json.encodeToString(serializer, models)) }
             .onFailure { Log.e(TAG, "could not save custom models", it) }
     }

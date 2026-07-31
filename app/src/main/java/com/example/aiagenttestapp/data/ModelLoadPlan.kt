@@ -102,8 +102,8 @@ class ModelLoadPlanner @Inject constructor(
             ?: return ModelLoadPlan.NoEngine(model)
 
         // The preference ladder ends in the engine's own list rather than CPU, because not every
-        // engine reaches down that far: AICore is NPU-only, so for it the ladder's GPU and CPU rungs
-        // both miss and the engine's first (only) supported accelerator is the answer.
+        // engine reaches down that far: an engine that supports neither GPU nor CPU would miss both
+        // rungs, and its own first supported accelerator is then the answer.
         val accelerator = (
             listOf(settings.preferredAccelerator, Accelerator.GPU, Accelerator.CPU) +
                 engine.descriptor.supportedAccelerators

@@ -224,11 +224,7 @@ private fun NewChatMenu(
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                val (builtIn, custom) = models.partition { it.systemManaged }
-
-                // Custom models first, built-in nearest the button: speed-dial convention puts
-                // the headline action closest to the finger that just opened the fan.
-                custom.forEach { model ->
+                models.forEach { model ->
                     NewChatOption(
                         label = model.name,
                         icon = Icons.Default.Memory,
@@ -240,24 +236,13 @@ private fun NewChatMenu(
                 }
 
                 // Nothing downloaded is not a dead end -- the fan offers the way to fix it.
-                if (custom.isEmpty()) {
+                if (models.isEmpty()) {
                     NewChatOption(
                         label = "Download a model",
                         icon = Icons.Default.Download,
                         onClick = {
                             onExpandedChange(false)
                             onGetModels()
-                        },
-                    )
-                }
-
-                builtIn.forEach { model ->
-                    NewChatOption(
-                        label = "${model.name} · Built-in",
-                        icon = Icons.Default.AutoAwesome,
-                        onClick = {
-                            onExpandedChange(false)
-                            onPick(model)
                         },
                     )
                 }

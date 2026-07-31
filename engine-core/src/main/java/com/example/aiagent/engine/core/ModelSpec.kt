@@ -7,32 +7,12 @@ import kotlinx.serialization.Serializable
 enum class ModelFormat(
     val extension: String,
     val label: String,
-    /**
-     * The model is owned and stored by the operating system, not by this app. There is no file to
-     * download, nothing on our disk to delete, and "is it downloaded" is a question for the OS
-     * service at load time rather than for [java.io.File.exists].
-     */
-    val systemManaged: Boolean = false,
 ) {
     /** Google's current on-device format, loaded by LiteRT-LM. */
     LITERTLM(".litertlm", "LiteRT-LM"),
 
     /** llama.cpp's format. Huge community catalogue. */
     GGUF(".gguf", "GGUF"),
-
-    /**
-     * Alibaba MNN's exported-LLM format. Unlike the single-file formats above, an MNN model is a
-     * *directory* of files (config.json, llm.mnn, llm.mnn.weight, tokenizer.txt, ...) whose entry
-     * point is config.json -- see [ModelSpec.files].
-     */
-    MNN(".mnn", "MNN"),
-
-    /**
-     * Not a file at all: Gemini Nano lives inside Android's AICore system service, which
-     * downloads, updates and runs it on the OS's behalf. The extension exists only so this enum
-     * stays uniform; it never matches anything on disk.
-     */
-    AICORE(".aicore", "AICore", systemManaged = true),
 }
 
 /**
@@ -103,7 +83,7 @@ enum class Accelerator(val label: String) {
 
 /**
  * One file of a multi-file model. [relativePath] is where it lives under the app's models
- * directory, and deliberately includes the model's own subdirectory ("qwen3-0.6b-mnn/llm.mnn") so
+ * directory, and deliberately includes the model's own subdirectory ("my-model/weights.bin") so
  * two models never collide on generic names like config.json.
  */
 @Serializable
@@ -165,11 +145,11 @@ data class ModelSpec(
      */
     val requiresAuth: Boolean = false,
     /**
-     * Every file of a *multi-file* model (MNN models are a directory, not a file). Empty for the
-     * single-file formats, whose one file is already described by [downloadUrl]/[fileName]/
-     * [sizeBytes]. When set, [fileName] must be the entry-point file the engine loads (MNN's
-     * config.json), [sizeBytes] the total across all files, and every [ModelFile.relativePath]
-     * must live under one directory named after the model.
+     * Every file of a model that ships as more than one (a sharded export, say). Empty for the
+     * ordinary case, whose one file is already described by [downloadUrl]/[fileName]/[sizeBytes].
+     * When set, [fileName] must be the entry-point file the engine loads, [sizeBytes] the total
+     * across all files, and every [ModelFile.relativePath] must live under one directory named
+     * after the model.
      */
     val files: List<ModelFile> = emptyList(),
     /**
@@ -185,9 +165,6 @@ data class ModelSpec(
     val canCallTools: Boolean
         get() = supportsToolCalling ?: ToolCallingSupport.infer(name, id, paramsBillions)
     val sizeGb: Double get() = sizeBytes / BYTES_PER_GB
-
-    /** The OS owns this model (AICore); the app's download/delete machinery does not apply. */
-    val systemManaged: Boolean get() = format.systemManaged
 
     /**
      * Everything that must be on disk for this model to load, single- and multi-file models seen

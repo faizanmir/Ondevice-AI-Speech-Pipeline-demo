@@ -47,16 +47,13 @@ import com.example.aiagenttestapp.ui.hub.HubViewModel
 
 private const val TAB_DOWNLOADED = 0
 private const val TAB_HUGGINGFACE = 1
-private const val TAB_MNN = 2
-private const val TAB_CATALOG = 3
+private const val TAB_CATALOG = 2
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CatalogScreen(
     viewModel: CatalogViewModel,
     hubViewModel: HubViewModel,
-    /** Alibaba's own model market, downloading from ModelScope -- the MNN tab. */
-    mnnMarketViewModel: MnnMarketViewModel,
     onOpenChat: (ModelSpec) -> Unit,
     onOpenDetail: (ModelSpec) -> Unit,
     onSignIn: () -> Unit,
@@ -79,7 +76,7 @@ fun CatalogScreen(
                     }
                 },
                 actions = {
-                    // Sort and engine filter drive the two model-list tabs; the HuggingFace and MNN
+                    // Sort and engine filter drive the two model-list tabs; the HuggingFace
                     // tabs have their own search, so both are hidden there.
                     if (tab == TAB_DOWNLOADED || tab == TAB_CATALOG) {
                         Box {
@@ -133,11 +130,6 @@ fun CatalogScreen(
                     text = { Text("HuggingFace") },
                 )
                 Tab(
-                    selected = tab == TAB_MNN,
-                    onClick = { tab = TAB_MNN },
-                    text = { Text("MNN") },
-                )
-                Tab(
                     selected = tab == TAB_CATALOG,
                     onClick = { tab = TAB_CATALOG },
                     text = { Text("Catalog") },
@@ -158,13 +150,6 @@ fun CatalogScreen(
                 TAB_HUGGINGFACE -> HubContent(
                     viewModel = hubViewModel,
                     onSignIn = onSignIn,
-                    modifier = Modifier.fillMaxSize(),
-                )
-
-                // Alibaba's own model market -- the same catalogue MNN's app ships, served from
-                // meta.alicdn.com with downloads from ModelScope. No HuggingFace involved.
-                TAB_MNN -> MnnMarketContent(
-                    viewModel = mnnMarketViewModel,
                     modifier = Modifier.fillMaxSize(),
                 )
 
