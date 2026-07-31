@@ -57,9 +57,15 @@ object AuditSummaryPrompts {
             // otherwise drifts onto whatever scale the model prefers -- the exact failure the
             // verdict field exists to prevent.
             appendLine("- The document states its overall result as \"$verdict\". End the summary by")
-            appendLine("  reporting that result in exactly those words -- do not reword it, and do")
-            appendLine("  not add any judgement of your own.")
+            appendLine("  reporting that result in exactly those words -- do not reword it.")
         }
+        // Unconditional, where the no-judgement rule used to ride along with a stated verdict. A
+        // document that reached no conclusion is the case where a model is *most* inclined to
+        // supply one, and prose is where an invented verdict is hardest to see: it arrives as a
+        // sentence rather than a field, so nothing downstream can tell it was never in the notes.
+        appendLine("- Do not judge, grade or conclude anything yourself. Report what the notes say")
+        appendLine("  and what result the document stated, if it stated one. If it did not, say so")
+        appendLine("  plainly and leave it there.")
         appendLine("- Be as long as the material supports and no longer. Do not pad to feel complete.")
         appendLine()
         appendLine("Reply with the summary as plain text only. No headings, no JSON, no code fences.")
