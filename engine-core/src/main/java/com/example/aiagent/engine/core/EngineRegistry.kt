@@ -9,6 +9,19 @@ package com.example.aiagent.engine.core
  */
 class EngineRegistry(private val engines: List<InferenceEngine>) {
 
+    init {
+        // An engine that advertises native tools but cannot be handed a runner would be given
+        // tools to declare, then fail every call the model made -- at run time, with a generic
+        // message. Caught here instead, when the app builds its registry, naming the engine.
+        val unrunnable = engines.filter {
+            it.descriptor.supportsNativeTools && it !is NativeToolEngine
+        }
+        require(unrunnable.isEmpty()) {
+            "${unrunnable.joinToString { it.descriptor.displayName }} declares native tool " +
+                "support but does not implement NativeToolEngine, so its tool calls could never run"
+        }
+    }
+
     val all: List<InferenceEngine> get() = engines
 
     /** Engines that can actually run right now, in registration order. */

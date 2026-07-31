@@ -1,7 +1,7 @@
 package com.example.aiagent.engine.litertlm
 
 import android.util.Log
-import com.example.aiagent.engine.core.InferenceEngine
+import com.example.aiagent.engine.core.NativeToolEngine
 import com.example.aiagent.engine.core.ToolCall
 import com.example.aiagent.engine.core.ToolDefinition
 import com.google.ai.edge.litertlm.OpenApiTool
@@ -17,11 +17,11 @@ import com.google.ai.edge.litertlm.OpenApiTool
  *
  * The engine is held rather than its runner, so the runner is read per call: the tools are baked
  * into the conversation when the model loads, while the thing that runs them belongs to whichever
- * screen is driving and may not exist yet -- see [InferenceEngine.toolRunner].
+ * screen is driving and may not exist yet -- see [NativeToolEngine.toolRunner].
  */
 internal class AppFunctionTool(
     private val definition: ToolDefinition,
-    private val engine: InferenceEngine,
+    private val engine: NativeToolEngine,
 ) : OpenApiTool {
 
     override fun getToolDescriptionJsonString(): String =

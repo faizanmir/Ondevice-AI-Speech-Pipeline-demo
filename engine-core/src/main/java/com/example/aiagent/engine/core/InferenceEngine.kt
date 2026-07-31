@@ -197,23 +197,6 @@ interface InferenceEngine {
      */
     val activeAccelerator: Accelerator?
 
-    /**
-     * Where a runtime with native tool support sends the calls it decides to make.
-     *
-     * Deliberately settable *after* [load], and deliberately not part of [LoadRequest]. Models are
-     * loaded before anyone knows who will use them -- the residency layer warms one in the
-     * background, and a chat screen adopts it later -- so the tools a model is loaded *with* (data,
-     * fixed at conversation creation) and the object that *runs* them (a callback owned by whichever
-     * screen is driving) have genuinely different lifetimes. Folding the callback into the request
-     * would also break request equality, which is what the warm handoff uses to recognise an
-     * already-resident model.
-     *
-     * Defaults to a no-op so engines without native tool support need not think about it.
-     */
-    var toolRunner: ToolRunner?
-        get() = null
-        set(@Suppress("UNUSED_PARAMETER") value) = Unit
-
     /** Cheap enough to call on the main thread; used to grey out engines in the picker. */
     fun availability(): EngineAvailability
 
@@ -259,4 +242,30 @@ interface InferenceEngine {
 
     /** Releases the model and all native memory. Idempotent. */
     suspend fun unload()
+}
+
+/**
+ * An engine whose runtime executes tool calls itself, and therefore needs somewhere to send them.
+ *
+ * Separate from [InferenceEngine] rather than a property on it with a do-nothing default. That
+ * default was a trap: an engine could declare [EngineDescriptor.supportsNativeTools], have its
+ * tools declared to the runtime, be handed a runner -- and silently drop it, because the setter it
+ * inherited did nothing. Every tool call then failed at run time with a generic message, with
+ * nothing at compile time or load time to say why.
+ *
+ * Now the two halves cannot come apart: an engine that claims native tool support and does not
+ * implement this is rejected by [EngineRegistry] when the app starts, and a caller that wants to
+ * set a runner has to say which interface it is talking to.
+ *
+ * The runner is set *after* [InferenceEngine.load] and deliberately kept out of [LoadRequest].
+ * Models are loaded before anyone knows who will use them -- the residency layer warms one in the
+ * background and a chat screen adopts it later -- so the tools a model is loaded *with* (data,
+ * fixed when the conversation is created) and the object that *runs* them (owned by whichever
+ * screen is driving) have genuinely different lifetimes. Folding the runner into the request would
+ * also break request equality, which is what the warm handoff uses to recognise a resident model.
+ */
+interface NativeToolEngine {
+
+    /** Null while nobody is driving: calls then come back to the model as "not available". */
+    var toolRunner: ToolRunner?
 }

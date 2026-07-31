@@ -11,6 +11,7 @@ import com.example.aiagent.engine.core.GenerationStats
 import com.example.aiagent.engine.core.HistoryTurn
 import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.ModelSpec
+import com.example.aiagent.engine.core.NativeToolEngine
 import com.example.aiagent.engine.core.ToolCall
 import com.example.aiagenttestapp.functions.AppFunctionDeps
 import com.example.aiagenttestapp.data.ChatLoadPlan
@@ -251,6 +252,15 @@ class ChatViewModel @Inject constructor(
     @Volatile
     private var streamingReplyId: Long? = null
 
+    /**
+     * The engine this chat handed a runner to, so teardown can hand it back empty.
+     *
+     * Held rather than looked up again: the resident engine may have been swapped by another
+     * screen in between, and clearing a runner off the wrong one would leave this chat's runner
+     * live on the engine it actually bound.
+     */
+    private var boundEngine: NativeToolEngine? = null
+
     /** The persisted conversation this chat is writing to. Null until the first message creates it. */
     private var conversationId: Long? = null
 
@@ -395,7 +405,11 @@ class ChatViewModel @Inject constructor(
                 )
                 // After open(), not as part of the request: the model may well have been warmed in
                 // the background before this screen existed, and the runner belongs to this screen.
-                selected.toolRunner =
+                // Only a NativeToolEngine has anywhere to put this. The cast cannot silently
+                // miss: an engine that claims native tool support without implementing it is
+                // rejected when EngineRegistry is built.
+                boundEngine = selected as? NativeToolEngine
+                boundEngine?.toolRunner =
                     if (toolsEnabled && toolStrategy is ToolCallingStrategy.RuntimeDriven) {
                         AppFunctionRunner(appFunctions, appFunctionDeps, this@ChatViewModel)
                     } else {
@@ -901,6 +915,12 @@ class ChatViewModel @Inject constructor(
      */
     override fun onCleared() {
         super.onCleared()
+
+        // Hand the engine back without a runner. The model stays resident by design, so a runner
+        // left behind would keep this view model -- and everything it holds -- alive inside a
+        // singleton, and would still execute functions for a screen that no longer exists.
+        boundEngine?.toolRunner = null
+        boundEngine = null
 
         // The speech recogniser holds ~240 MB of native memory. Release it only if dictation here is
         // what loaded it, so leaving a chat does not tear down a recogniser the Voice Notes screen

@@ -12,6 +12,7 @@ import com.example.aiagent.engine.core.HistoryTurn
 import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.LoadRequest
 import com.example.aiagent.engine.core.ModelFormat
+import com.example.aiagent.engine.core.NativeToolEngine
 import com.example.aiagent.engine.core.OutputGuard
 import com.example.aiagent.engine.core.SamplingParams
 import com.example.aiagent.engine.core.ToolRunner
@@ -51,7 +52,7 @@ import kotlin.math.roundToLong
  *  - The runtime measures its own prefill/decode throughput and exposes it via `BenchmarkInfo`.
  *    That is more honest than timing the Flow ourselves, so we surface it directly.
  */
-class LiteRtLmEngine : InferenceEngine {
+class LiteRtLmEngine : InferenceEngine, NativeToolEngine {
 
     override val descriptor = EngineDescriptor(
         id = EngineId.LITE_RT_LM,
