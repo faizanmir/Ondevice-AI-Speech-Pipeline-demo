@@ -21,6 +21,9 @@ import com.example.aiagenttestapp.data.Source
 import com.example.aiagenttestapp.data.chat.toHistoryTurn
 import com.example.aiagenttestapp.functions.AppFunctionObserver
 import com.example.aiagenttestapp.functions.AppFunctionResult
+import com.example.aiagenttestapp.ui.chat.ChatMessages.insertingBefore
+import com.example.aiagenttestapp.ui.chat.ChatMessages.replacing
+import com.example.aiagenttestapp.ui.chat.ChatMessages.without
 import com.example.aiagenttestapp.functions.AppFunctionRunner
 import com.example.aiagenttestapp.functions.AppFunctionRegistry
 import com.example.aiagenttestapp.functions.PromptToolCalling
@@ -189,7 +192,7 @@ class ChatViewModel @Inject constructor(
 
     private var engine: InferenceEngine? = null
     private var generationJob: Job? = null
-    private var nextMessageId = 0L
+    private val messageIds = ChatMessageIds()
 
     /** Buffers dictation audio between start and stop. Guarded by [voiceLock]. */
     /** Dictation for the message box: mic, transcription and the recogniser's lifetime. */
@@ -367,7 +370,7 @@ class ChatViewModel @Inject constructor(
             restored?.conversation?.id?.let { transcript?.resume(it) }
             if (pastMessages.isNotEmpty()) {
                 // Reuse the DB ids as bubble ids (unique), and start new bubbles past them.
-                nextMessageId = pastMessages.maxOf { it.id } + 1
+                messageIds.startAfter(pastMessages.maxOf { it.id })
                 setState {
                     copy(
                         messages = pastMessages.map { m ->
@@ -541,7 +544,7 @@ class ChatViewModel @Inject constructor(
                 attachmentTruncated = false,
                 attachmentError = null,
                 messages = messages + ChatMessage(
-                    id = nextMessageId++,
+                    id = messageIds.next(),
                     isUser = true,
                     text = userText,
                     attachmentName = fileName,
@@ -570,31 +573,16 @@ class ChatViewModel @Inject constructor(
                 // the hop cap stops runaway chaining, an identical repeated call (a small model
                 // spinning on the same search) breaks early, and a navigation tool ends the turn
                 // since the user has been moved.
-                // A type check, not a flag: only a prompt-driven strategy *has* parseCall, because
-                // only it produces calls the app has to find. On a runtime-driven engine every tool
-                // has already run and `response` is the final answer, with nothing left to parse.
+                // Only a prompt-driven engine has a loop to drive: its calls arrive as text
+                // the app has to read. A runtime-driven one has already run them all.
                 val prompted = toolStrategy as? ToolCallingStrategy.PromptDriven
                 if (toolsEnabled && prompted != null) {
-                    val maxHops = settingsStore.settings.value.maxToolHops
-                    var hops = 0
-                    var lastSignature: String? = null
-                    while (hops < maxHops) {
-                        val call = prompted.parseCall(response) ?: break
-                        val signature = "${call.name}(${call.arguments})"
-                        if (signature == lastSignature) break
-                        lastSignature = signature
-
-                        val (next, navigated) = runToolCall(activeEngine, prompted, call)
-                        response = next
-                        hops++
-                        if (navigated) break
-                    }
-
-                    // Cap hit (or broke on a repeat) while the model is still emitting a tool call:
-                    // never let raw JSON stand as the answer -- force one final, tool-free reply.
-                    if (prompted.parseCall(response) != null) {
-                        response = forceFinalAnswer(activeEngine)
-                    }
+                    response = ChatToolLoop(
+                        functions = appFunctions,
+                        deps = appFunctionDeps,
+                        strategy = prompted,
+                        host = ChatToolHost(activeEngine),
+                    ).drive(response, settingsStore.settings.value.maxToolHops)
                 }
 
                 // Attach the web sources gathered this turn to the final answer, as citations.
@@ -621,7 +609,7 @@ class ChatViewModel @Inject constructor(
 
     /** Streams one model response into a fresh bubble and returns the full text. */
     private suspend fun runTurn(activeEngine: InferenceEngine, prompt: String): String {
-        val replyId = nextMessageId++
+        val replyId = messageIds.next()
         setState {
             copy(messages = messages + ChatMessage(id = replyId, isUser = false, text = ""))
         }
@@ -676,37 +664,20 @@ class ChatViewModel @Inject constructor(
      * [pendingSources] is the exception -- a plain list -- so it is guarded.
      */
     override fun onFunctionExecuted(call: ToolCall, result: AppFunctionResult) {
-        synchronized(pendingSources) {
-            result.sources.forEach { source ->
-                if (pendingSources.none { it.url == source.url }) pendingSources += source
-            }
-        }
+        collectSources(result)
 
         // The chip goes in *above* the reply being streamed, so the transcript reads in the order
         // things happened: the model called a function, then answered with what it learned. The
         // prompt protocol instead rewrites its JSON bubble into a chip, because there the call was
         // the model's visible output; here the call never appears in the text at all.
         val chip = ChatMessage(
-            id = nextMessageId++,
+            id = messageIds.next(),
             isUser = false,
             text = "",
-            functionCall = FunctionCallDisplay(
-                name = call.name,
-                summary = result.summary,
-                succeeded = !result.isError,
-            ),
+            functionCall = result.asChip(call.name),
         )
         val streaming = streamingReplyId
-        setState {
-            val at = messages.indexOfFirst { it.id == streaming }
-            copy(
-                messages = if (at >= 0) {
-                    messages.toMutableList().apply { add(at, chip) }
-                } else {
-                    messages + chip
-                },
-            )
-        }
+        setState { copy(messages = messages.insertingBefore(streaming, chip)) }
 
         result.navigation?.let { emitEffect(ChatEffect.Navigate(it)) }
     }
@@ -720,68 +691,63 @@ class ChatViewModel @Inject constructor(
      * not conversation, and leaving it on screen makes the app look broken. What replaces it is a
      * function chip -- so the user can still see exactly what the model did to their app.
      */
-    private suspend fun runToolCall(
-        activeEngine: InferenceEngine,
-        strategy: ToolCallingStrategy.PromptDriven,
-        call: ToolCall,
-    ): Pair<String, Boolean> {
-        val result = appFunctions.execute(call, appFunctionDeps)
+    /**
+     * The screen, as [ChatToolLoop] sees it.
+     *
+     * An inner class so it can reach the streaming and message-list machinery, but a named type
+     * rather than an anonymous one: it is bound to a single engine for the length of a turn, and
+     * that is worth saying in its constructor.
+     */
+    private inner class ChatToolHost(
+        private val activeEngine: InferenceEngine,
+    ) : ChatToolLoop.Host {
 
-        // Gather any web pages this call drew on, de-duplicated across the turn's tool calls.
+        override suspend fun runTurn(prompt: String): String = runTurn(activeEngine, prompt)
+
+        override fun onToolExecuted(call: ToolCall, result: AppFunctionResult) {
+            collectSources(result)
+
+            // Replace the JSON bubble with the function chip: the call was the model's visible
+            // output here, so the chip takes its place rather than being inserted beside it.
+            pendingReplyId?.let { id ->
+                updateMessage(id) {
+                    it.copy(text = "", functionCall = result.asChip(call.name))
+                }
+            }
+
+            result.navigation?.let { emitEffect(ChatEffect.Navigate(it)) }
+        }
+
+        override fun onToolLimitReached() {
+            pendingReplyId?.let { id ->
+                updateMessage(id) {
+                    it.copy(
+                        text = "",
+                        functionCall = FunctionCallDisplay(
+                            name = "tool_limit",
+                            summary = "Reached the tool-call limit for this turn",
+                            succeeded = false,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    /** Web pages a call drew on, de-duplicated across the turn. */
+    private fun collectSources(result: AppFunctionResult) {
         synchronized(pendingSources) {
             result.sources.forEach { source ->
                 if (pendingSources.none { it.url == source.url }) pendingSources += source
             }
         }
-
-        // Replace the JSON bubble with the function chip.
-        pendingReplyId?.let { id ->
-            updateMessage(id) {
-                it.copy(
-                    text = "",
-                    functionCall = FunctionCallDisplay(
-                        name = call.name,
-                        summary = result.summary,
-                        succeeded = !result.isError,
-                    ),
-                )
-            }
-        }
-
-        result.navigation?.let { navigation ->
-            emitEffect(ChatEffect.Navigate(navigation))
-        }
-
-        // Hand the result back so the model can use it. Without this the user gets a bare chip and
-        // no reply, which reads as the model having ignored them.
-        val next = runTurn(activeEngine, strategy.resultPrompt(call, result.output))
-        return next to (result.navigation != null)
     }
 
-    /**
-     * Ends a turn that ran out of tool hops while the model was still calling tools. The dangling
-     * tool-call bubble becomes a note (never raw JSON), then the model answers with what it has and
-     * no more tools offered.
-     */
-    private suspend fun forceFinalAnswer(activeEngine: InferenceEngine): String {
-        pendingReplyId?.let { id ->
-            updateMessage(id) {
-                it.copy(
-                    text = "",
-                    functionCall = FunctionCallDisplay(
-                        name = "tool_limit",
-                        summary = "Reached the tool-call limit for this turn",
-                        succeeded = false,
-                    ),
-                )
-            }
-        }
-        return runTurn(
-            activeEngine,
-            "You have reached the maximum number of tool calls for this message. Answer the user " +
-                "now using the information you already have. Do not call any more tools.",
-        )
-    }
+    private fun AppFunctionResult.asChip(name: String) = FunctionCallDisplay(
+        name = name,
+        summary = summary,
+        succeeded = !isError,
+    )
 
     private fun stopGenerating() {
         engine?.cancel()
@@ -851,16 +817,14 @@ class ChatViewModel @Inject constructor(
     private fun deleteMessage(id: Long) {
         setState {
             copy(
-                messages = messages.filterNot { it.id == id },
+                messages = messages.without(id),
                 replyingTo = replyingTo?.takeUnless { it.id == id },
             )
         }
     }
 
     private fun updateMessage(id: Long, transform: (ChatMessage) -> ChatMessage) {
-        setState {
-            copy(messages = messages.map { if (it.id == id) transform(it) else it })
-        }
+        setState { copy(messages = messages.replacing(id, transform)) }
     }
 
     /**
