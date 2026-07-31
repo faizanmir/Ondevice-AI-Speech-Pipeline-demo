@@ -87,6 +87,14 @@ data class ChatUiState(
     val loadState: ModelLoadState = ModelLoadState.Idle,
     val messages: List<ChatMessage> = emptyList(),
     val isGenerating: Boolean = false,
+    /**
+     * The conversation is being rolled into its summary before this turn can run.
+     *
+     * Worth its own state rather than folding into [isGenerating]: it happens *before* the user's
+     * message is answered and takes a whole extra turn, so a reply that is simply slow and one that
+     * is waiting on a compaction look identical without it.
+     */
+    val isCompacting: Boolean = false,
     val contextUsed: Int = 0,
     val contextTotal: Int = 0,
     /** Whether this model can drive the app. Shown in the empty state so it is never a mystery. */
@@ -127,8 +135,8 @@ data class ChatUiState(
     val showThinking: Boolean = true,
 ) : UiState {
     val canSend: Boolean
-        get() = loadState is ModelLoadState.Ready && !isGenerating && !isDictating &&
-            !isTranscribing && !isExtractingFile
+        get() = loadState is ModelLoadState.Ready && !isGenerating && !isCompacting &&
+            !isDictating && !isTranscribing && !isExtractingFile
 
     val isSpeechReady: Boolean get() = speechModelState is SpeechModelState.Ready
 
@@ -460,7 +468,13 @@ class ChatViewModel @Inject constructor(
                 // Before the turn, not after: a conversation that has outgrown the window does not
                 // fail, it runs out of room part-way through the reply. Compaction summarises the
                 // older turns and reloads on top of them, so what was decided earlier survives.
-                if (session.compactIfNeeded(currentState.contextTotal)) {
+                setState { copy(isCompacting = true) }
+                val compacted = try {
+                    session.compactIfNeeded(currentState.contextTotal)
+                } finally {
+                    setState { copy(isCompacting = false) }
+                }
+                if (compacted) {
                     setState { copy(contextUsed = activeEngine.contextTokensUsed()) }
                 }
 

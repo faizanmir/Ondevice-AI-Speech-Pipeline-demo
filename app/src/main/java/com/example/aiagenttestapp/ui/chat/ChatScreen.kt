@@ -287,6 +287,15 @@ fun ChatScreen(
                                     )
                                 }
                             }
+
+                            // At the foot of the transcript, where the user is already looking
+                            // while they wait. Not a dialog: nothing is blocked and nothing needs
+                            // dismissing -- the turn carries on by itself once this is done.
+                            if (state.isCompacting) {
+                                item(key = "compacting") {
+                                    Box(Modifier.readableWidth()) { CompactingNotice() }
+                                }
+                            }
                         }
                     }
 
@@ -1260,3 +1269,32 @@ private const val SCROLL_TO_END_OVERSHOOT = 1_000_000f
 
 /** Warn only in the last 20% of the window, where the next turn could realistically overflow. */
 private const val CONTEXT_WARN_THRESHOLD = 0.8f
+
+/**
+ * Shown while a long conversation is folded into its summary, before the turn that triggered it.
+ *
+ * Says what is happening *and* that nothing was lost, because the visible effect is alarming
+ * otherwise: the model pauses for a whole extra turn before answering, and a user who has just
+ * watched a long chat go quiet will reasonably assume it has broken or forgotten them.
+ */
+@Composable
+private fun CompactingNotice(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(14.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = "Summarising this conversation so it keeps fitting -- nothing is lost.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
