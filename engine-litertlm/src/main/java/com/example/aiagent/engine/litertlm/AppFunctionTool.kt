@@ -1,9 +1,9 @@
 package com.example.aiagent.engine.litertlm
 
 import android.util.Log
+import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.ToolCall
 import com.example.aiagent.engine.core.ToolDefinition
-import com.example.aiagent.engine.core.ToolRunner
 import com.google.ai.edge.litertlm.OpenApiTool
 
 /**
@@ -15,13 +15,13 @@ import com.google.ai.edge.litertlm.OpenApiTool
  * of functions is data the app assembles per load. A schema built at run time is the only shape
  * that fits, and it is what `OpenApiTool` exists for.
  *
- * The runner is looked up per call rather than captured, because the tools are baked into the
- * conversation when the model loads while the thing that runs them belongs to whichever screen is
- * driving -- see [com.example.aiagent.engine.core.InferenceEngine.toolRunner].
+ * The engine is held rather than its runner, so the runner is read per call: the tools are baked
+ * into the conversation when the model loads, while the thing that runs them belongs to whichever
+ * screen is driving and may not exist yet -- see [InferenceEngine.toolRunner].
  */
 internal class AppFunctionTool(
     private val definition: ToolDefinition,
-    private val runner: () -> ToolRunner?,
+    private val engine: InferenceEngine,
 ) : OpenApiTool {
 
     override fun getToolDescriptionJsonString(): String =
@@ -37,7 +37,7 @@ internal class AppFunctionTool(
      * from.
      */
     override fun execute(paramsJsonString: String): String = try {
-        runner()
+        engine.toolRunner
             ?.run(ToolCall(definition.name, ToolSchema.arguments(paramsJsonString)))
             ?: ToolSchema.errorJson("This function is not available right now.")
     } catch (t: Throwable) {

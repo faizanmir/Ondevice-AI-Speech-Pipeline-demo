@@ -294,7 +294,7 @@ class LiteRtLmEngine : InferenceEngine {
                 // a half-finished turn, and the chat layer does not need a hop loop the way the
                 // prompt protocol does.
                 tools = request.tools.map { definition ->
-                    tool(AppFunctionTool(definition) { toolRunner })
+                    tool(AppFunctionTool(definition, this))
                 },
                 // Seed restored history as proper role-tagged turns. LiteRT-LM prefills these into
                 // the new conversation at creation, so a reopened chat continues in context rather

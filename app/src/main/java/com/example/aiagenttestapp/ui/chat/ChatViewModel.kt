@@ -12,7 +12,6 @@ import com.example.aiagent.engine.core.HistoryTurn
 import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagent.engine.core.ToolCall
-import com.example.aiagent.engine.core.ToolRunner
 import com.example.aiagenttestapp.functions.AppFunctionDeps
 import com.example.aiagenttestapp.data.ChatLoadPlan
 import com.example.aiagenttestapp.data.ChatLoadPlanner
@@ -21,6 +20,9 @@ import com.example.aiagenttestapp.data.Source
 import com.example.aiagenttestapp.data.chat.Conversation
 import com.example.aiagenttestapp.data.chat.StoredMessage
 import com.example.aiagenttestapp.data.chat.toHistoryTurn
+import com.example.aiagenttestapp.functions.AppFunctionObserver
+import com.example.aiagenttestapp.functions.AppFunctionResult
+import com.example.aiagenttestapp.functions.AppFunctionRunner
 import com.example.aiagenttestapp.functions.AppFunctions
 import com.example.aiagenttestapp.functions.PromptToolCalling
 import com.example.aiagenttestapp.functions.ToolCallingStrategy
@@ -34,7 +36,6 @@ import com.example.aiagenttestapp.ui.mvi.UiState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlin.time.Duration.Companion.milliseconds
 import com.example.aiagenttestapp.data.ModelResidency
 import com.example.aiagenttestapp.data.SettingsStore
@@ -180,7 +181,10 @@ class ChatViewModel @Inject constructor(
     private val speechRecognizer: SpeechRecognizer,
 ) : MviViewModel<ChatUiState, ChatIntent, ChatEffect>(
     ChatUiState(speechModelSizeBytes = speechModels.totalBytes),
-) {
+),
+    // Implemented rather than passed as a lambda: this is a real collaborator of
+    // AppFunctionRunner, called on the runtime's thread, and worth being findable as one.
+    AppFunctionObserver {
 
     private var engine: InferenceEngine? = null
     private var generationJob: Job? = null
@@ -392,7 +396,7 @@ class ChatViewModel @Inject constructor(
                 // the background before this screen existed, and the runner belongs to this screen.
                 selected.toolRunner =
                     if (toolsEnabled && toolStrategy is ToolCallingStrategy.RuntimeDriven) {
-                        nativeToolRunner()
+                        AppFunctionRunner(appFunctionDeps, this@ChatViewModel)
                     } else {
                         null
                     }
@@ -646,21 +650,13 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * Runs app functions for an engine that calls tools itself.
+     * Shows what a natively-executed function did. Called by [AppFunctionRunner].
      *
-     * Blocking is not an oversight here, it is the contract. LiteRT-LM invokes the tool from inside
-     * its decode loop and waits for the string, so there is nothing to suspend into --
-     * [ToolRunner] is synchronous for that reason. What matters is *which* thread blocks: this runs
-     * on the runtime's own worker, never the main thread, so the UI keeps drawing while a function
-     * does its work.
-     *
-     * Everything it touches is safe from that thread: `setState` is an atomic flow update and
-     * effects go through a buffered channel. [pendingSources] is the exception -- a plain list --
-     * so it is guarded.
+     * On the runtime's decode thread, not the main one, so everything touched here has to be safe
+     * from there: `setState` is an atomic flow update and effects go through a buffered channel.
+     * [pendingSources] is the exception -- a plain list -- so it is guarded.
      */
-    private fun nativeToolRunner(): ToolRunner = ToolRunner { call ->
-        val result = runBlocking { AppFunctions.execute(call, appFunctionDeps) }
-
+    override fun onFunctionExecuted(call: ToolCall, result: AppFunctionResult) {
         synchronized(pendingSources) {
             result.sources.forEach { source ->
                 if (pendingSources.none { it.url == source.url }) pendingSources += source
@@ -694,8 +690,6 @@ class ChatViewModel @Inject constructor(
         }
 
         result.navigation?.let { emitEffect(ChatEffect.Navigate(it)) }
-
-        result.output
     }
 
     /**
