@@ -23,7 +23,7 @@ import com.example.aiagenttestapp.data.chat.toHistoryTurn
 import com.example.aiagenttestapp.functions.AppFunctionObserver
 import com.example.aiagenttestapp.functions.AppFunctionResult
 import com.example.aiagenttestapp.functions.AppFunctionRunner
-import com.example.aiagenttestapp.functions.AppFunctions
+import com.example.aiagenttestapp.functions.AppFunctionRegistry
 import com.example.aiagenttestapp.functions.PromptToolCalling
 import com.example.aiagenttestapp.functions.ToolCallingStrategy
 import com.example.aiagenttestapp.functions.AppNavigation
@@ -172,6 +172,7 @@ sealed interface ChatEffect : UiEffect {
 class ChatViewModel @Inject constructor(
     private val audioRecorder: AudioRecorder,
     private val appFunctionDeps: AppFunctionDeps,
+    private val appFunctions: AppFunctionRegistry,
     private val chatDao: ChatDao,
     private val chatLoadPlanner: ChatLoadPlanner,
     private val fileTextExtractor: FileTextExtractor,
@@ -396,7 +397,7 @@ class ChatViewModel @Inject constructor(
                 // the background before this screen existed, and the runner belongs to this screen.
                 selected.toolRunner =
                     if (toolsEnabled && toolStrategy is ToolCallingStrategy.RuntimeDriven) {
-                        AppFunctionRunner(appFunctionDeps, this@ChatViewModel)
+                        AppFunctionRunner(appFunctions, appFunctionDeps, this@ChatViewModel)
                     } else {
                         null
                     }
@@ -706,7 +707,7 @@ class ChatViewModel @Inject constructor(
         strategy: ToolCallingStrategy.PromptDriven,
         call: ToolCall,
     ): Pair<String, Boolean> {
-        val result = AppFunctions.execute(call, appFunctionDeps)
+        val result = appFunctions.execute(call, appFunctionDeps)
 
         // Gather any web pages this call drew on, de-duplicated across the turn's tool calls.
         synchronized(pendingSources) {

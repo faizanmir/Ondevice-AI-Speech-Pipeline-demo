@@ -17,16 +17,16 @@ import com.example.aiagent.engine.core.ToolCall
  *
  * These two things point in opposite directions and neither can do the other's job.
  *
- * - [AppFunctions] + `ToolCallingProtocol` is how *our own* on-device model drives the app. It has
+ * - [AppFunctionRegistry] + `ToolCallingProtocol` is how *our own* on-device model drives the app. It has
  *   to be a prompt protocol, because the model runs inside this process and there is no platform
- *   API for an app to call its own AppFunctions.
+ *   API for an app to call its own app functions.
  * - This class is how the *system's* agent drives the app. It cannot be reused for the in-app model,
  *   because `EXECUTE_APP_FUNCTIONS` is `protectionLevel="internal|role"` -- the platform grants it
  *   only to preinstalled apps holding the `ASSISTANT` role. A normal app simply cannot be a caller,
  *   no matter what it declares in its manifest.
  *
  * What they *do* share is the logic. Every method here is a thin adapter onto the same
- * [AppFunctions] registry, so a capability is defined once and exposed twice. Adding a function to
+ * [AppFunctionRegistry], so a capability is defined once and exposed twice. Adding a function to
  * that registry and forgetting to export it here costs you the export, not correctness.
  *
  * ## Notes on the API
@@ -114,7 +114,10 @@ class AiAgentAppFunctions {
         name: String,
         arguments: Map<String, String> = emptyMap(),
     ): FunctionOutcome {
-        val result = AppFunctions.execute(ToolCall(name, arguments), deps(appFunctionContext.context))
+        val result = AppFunctionRegistry.Default.execute(
+            ToolCall(name, arguments),
+            deps(appFunctionContext.context),
+        )
 
         if (result.isError) {
             throw AppFunctionInvalidArgumentException(result.output)

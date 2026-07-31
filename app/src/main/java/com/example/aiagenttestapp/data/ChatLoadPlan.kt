@@ -3,7 +3,7 @@ package com.example.aiagenttestapp.data
 import com.example.aiagent.engine.core.LoadRequest
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagent.engine.core.ToolDefinition
-import com.example.aiagenttestapp.functions.AppFunctions
+import com.example.aiagenttestapp.functions.AppFunctionRegistry
 import com.example.aiagenttestapp.functions.ToolCallingStrategy
 import com.example.aiagenttestapp.prompts.ChatPrompts
 import com.example.aiagenttestapp.prompts.SystemPromptBuilder
@@ -73,6 +73,7 @@ sealed interface ChatLoadPlan {
 class ChatLoadPlanner @Inject constructor(
     private val modelLoadPlanner: ModelLoadPlanner,
     private val settingsStore: SettingsStore,
+    private val appFunctions: AppFunctionRegistry,
 ) {
 
     fun plan(modelId: String): ChatLoadPlan {
@@ -107,7 +108,7 @@ class ChatLoadPlanner @Inject constructor(
         // Web search is a tool like any other, but opt-in: offered only when a Tavily key is set.
         val webAccessEnabled = toolsEnabled && !settings.tavilyApiKey.isNullOrBlank()
         val definitions =
-            if (toolsEnabled) AppFunctions.definitionsFor(webAccessEnabled) else emptyList()
+            if (toolsEnabled) appFunctions.definitions(webAccessEnabled) else emptyList()
 
         // The tool section is chat's alone; the reasoning directive is app-wide and applied by the
         // builder. Both are fixed for the life of the loaded model, since both live in the system

@@ -15,6 +15,7 @@ import com.example.aiagenttestapp.data.NetworkMonitor
 import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.WebSearchClient
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
+import com.example.aiagenttestapp.functions.AppFunctionRegistry
 import com.example.aiagenttestapp.data.notes.SpeakerDao
 import com.example.aiagenttestapp.data.speakers.SpeakerRepository
 import com.example.aiagenttestapp.stt.AudioRecorder
@@ -62,6 +63,14 @@ object AppModule {
             LlamaCppEngine(),
         ),
     )
+
+    /**
+     * The functions the model may call. Injected rather than reached for statically, so a screen or
+     * a test can be given a different set without the app's own list being in the way.
+     */
+    @Provides
+    @Singleton
+    fun appFunctionRegistry(): AppFunctionRegistry = AppFunctionRegistry.Default
 
     /** Read once: RAM and ABI do not change while the process is alive. */
     @Provides

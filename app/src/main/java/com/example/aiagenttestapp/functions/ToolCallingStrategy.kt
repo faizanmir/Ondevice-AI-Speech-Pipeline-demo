@@ -6,7 +6,7 @@ import com.example.aiagent.engine.core.ToolDefinition
 import com.example.aiagent.engine.llamacpp.ToolCallingProtocol
 
 /**
- * How a model is offered [AppFunctions], and how the calls it makes come back.
+ * How a model is offered the [AppFunctionRegistry], and how the calls it makes come back.
  *
  * There is one catalogue of functions and two ways to reach it, because the runtimes genuinely
  * differ: LiteRT-LM has a tool API, so the tools are declared to it as schemas and it calls them

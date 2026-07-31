@@ -16,7 +16,7 @@ interface AppFunctionObserver {
 }
 
 /**
- * Runs an [AppFunctions] entry for a runtime that calls tools itself.
+ * Runs an [AppFunctionRegistry] entry for a runtime that calls tools itself.
  *
  * This is the [ToolRunner] a [NativeToolCalling] engine is given after it loads. LiteRT-LM invokes
  * it from inside its decode loop, waits for the string, and carries on generating from it.
@@ -36,15 +36,16 @@ interface AppFunctionObserver {
  * job: turn a tool call into the string the model gets back.
  */
 class AppFunctionRunner(
+    private val registry: AppFunctionRegistry,
     private val deps: AppFunctionDeps,
     private val observer: AppFunctionObserver,
 ) : ToolRunner {
 
     override fun run(call: ToolCall): String {
-        // AppFunctions.execute is suspending, and there is nothing to suspend into -- see above.
-        val result = runBlocking { AppFunctions.execute(call, deps) }
+        // Executing is suspending, and there is nothing to suspend into -- see above.
+        val result = runBlocking { registry.execute(call, deps) }
         observer.onFunctionExecuted(call, result)
-        // Failures are results too: AppFunctions turns an unknown function or a failed one into an
+        // Failures are results too: the registry turns an unknown function or a failed one into an
         // output the model can read, so it recovers instead of the turn dying.
         return result.output
     }
