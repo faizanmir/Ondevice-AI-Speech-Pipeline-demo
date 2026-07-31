@@ -24,6 +24,7 @@ import com.example.aiagenttestapp.data.chat.StoredMessage
 import com.example.aiagenttestapp.data.chat.toHistoryTurn
 import com.example.aiagenttestapp.functions.AppFunctions
 import com.example.aiagenttestapp.functions.AppNavigation
+import com.example.aiagenttestapp.prompts.ChatPrompts
 import com.example.aiagenttestapp.stt.SpeechModelState
 import com.example.aiagenttestapp.ui.mvi.MviViewModel
 import com.example.aiagenttestapp.ui.mvi.UiEffect
@@ -954,7 +955,7 @@ class ChatViewModel @Inject constructor(
     /** Asks the loaded model to summarise the conversation it already holds, and stores the result. */
     private suspend fun rollUpSummary(engine: InferenceEngine, convId: Long) {
         val builder = StringBuilder()
-        engine.generate(SUMMARISE_PROMPT).collect { event ->
+        engine.generate(ChatPrompts.SUMMARISE_PROMPT).collect { event ->
             if (event is GenerationEvent.Token) builder.append(event.text)
         }
         val summary = builder.toString().trim()
@@ -986,11 +987,5 @@ class ChatViewModel @Inject constructor(
 
         /** Attachment budget before a model is loaded and [ChatUiState.contextTotal] is known. */
         const val DEFAULT_CONTEXT_TOKENS = 4096
-
-        const val SUMMARISE_PROMPT =
-            "Summarise our conversation so far in 3 to 5 sentences, capturing the key facts, " +
-                "questions, decisions and anything I asked you to remember. Write it as concise " +
-                "notes to yourself so you can continue the conversation later. Use only what was " +
-                "actually discussed."
     }
 }

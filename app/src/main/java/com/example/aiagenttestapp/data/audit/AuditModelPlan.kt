@@ -5,6 +5,7 @@ import com.example.aiagent.engine.core.LoadRequest
 import com.example.aiagenttestapp.data.ModelLoadPlan
 import com.example.aiagenttestapp.data.ModelLoadPlanner
 import com.example.aiagenttestapp.data.ModelResidency
+import com.example.aiagenttestapp.prompts.AuditPrompts
 import javax.inject.Inject
 import javax.inject.Singleton
 

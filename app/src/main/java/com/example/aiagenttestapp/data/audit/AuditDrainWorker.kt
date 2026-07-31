@@ -26,6 +26,7 @@ import com.example.aiagent.engine.core.InferenceEngine
 import androidx.hilt.work.HiltWorker
 import com.example.aiagenttestapp.MainActivity
 import com.example.aiagenttestapp.data.ModelResidency
+import com.example.aiagenttestapp.prompts.AuditPrompts
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import com.example.aiagenttestapp.util.Reasoning

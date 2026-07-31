@@ -5,7 +5,8 @@ import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagent.engine.core.ToolCallingProtocol
 import com.example.aiagent.engine.core.ToolDefinition
 import com.example.aiagenttestapp.functions.AppFunctions
-import com.example.aiagenttestapp.util.Reasoning
+import com.example.aiagenttestapp.prompts.ChatPrompts
+import com.example.aiagenttestapp.prompts.ReasoningPrompts
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -18,25 +19,6 @@ import javax.inject.Singleton
  * a tool section it can never use, so the shared type was quietly describing a chat turn rather than
  * a model load.
  */
-/**
- * The chat system prompt. Fixed in code, not a setting.
- *
- * It was an editable text field, which made the one piece of text present on every single turn the
- * one piece nobody could budget for: [ContextWindow][com.example.aiagent.engine.core.ContextWindow]
- * sizes history against it, so a pasted essay silently cost the user their conversation memory, and
- * an emptied box left small models with no framing at all. Neither failure was visible in the UI.
- *
- * Written tight on purpose -- every token here is paid on every turn of every chat, and is charged
- * twice over, once in prefill and again as history the window can no longer hold. It says only what
- * the model cannot work out for itself: that it is offline on a phone (so it does not promise to
- * look things up or send anything), and what register to answer in. Anything about *tools* belongs
- * in [ToolCallingProtocol.systemPromptSection], which is only present when tools actually are.
- */
-object ChatPrompts {
-    const val SYSTEM_PROMPT =
-        "You are a helpful assistant running offline on the user's phone. " +
-            "Be concise and accurate."
-}
 
 sealed interface ChatLoadPlan {
 
@@ -133,7 +115,7 @@ class ChatLoadPlanner @Inject constructor(
             // model, like the tool section, since both live in the system prompt.
             if (!settings.thinkingEnabled) {
                 append("\n\n")
-                append(Reasoning.NO_THINK_DIRECTIVE)
+                append(ReasoningPrompts.NO_THINK_DIRECTIVE)
             }
             if (toolsEnabled && !nativeTools) {
                 ToolCallingProtocol.systemPromptSection(definitions)?.let {

@@ -1,6 +1,13 @@
-package com.example.aiagenttestapp.data.audit
+package com.example.aiagenttestapp.prompts
 
 import com.example.aiagent.engine.core.ContextWindow
+import com.example.aiagenttestapp.data.audit.AuditAnalysisParser
+import com.example.aiagenttestapp.data.audit.AuditChunker
+import com.example.aiagenttestapp.data.audit.AuditFinding
+import com.example.aiagenttestapp.data.audit.AuditMode
+import com.example.aiagenttestapp.data.audit.AuditOutputFormat
+import com.example.aiagenttestapp.data.audit.AuditPromptProfile
+import com.example.aiagenttestapp.data.audit.AuditSeverity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

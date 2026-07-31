@@ -6,20 +6,15 @@ package com.example.aiagenttestapp.util
  * Detection is by the tags alone, so a non-reasoning model's output passes through untouched. The
  * chat shows the reasoning in a collapsible section ([split]); the note summary hides it outright
  * ([stripThinking]) -- a summary is meant to be the distilled result, not the model's scratch work.
+ *
+ * The other half of the feature -- asking a model *not* to think -- is
+ * [ReasoningPrompts][com.example.aiagenttestapp.prompts.ReasoningPrompts], with the rest of the
+ * prompt text.
  */
 object Reasoning {
 
     private const val OPEN = "<think>"
     private const val CLOSE = "</think>"
-
-    /**
-     * System-prompt directive that asks a reasoning model to skip its `<think>` block, for when the
-     * user has turned thinking off. Pairs Qwen3's `/no_think` soft switch with a plain instruction
-     * for families that do not recognise it. Best effort: a model with no thinking mode just answers
-     * as usual, and an empty `<think></think>` some still emit is hidden by [stripThinking] anyway.
-     */
-    const val NO_THINK_DIRECTIVE =
-        "/no_think\nAnswer directly and concisely. Do not include a <think> reasoning section."
 
     /** The reasoning block (null when absent) and the answer that follows it. */
     data class Split(val thinking: String?, val answer: String)

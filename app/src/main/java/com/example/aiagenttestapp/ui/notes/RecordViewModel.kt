@@ -16,7 +16,6 @@ import com.example.aiagenttestapp.data.notes.Note
 import com.example.aiagenttestapp.data.notes.NoteAnalysisParser
 import com.example.aiagenttestapp.data.notes.NoteFinding
 import com.example.aiagenttestapp.data.notes.NoteFindingDao
-import com.example.aiagenttestapp.data.notes.NotePrompts
 import com.example.aiagenttestapp.data.notes.NoteStatus
 import com.example.aiagenttestapp.data.notes.NoteTranscribeWorker
 import com.example.aiagenttestapp.data.notes.ParsedFinding
@@ -34,6 +33,8 @@ import com.example.aiagenttestapp.functions.MarkerKind
 import com.example.aiagenttestapp.functions.SpokenKeywords
 import com.example.aiagenttestapp.functions.VoiceCommandAction
 import com.example.aiagenttestapp.functions.VoiceCommands
+import com.example.aiagenttestapp.prompts.NotePrompts
+import com.example.aiagenttestapp.prompts.ReasoningPrompts
 import com.example.aiagenttestapp.stt.AudioRecorder
 import com.example.aiagenttestapp.stt.KeywordDetector
 import com.example.aiagenttestapp.stt.KeywordModelPaths
@@ -899,7 +900,7 @@ class RecordViewModel @Inject constructor(
                     // it only costs time here, since the <think> block is hidden from the note anyway.
                     if (!settings.thinkingEnabled) {
                         append("\n\n")
-                        append(Reasoning.NO_THINK_DIRECTIVE)
+                        append(ReasoningPrompts.NO_THINK_DIRECTIVE)
                     }
                 },
                 cacheDir = cacheDirPath,
