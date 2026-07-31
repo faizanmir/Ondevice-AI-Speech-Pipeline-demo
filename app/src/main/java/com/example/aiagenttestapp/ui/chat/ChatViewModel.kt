@@ -456,6 +456,14 @@ class ChatViewModel @Inject constructor(
                 delay(SEND_SETTLE_MS.milliseconds)
 
                 pendingSources.clear()
+
+                // Before the turn, not after: a conversation that has outgrown the window does not
+                // fail, it runs out of room part-way through the reply. Compaction summarises the
+                // older turns and reloads on top of them, so what was decided earlier survives.
+                if (session.compactIfNeeded(currentState.contextTotal)) {
+                    setState { copy(contextUsed = activeEngine.contextTokensUsed()) }
+                }
+
                 var response = runTurn(activeEngine, modelPrompt)
 
                 // Let the model chain a few tool calls per turn -- search, read a result, search

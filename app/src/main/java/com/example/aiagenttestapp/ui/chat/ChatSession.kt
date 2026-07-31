@@ -77,6 +77,9 @@ class ChatSession(
     private var boundEngine: NativeToolEngine? = null
     private var holdsResidency = false
 
+    /** Kept so the conversation can be reloaded mid-chat when it outgrows the window. */
+    private var loadedPlan: ChatLoadPlan.Ready? = null
+
     /**
      * Resolves [modelId], restores [resumeConversationId] if given, and loads.
      *
@@ -110,7 +113,42 @@ class ChatSession(
             holdsResidency = true
         }
 
+        loadedPlan = plan
         scope.launch { load(plan, resumeConversationId) }
+    }
+
+    /**
+     * Rolls the conversation up and reloads on it when it has outgrown the model's window.
+     *
+     * Called before a turn, because a conversation that no longer fits does not fail loudly -- it
+     * runs out of room mid-reply. llama.cpp simply stops emitting tokens once `n_past` reaches
+     * `n_ctx`, which reads as the model having finished, and LiteRT-LM raises a generation error
+     * from somewhere the user cannot connect to what they typed.
+     *
+     * Compaction is a summary, not a truncation: the older turns become the rolling summary that a
+     * resumed chat already uses, and the recent ones are refitted beneath it. So the model keeps
+     * what was decided fifty turns ago instead of losing it -- which dropping the oldest messages
+     * would do silently.
+     *
+     * The threshold is higher than the on-close one. Closing is free, so it summarises early;
+     * compacting mid-chat costs the user a wait before their message is answered, so it holds off
+     * until the window really is nearly gone.
+     *
+     * Returns true when it compacted, so the screen can say why the turn is slow.
+     */
+    suspend fun compactIfNeeded(contextTotal: Int): Boolean {
+        val plan = loadedPlan ?: return false
+        val active = engine ?: return false
+        val store = transcript ?: return false
+        if (contextTotal <= 0) return false
+        if (active.contextTokensUsed() < contextTotal * COMPACT_AT) return false
+
+        // Summarise on the model that still holds the conversation, then reload onto the summary.
+        // Under the lock, so no other screen resets the model between the two halves.
+        residency.runExclusive { runCatching { store.rollUpSummary(active) } }
+        val conversationId = store.conversationId ?: return false
+        load(plan, conversationId)
+        return true
     }
 
     private suspend fun load(plan: ChatLoadPlan.Ready, resumeConversationId: Long?) {
@@ -169,6 +207,15 @@ class ChatSession(
         } else {
             null
         }
+    }
+
+    private companion object {
+        /**
+         * Context fraction past which a live conversation is compacted. Deliberately close to full:
+         * every compaction costs a summary turn plus a reload, so it is worth paying only when the
+         * alternative is a reply that stops mid-sentence.
+         */
+        const val COMPACT_AT = 0.85f
     }
 
     /** Forgets the conversation without touching the loaded model. */

@@ -220,6 +220,52 @@ class ChatSessionTest {
         assertEquals(listOf("attach", "open", "detach"), residency.events)
     }
 
+    // ---- compaction ---------------------------------------------------------------------------
+
+    @Test
+    fun `a conversation well inside the window is not compacted`() = runTest {
+        val engine = FakeEngine(contextUsed = 400)
+        val residency = FakeResidency(engine)
+        val session = session(readyPlan(engine), residency, RecordingListener(), this,
+            store = FakeStore(conversation()))
+        session.open("m", 7L)
+        advanceUntilIdle()
+        residency.events.clear()
+
+        assertEquals(false, session.compactIfNeeded(contextTotal = 1000))
+
+        // Compacting costs a summary turn and a reload; at 40% there is nothing to buy with it.
+        assertTrue(residency.events.isEmpty())
+    }
+
+    @Test
+    fun `a conversation near the end of the window is summarised and reloaded`() = runTest {
+        val engine = FakeEngine(contextUsed = 900)
+        val residency = FakeResidency(engine)
+        val store = FakeStore(conversation())
+        val session = session(readyPlan(engine), residency, RecordingListener(), this, store = store)
+        session.open("m", 7L)
+        advanceUntilIdle()
+        residency.events.clear()
+
+        assertEquals(true, session.compactIfNeeded(contextTotal = 1000))
+        advanceUntilIdle()
+
+        // The summary is written first and the model reloaded onto it -- older turns survive as
+        // the summary rather than being dropped.
+        assertEquals(listOf("runExclusive", "open"), residency.events)
+        assertEquals(listOf(7L to "a summary"), store.summaries)
+    }
+
+    @Test
+    fun `compaction is skipped before a model is loaded`() = runTest {
+        val engine = FakeEngine(contextUsed = 900)
+        val session = session(readyPlan(engine), FakeResidency(engine), RecordingListener(), this)
+
+        // No open() yet: nothing to summarise, and no plan to reload.
+        assertEquals(false, session.compactIfNeeded(contextTotal = 1000))
+    }
+
     // ---- fixtures -----------------------------------------------------------------------------
 
     private fun session(
