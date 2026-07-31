@@ -70,6 +70,37 @@ class LiteRtLmEngine : InferenceEngine {
     private var conversationConfig: ConversationConfig = ConversationConfig()
 
     /**
+     * What the resident [Engine] was built from, or null when nothing is loaded.
+     *
+     * Only the fields that go into `EngineConfig`. Everything else in a [LoadRequest] -- the system
+     * prompt, restored history, tools, sampling -- belongs to the conversation, and changing it does
+     * not justify reading the weights again.
+     */
+    private var residentKey: EngineKey? = null
+
+    /** The part of a [LoadRequest] that decides whether the loaded model can be kept. */
+    private data class EngineKey(
+        val modelPath: String,
+        val accelerator: Accelerator,
+        val contextTokens: Int,
+        val cacheDir: String?,
+        /** Only the NPU backend reads it, and it never varies in a process -- keyed on anyway, so
+         *  the key is provably every input to EngineConfig rather than nearly every one. */
+        val nativeLibraryDir: String?,
+    ) {
+        constructor(request: LoadRequest, accelerator: Accelerator) : this(
+            modelPath = request.modelPath,
+            // The accelerator actually used, not the one asked for: a request for the GPU that fell
+            // back to the CPU is satisfied by the resident CPU engine, and re-running the ladder
+            // would only fall back again.
+            accelerator = accelerator,
+            contextTokens = request.contextTokens,
+            cacheDir = request.cacheDir,
+            nativeLibraryDir = request.nativeLibraryDir,
+        )
+    }
+
+    /**
      * Read by the tool adapters on every call, so a model loaded before anyone was driving it can
      * still run tools once a screen adopts it. Volatile because the runtime calls in from its own
      * decode thread, not the one that set this.
@@ -117,6 +148,8 @@ class LiteRtLmEngine : InferenceEngine {
     @OptIn(ExperimentalApi::class)
     override suspend fun load(request: LoadRequest) = withContext(Dispatchers.IO) {
         lifecycleLock.withLock {
+            if (reuseResidentEngine(request)) return@withLock
+
             unloadLocked()
 
             ExperimentalFlags.enableSpeculativeDecoding = speculativeDecodingUsable
@@ -131,6 +164,45 @@ class LiteRtLmEngine : InferenceEngine {
                 ExperimentalFlags.enableSpeculativeDecoding = false
                 loadOnBestAccelerator(request)
             }
+        }
+    }
+
+    /**
+     * Rebuilds just the conversation when the resident engine already holds this exact model.
+     *
+     * The whole point of keeping a model resident is undone if every chat pays `Engine.initialize()`
+     * again, and most of what a chat changes is not engine-level at all: opening a second chat on
+     * the same model changes nothing but the conversation, and resuming one changes the system
+     * prompt and seeds some history. Both used to cost a full multi-second reload of weights that
+     * were already in memory.
+     *
+     * Returns false when the request needs a different engine -- another model, another accelerator,
+     * a different context size -- leaving the caller to load properly.
+     *
+     * Caller must hold [lifecycleLock].
+     */
+    private fun reuseResidentEngine(request: LoadRequest): Boolean {
+        val activeEngine = engine ?: return false
+        val accelerator = activeAccelerator ?: return false
+        if (residentKey != EngineKey(request, accelerator)) return false
+
+        return try {
+            maxOutputTokens = request.sampling.maxOutputTokens
+            stopSequences = request.sampling.stopSequences
+
+            runCatching { conversation?.close() }
+                .onFailure { Log.w(TAG, "closing conversation failed", it) }
+            conversationConfig = conversationConfigFor(accelerator, request)
+            conversation = activeEngine.createConversation(conversationConfig)
+
+            Log.i(TAG, "reused the resident engine; rebuilt the conversation only")
+            true
+        } catch (t: Throwable) {
+            // The engine is still initialised but now has no usable conversation, so it cannot be
+            // left as-is. Drop it and report failure; the caller loads from scratch.
+            Log.w(TAG, "could not rebuild the conversation; falling back to a full load", t)
+            unloadLocked()
+            false
         }
     }
 
@@ -193,7 +265,28 @@ class LiteRtLmEngine : InferenceEngine {
         try {
             newEngine.initialize()
 
-            conversationConfig = ConversationConfig(
+            conversationConfig = conversationConfigFor(accelerator, request)
+            conversation = newEngine.createConversation(conversationConfig)
+            engine = newEngine
+            residentKey = EngineKey(request, accelerator)
+        } catch (t: Throwable) {
+            runCatching { newEngine.close() }
+            throw t
+        }
+    }
+
+    /**
+     * Everything that is settled per *conversation* rather than per engine.
+     *
+     * The split matters: `Engine.initialize()` reads the weights and takes seconds, while a
+     * conversation is minted from an initialised engine almost for free. Keeping the two apart is
+     * what lets [load] swap a system prompt, a restored history or a tool list without paying for
+     * the model again.
+     */
+    private fun conversationConfigFor(
+        accelerator: Accelerator,
+        request: LoadRequest,
+    ): ConversationConfig = ConversationConfig(
                 systemInstruction = request.systemPrompt?.let { Contents.of(it) },
                 // Declared to the runtime as schemas, and left on `automaticToolCalling` (the
                 // default): LiteRT-LM emits the call, runs the tool through the adapter below, and
@@ -229,15 +322,7 @@ class LiteRtLmEngine : InferenceEngine {
                         },
                     )
                 },
-            )
-
-            conversation = newEngine.createConversation(conversationConfig)
-            engine = newEngine
-        } catch (t: Throwable) {
-            runCatching { newEngine.close() }
-            throw t
-        }
-    }
+    )
 
     // getBenchmarkInfo() is @ExperimentalApi. We opt in rather than time the Flow ourselves: the
     // runtime's own prefill/decode counters are the honest numbers, and if the API is withdrawn the
@@ -346,6 +431,7 @@ class LiteRtLmEngine : InferenceEngine {
 
         loadedModelPath = null
         activeAccelerator = null
+        residentKey = null
     }
 
     private fun Accelerator.toBackend(nativeLibraryDir: String?): Backend = when (this) {

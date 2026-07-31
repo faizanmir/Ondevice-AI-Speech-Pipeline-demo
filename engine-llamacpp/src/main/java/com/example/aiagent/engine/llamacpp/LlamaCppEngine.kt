@@ -67,6 +67,36 @@ class LlamaCppEngine : InferenceEngine {
     private val transcript = mutableListOf<ChatTurn>()
     private var systemPrompt: String? = null
 
+    /**
+     * What the resident native session was created from, or null when nothing is loaded.
+     *
+     * Only what `nativeCreateSession` bakes in. The system prompt, the restored transcript and the
+     * output bounds are plain fields on this class, so changing them does not need a new session --
+     * and a new session means reading the whole GGUF again.
+     */
+    private var residentKey: SessionKey? = null
+
+    /** The part of a [LoadRequest] that decides whether the loaded model can be kept. */
+    private data class SessionKey(
+        val modelPath: String,
+        val contextTokens: Int,
+        val threadCount: Int,
+        val accelerator: Accelerator,
+        val sampling: SamplingParams,
+    ) {
+        constructor(request: LoadRequest, accelerator: Accelerator) : this(
+            modelPath = request.modelPath,
+            contextTokens = request.contextTokens,
+            threadCount = request.threadCount,
+            // What was actually used: a GPU request that fell back to the CPU is served by the
+            // resident CPU session, and re-running the ladder would only fall back again.
+            accelerator = accelerator,
+            // Sampling is baked into the session here, unlike LiteRT-LM where it is per
+            // conversation -- so a changed temperature really does need a new one.
+            sampling = request.sampling.copy(maxOutputTokens = 0, stopSequences = emptyList()),
+        )
+    }
+
     // Caller-facing generation bounds, applied by an OutputGuard in generate(). Captured at load
     // because generate() gets only the prompt, not the request.
     private var maxOutputTokens: Int = 0
@@ -91,12 +121,43 @@ class LlamaCppEngine : InferenceEngine {
         }
     }
 
+    /**
+     * Keeps the loaded model when only conversation-level things changed.
+     *
+     * Opening a second chat on the resident model changes nothing the native session cares about;
+     * resuming one changes the system prompt and the transcript. Neither is a reason to read a
+     * multi-gigabyte GGUF again, which is what a full load costs.
+     *
+     * A [SamplingParams.SEED_RANDOM] session is not re-seeded here -- the existing RNG stream simply
+     * carries on, which serves the same purpose the redraw does: two chats on one model do not
+     * replay the same tokens.
+     *
+     * Caller must hold [lifecycleLock].
+     */
+    private fun reuseResidentSession(request: LoadRequest): Boolean {
+        if (handle == 0L) return false
+        val accelerator = activeAccelerator ?: return false
+        if (residentKey != SessionKey(request, accelerator)) return false
+
+        systemPrompt = request.systemPrompt
+        maxOutputTokens = request.sampling.maxOutputTokens
+        stopSequences = request.sampling.stopSequences
+        transcript.clear()
+        request.initialHistory.forEach { transcript += ChatTurn(it.role, it.content) }
+        LlamaNative.nativeResetContext(handle)
+
+        Log.i(TAG, "reused the resident session; only the transcript changed")
+        return true
+    }
+
     override suspend fun load(request: LoadRequest) = withContext(Dispatchers.IO) {
         (availability() as? EngineAvailability.Unavailable)?.let {
             throw EngineException.NotAvailable(it.reason)
         }
 
         lifecycleLock.withLock {
+            if (reuseResidentSession(request)) return@withLock
+
             unloadLocked()
 
             // Only try the GPU if one was actually enumerated. NPU falls to GPU, GPU falls to CPU:
@@ -142,6 +203,7 @@ class LlamaCppEngine : InferenceEngine {
                     request.initialHistory.forEach { transcript += ChatTurn(it.role, it.content) }
                     loadedModelPath = request.modelPath
                     activeAccelerator = accelerator
+                    residentKey = SessionKey(request, accelerator)
                     if (accelerator == Accelerator.CPU && wantsGpu) {
                         Log.w(TAG, "GPU offload failed for this model, fell back to CPU")
                     }
@@ -280,6 +342,7 @@ class LlamaCppEngine : InferenceEngine {
         if (session != 0L) LlamaNative.nativeFreeSession(session)
         handle = 0L
         transcript.clear()
+        residentKey = null
         loadedModelPath = null
         activeAccelerator = null
     }
