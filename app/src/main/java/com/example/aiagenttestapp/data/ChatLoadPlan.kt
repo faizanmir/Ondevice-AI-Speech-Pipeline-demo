@@ -2,9 +2,9 @@ package com.example.aiagenttestapp.data
 
 import com.example.aiagent.engine.core.LoadRequest
 import com.example.aiagent.engine.core.ModelSpec
-import com.example.aiagent.engine.llamacpp.ToolCallingProtocol
 import com.example.aiagent.engine.core.ToolDefinition
 import com.example.aiagenttestapp.functions.AppFunctions
+import com.example.aiagenttestapp.functions.ToolCallingStrategy
 import com.example.aiagenttestapp.prompts.ChatPrompts
 import com.example.aiagenttestapp.prompts.SystemPromptBuilder
 import javax.inject.Inject
@@ -41,9 +41,9 @@ sealed interface ChatLoadPlan {
          */
         val systemPrompt: String,
         /**
-         * The tools declared to the runtime, for an engine that has a real tool-calling API. Empty
-         * for the prompt-protocol engines, which learn about their tools from [systemPrompt]
-         * instead -- exactly one of the two is ever populated.
+         * The tools declared to the runtime, as the engine's [ToolCallingStrategy] decided. Empty
+         * for a prompt-driven engine, which learns about its tools from [systemPrompt] instead --
+         * exactly one of the two is ever populated.
          */
         val nativeTools: List<ToolDefinition> = emptyList(),
     ) : ChatLoadPlan {
@@ -91,11 +91,11 @@ class ChatLoadPlanner @Inject constructor(
         // hundred tokens on every turn, wasted on a model that will never emit a call.
         val toolsEnabled = settings.appFunctionsEnabled && model.canCallTools
 
-        // Which of the two mechanisms this engine gets. LiteRT-LM declares tools to the runtime and
-        // runs them itself; llama.cpp has no such API and is taught the JSON protocol in its prompt.
-        // Never both: a model told about its tools twice, in two different formats, is a model that
-        // invents a third.
-        val nativeTools = toolsEnabled && resolved.engine.descriptor.supportsNativeTools
+        // Which mechanism this engine gets is the strategy's business, not this planner's -- it
+        // asks for a prompt section and a set of declarations and uses whatever comes back. Exactly
+        // one of the two is ever non-empty: a model told about its tools twice, in two different
+        // formats, is a model that invents a third.
+        val strategy = ToolCallingStrategy.forEngine(resolved.engine.descriptor)
         val toolsUnavailableReason = when {
             !settings.appFunctionsEnabled -> null
             !model.canCallTools ->
@@ -115,11 +115,7 @@ class ChatLoadPlanner @Inject constructor(
         val systemPrompt = SystemPromptBuilder.build(
             base = ChatPrompts.SYSTEM_PROMPT,
             thinkingEnabled = settings.thinkingEnabled,
-            if (toolsEnabled && !nativeTools) {
-                ToolCallingProtocol.systemPromptSection(definitions)
-            } else {
-                null
-            },
+            strategy.systemPromptSection(definitions),
         )
 
         return ChatLoadPlan.Ready(
@@ -127,7 +123,7 @@ class ChatLoadPlanner @Inject constructor(
             toolsEnabled = toolsEnabled,
             toolsUnavailableReason = toolsUnavailableReason,
             systemPrompt = systemPrompt,
-            nativeTools = if (nativeTools) definitions else emptyList(),
+            nativeTools = strategy.declarations(definitions),
         )
     }
 }

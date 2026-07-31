@@ -12,7 +12,6 @@ import com.example.aiagent.engine.core.HistoryTurn
 import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagent.engine.core.ToolCall
-import com.example.aiagent.engine.llamacpp.ToolCallingProtocol
 import com.example.aiagent.engine.core.ToolRunner
 import com.example.aiagenttestapp.functions.AppFunctionDeps
 import com.example.aiagenttestapp.data.ChatLoadPlan
@@ -23,6 +22,8 @@ import com.example.aiagenttestapp.data.chat.Conversation
 import com.example.aiagenttestapp.data.chat.StoredMessage
 import com.example.aiagenttestapp.data.chat.toHistoryTurn
 import com.example.aiagenttestapp.functions.AppFunctions
+import com.example.aiagenttestapp.functions.PromptToolCalling
+import com.example.aiagenttestapp.functions.ToolCallingStrategy
 import com.example.aiagenttestapp.functions.AppNavigation
 import com.example.aiagenttestapp.prompts.ChatPrompts
 import com.example.aiagenttestapp.stt.SpeechModelState
@@ -227,14 +228,15 @@ class ChatViewModel @Inject constructor(
     private var toolsEnabled = false
 
     /**
-     * Whether this model's engine runs tools itself rather than through the prompt protocol.
+     * How this model's engine is offered the app's functions.
      *
-     * The two paths are mutually exclusive and look nothing alike from here: the protocol needs a
-     * hop loop, because each call arrives as JSON in the model's *output* and the result has to be
-     * fed back as a new turn; the native path needs none, because the runtime does all of that
-     * inside one generate and hands back only the final answer.
+     * Held rather than re-derived because it is fixed for the life of the loaded model, like the
+     * tools themselves. A [ToolCallingStrategy.PromptDriven] engine needs the hop loop below -- each
+     * call arrives as JSON in the model's *output* and its result has to be fed back as a new turn.
+     * A runtime-driven one needs none of it: the runtime does all of that inside one generate and
+     * hands back only the final answer.
      */
-    private var nativeToolsActive = false
+    private var toolStrategy: ToolCallingStrategy = PromptToolCalling
 
     /**
      * The bubble a turn is streaming into right now, so a natively-executed tool can slot its chip
@@ -311,7 +313,7 @@ class ChatViewModel @Inject constructor(
         // toggling the setting mid-chat cannot retroactively give the model tools it was never told
         // about. (Whether this model gets the tool section at all is decided in planChatLoad.)
         toolsEnabled = plan.toolsEnabled
-        nativeToolsActive = plan.nativeTools.isNotEmpty()
+        toolStrategy = ToolCallingStrategy.forEngine(plan.engine.descriptor)
         setState {
             copy(
                 toolsActive = plan.toolsEnabled,
@@ -388,8 +390,12 @@ class ChatViewModel @Inject constructor(
                 )
                 // After open(), not as part of the request: the model may well have been warmed in
                 // the background before this screen existed, and the runner belongs to this screen.
-                // Harmlessly ignored by an engine without native tool support.
-                selected.toolRunner = if (nativeToolsActive) nativeToolRunner() else null
+                selected.toolRunner =
+                    if (toolsEnabled && toolStrategy is ToolCallingStrategy.RuntimeDriven) {
+                        nativeToolRunner()
+                    } else {
+                        null
+                    }
                 setState {
                     copy(
                         loadState = ModelLoadState.Ready,
@@ -541,20 +547,21 @@ class ChatViewModel @Inject constructor(
                 // the hop cap stops runaway chaining, an identical repeated call (a small model
                 // spinning on the same search) breaks early, and a navigation tool ends the turn
                 // since the user has been moved.
-                // Only the prompt protocol needs this. On a native-tool engine the runtime has
-                // already called every tool it wanted and generated the answer from the results, so
-                // `response` here is the final answer and there is nothing left to parse out of it.
-                if (toolsEnabled && !nativeToolsActive) {
+                // A type check, not a flag: only a prompt-driven strategy *has* parseCall, because
+                // only it produces calls the app has to find. On a runtime-driven engine every tool
+                // has already run and `response` is the final answer, with nothing left to parse.
+                val prompted = toolStrategy as? ToolCallingStrategy.PromptDriven
+                if (toolsEnabled && prompted != null) {
                     val maxHops = settingsStore.settings.value.maxToolHops
                     var hops = 0
                     var lastSignature: String? = null
                     while (hops < maxHops) {
-                        val call = ToolCallingProtocol.parse(response) ?: break
+                        val call = prompted.parseCall(response) ?: break
                         val signature = "${call.name}(${call.arguments})"
                         if (signature == lastSignature) break
                         lastSignature = signature
 
-                        val (next, navigated) = runToolCall(activeEngine, call)
+                        val (next, navigated) = runToolCall(activeEngine, prompted, call)
                         response = next
                         hops++
                         if (navigated) break
@@ -562,7 +569,7 @@ class ChatViewModel @Inject constructor(
 
                     // Cap hit (or broke on a repeat) while the model is still emitting a tool call:
                     // never let raw JSON stand as the answer -- force one final, tool-free reply.
-                    if (ToolCallingProtocol.parse(response) != null) {
+                    if (prompted.parseCall(response) != null) {
                         response = forceFinalAnswer(activeEngine)
                     }
                 }
@@ -702,6 +709,7 @@ class ChatViewModel @Inject constructor(
      */
     private suspend fun runToolCall(
         activeEngine: InferenceEngine,
+        strategy: ToolCallingStrategy.PromptDriven,
         call: ToolCall,
     ): Pair<String, Boolean> {
         val result = AppFunctions.execute(call, appFunctionDeps)
@@ -733,7 +741,7 @@ class ChatViewModel @Inject constructor(
 
         // Hand the result back so the model can use it. Without this the user gets a bare chip and
         // no reply, which reads as the model having ignored them.
-        val next = runTurn(activeEngine, ToolCallingProtocol.toolResultPrompt(call, result.output))
+        val next = runTurn(activeEngine, strategy.resultPrompt(call, result.output))
         return next to (result.navigation != null)
     }
 
