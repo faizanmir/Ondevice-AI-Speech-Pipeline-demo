@@ -14,6 +14,7 @@ import com.example.aiagent.engine.core.LoadRequest
 import com.example.aiagent.engine.core.ModelFormat
 import com.example.aiagent.engine.core.OutputGuard
 import com.example.aiagent.engine.core.SamplingParams
+import com.example.aiagent.engine.core.ToolRunner
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
@@ -24,6 +25,7 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.ExperimentalApi
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.SamplerConfig
+import com.google.ai.edge.litertlm.tool
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -57,6 +59,7 @@ class LiteRtLmEngine : InferenceEngine {
         supportedFormats = setOf(ModelFormat.LITERTLM),
         supportedAccelerators = setOf(Accelerator.CPU, Accelerator.GPU, Accelerator.NPU),
         supportsVision = true,
+        supportsNativeTools = true,
         blurb = "Google's on-device runtime. GPU and NPU accelerated, memory-maps weights so it " +
             "uses far less RAM than the file size suggests.",
     )
@@ -64,6 +67,14 @@ class LiteRtLmEngine : InferenceEngine {
     private var engine: Engine? = null
     private var conversation: Conversation? = null
     private var conversationConfig: ConversationConfig = ConversationConfig()
+
+    /**
+     * Read by the tool adapters on every call, so a model loaded before anyone was driving it can
+     * still run tools once a screen adopts it. Volatile because the runtime calls in from its own
+     * decode thread, not the one that set this.
+     */
+    @Volatile
+    override var toolRunner: ToolRunner? = null
 
     // Caller-facing generation bounds, applied by an OutputGuard in generate().
     private var maxOutputTokens: Int = 0
@@ -150,6 +161,14 @@ class LiteRtLmEngine : InferenceEngine {
 
             conversationConfig = ConversationConfig(
                 systemInstruction = request.systemPrompt?.let { Contents.of(it) },
+                // Declared to the runtime as schemas, and left on `automaticToolCalling` (the
+                // default): LiteRT-LM emits the call, runs the tool through the adapter below, and
+                // feeds the result back itself, all inside one sendMessageAsync. The app never sees
+                // a half-finished turn, and the chat layer does not need a hop loop the way the
+                // prompt protocol does.
+                tools = request.tools.map { definition ->
+                    tool(AppFunctionTool(definition) { toolRunner })
+                },
                 // Seed restored history as proper role-tagged turns. LiteRT-LM prefills these into
                 // the new conversation at creation, so a reopened chat continues in context rather
                 // than starting blank.

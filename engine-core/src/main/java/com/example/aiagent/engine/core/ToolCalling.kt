@@ -154,3 +154,20 @@ object ToolCallingProtocol {
         return null
     }
 }
+
+/**
+ * Runs one tool the model asked for, for a runtime that executes tool calls itself.
+ *
+ * Synchronous on purpose, and the reason is not style. LiteRT-LM's automatic tool calling invokes
+ * the tool from inside its own decode loop and waits for the string before it carries on
+ * generating, so there is no suspension point to hand back to. An implementation must therefore do
+ * its work and return -- it must never bounce onto the main thread and wait for the result, which
+ * deadlocks if that thread is what started generation.
+ *
+ * The return value is fed back to the model verbatim, so it should be JSON, or at least something a
+ * model can read. Failures are results too: return an object saying what went wrong rather than
+ * throwing, and the model gets a chance to recover instead of the turn dying.
+ */
+fun interface ToolRunner {
+    fun run(call: ToolCall): String
+}

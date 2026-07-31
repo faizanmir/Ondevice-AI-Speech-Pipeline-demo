@@ -3,6 +3,7 @@ package com.example.aiagenttestapp.data
 import com.example.aiagent.engine.core.LoadRequest
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagent.engine.core.ToolCallingProtocol
+import com.example.aiagent.engine.core.ToolDefinition
 import com.example.aiagenttestapp.functions.AppFunctions
 import com.example.aiagenttestapp.util.Reasoning
 import javax.inject.Inject
@@ -53,9 +54,16 @@ sealed interface ChatLoadPlan {
         val toolsUnavailableReason: String?,
         /**
          * The system prompt for a *fresh* chat: the user's prompt, plus the tool section when tools
-         * are on. A resumed chat folds a rolling summary in on top of this before loading.
+         * are on *and* the engine has no native tool API. A resumed chat folds a rolling summary in
+         * on top of this before loading.
          */
         val systemPrompt: String,
+        /**
+         * The tools declared to the runtime, for an engine that has a real tool-calling API. Empty
+         * for the prompt-protocol engines, which learn about their tools from [systemPrompt]
+         * instead -- exactly one of the two is ever populated.
+         */
+        val nativeTools: List<ToolDefinition> = emptyList(),
     ) : ChatLoadPlan {
 
         // Read-through to the shared plan, so the chat screen reads the same as it always did.
@@ -71,7 +79,7 @@ sealed interface ChatLoadPlan {
          * two identical resident models, which is exactly what the warm handoff checks.
          */
         fun freshLoadRequest(): LoadRequest =
-            resolved.baseLoadRequest().copy(systemPrompt = systemPrompt)
+            resolved.baseLoadRequest().copy(systemPrompt = systemPrompt, tools = nativeTools)
     }
 }
 
@@ -95,10 +103,17 @@ class ChatLoadPlanner @Inject constructor(
         val settings = settingsStore.settings.value
         val model = resolved.model
 
-        // Tools go into the system prompt, so they are fixed for the life of a loaded model. A model
-        // that cannot do tool calling is not given the tool section at all -- it is several hundred
-        // system-prompt tokens on every turn, wasted on a model that will never emit a call.
+        // Tools are fixed for the life of a loaded model either way -- the prompt section is in the
+        // system prompt, and the native declarations are baked into the conversation at creation. A
+        // model that cannot do tool calling is given neither: the prompt section costs several
+        // hundred tokens on every turn, wasted on a model that will never emit a call.
         val toolsEnabled = settings.appFunctionsEnabled && model.canCallTools
+
+        // Which of the two mechanisms this engine gets. LiteRT-LM declares tools to the runtime and
+        // runs them itself; llama.cpp has no such API and is taught the JSON protocol in its prompt.
+        // Never both: a model told about its tools twice, in two different formats, is a model that
+        // invents a third.
+        val nativeTools = toolsEnabled && resolved.engine.descriptor.supportsNativeTools
         val toolsUnavailableReason = when {
             !settings.appFunctionsEnabled -> null
             !model.canCallTools ->
@@ -109,6 +124,8 @@ class ChatLoadPlanner @Inject constructor(
 
         // Web search is a tool like any other, but opt-in: offered only when a Tavily key is set.
         val webAccessEnabled = toolsEnabled && !settings.tavilyApiKey.isNullOrBlank()
+        val definitions =
+            if (toolsEnabled) AppFunctions.definitionsFor(webAccessEnabled) else emptyList()
 
         val systemPrompt = buildString {
             append(ChatPrompts.SYSTEM_PROMPT)
@@ -118,10 +135,8 @@ class ChatLoadPlanner @Inject constructor(
                 append("\n\n")
                 append(Reasoning.NO_THINK_DIRECTIVE)
             }
-            if (toolsEnabled) {
-                ToolCallingProtocol.systemPromptSection(
-                    AppFunctions.definitionsFor(webAccessEnabled),
-                )?.let {
+            if (toolsEnabled && !nativeTools) {
+                ToolCallingProtocol.systemPromptSection(definitions)?.let {
                     append("\n\n")
                     append(it)
                 }
@@ -133,6 +148,7 @@ class ChatLoadPlanner @Inject constructor(
             toolsEnabled = toolsEnabled,
             toolsUnavailableReason = toolsUnavailableReason,
             systemPrompt = systemPrompt,
+            nativeTools = if (nativeTools) definitions else emptyList(),
         )
     }
 }

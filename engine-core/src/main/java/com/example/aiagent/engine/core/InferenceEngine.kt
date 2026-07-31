@@ -16,6 +16,15 @@ data class EngineDescriptor(
     val supportedFormats: Set<ModelFormat>,
     val supportedAccelerators: Set<Accelerator>,
     val supportsVision: Boolean,
+    /**
+     * The runtime has a real tool-calling API: tools are declared to it as schemas and it emits and
+     * executes calls itself.
+     *
+     * False means tool calling has to be arranged in the prompt instead ([ToolCallingProtocol]).
+     * The chat layer branches on this to decide which of the two to set up -- it must not do both,
+     * or the model is told about its tools twice in two different languages.
+     */
+    val supportsNativeTools: Boolean = false,
     val blurb: String,
 ) {
     fun canLoad(format: ModelFormat): Boolean = format in supportedFormats
@@ -101,6 +110,16 @@ data class LoadRequest(
      * lets the engine choose from the core count. Ignored by GPU/NPU engines.
      */
     val threadCount: Int = AUTO,
+    /**
+     * Tools to declare to a runtime with native tool support ([EngineDescriptor.supportsNativeTools]);
+     * ignored by the others, which are told about tools through the system prompt instead.
+     *
+     * Part of the request rather than something set afterwards because these are fixed for the life
+     * of a loaded model -- the runtime bakes them into the conversation it creates. That also keeps
+     * the equality check honest: a model loaded with tools really is not interchangeable with the
+     * same model loaded without them, and the warm-handoff comparison should say so.
+     */
+    val tools: List<ToolDefinition> = emptyList(),
 ) {
     companion object {
         /** Sentinel for [threadCount]: let the engine decide. */
@@ -177,6 +196,23 @@ interface InferenceEngine {
      * not makes the speed they observe inexplicable.
      */
     val activeAccelerator: Accelerator?
+
+    /**
+     * Where a runtime with native tool support sends the calls it decides to make.
+     *
+     * Deliberately settable *after* [load], and deliberately not part of [LoadRequest]. Models are
+     * loaded before anyone knows who will use them -- the residency layer warms one in the
+     * background, and a chat screen adopts it later -- so the tools a model is loaded *with* (data,
+     * fixed at conversation creation) and the object that *runs* them (a callback owned by whichever
+     * screen is driving) have genuinely different lifetimes. Folding the callback into the request
+     * would also break request equality, which is what the warm handoff uses to recognise an
+     * already-resident model.
+     *
+     * Defaults to a no-op so engines without native tool support need not think about it.
+     */
+    var toolRunner: ToolRunner?
+        get() = null
+        set(@Suppress("UNUSED_PARAMETER") value) = Unit
 
     /** Cheap enough to call on the main thread; used to grey out engines in the picker. */
     fun availability(): EngineAvailability

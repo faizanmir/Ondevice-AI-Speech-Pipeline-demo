@@ -13,6 +13,7 @@ import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagent.engine.core.ToolCall
 import com.example.aiagent.engine.core.ToolCallingProtocol
+import com.example.aiagent.engine.core.ToolRunner
 import com.example.aiagenttestapp.functions.AppFunctionDeps
 import com.example.aiagenttestapp.data.ChatLoadPlan
 import com.example.aiagenttestapp.data.ChatLoadPlanner
@@ -31,6 +32,7 @@ import com.example.aiagenttestapp.ui.mvi.UiState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlin.time.Duration.Companion.milliseconds
 import com.example.aiagenttestapp.data.ModelResidency
 import com.example.aiagenttestapp.data.SettingsStore
@@ -223,6 +225,24 @@ class ChatViewModel @Inject constructor(
     /** Whether app functions were switched on when this chat's model was loaded. */
     private var toolsEnabled = false
 
+    /**
+     * Whether this model's engine runs tools itself rather than through the prompt protocol.
+     *
+     * The two paths are mutually exclusive and look nothing alike from here: the protocol needs a
+     * hop loop, because each call arrives as JSON in the model's *output* and the result has to be
+     * fed back as a new turn; the native path needs none, because the runtime does all of that
+     * inside one generate and hands back only the final answer.
+     */
+    private var nativeToolsActive = false
+
+    /**
+     * The bubble a turn is streaming into right now, so a natively-executed tool can slot its chip
+     * in above the answer as it happens. [pendingReplyId] cannot serve: it is only set once a turn
+     * has finished, which for the native path is after every tool has already run.
+     */
+    @Volatile
+    private var streamingReplyId: Long? = null
+
     /** The persisted conversation this chat is writing to. Null until the first message creates it. */
     private var conversationId: Long? = null
 
@@ -290,6 +310,7 @@ class ChatViewModel @Inject constructor(
         // toggling the setting mid-chat cannot retroactively give the model tools it was never told
         // about. (Whether this model gets the tool section at all is decided in planChatLoad.)
         toolsEnabled = plan.toolsEnabled
+        nativeToolsActive = plan.nativeTools.isNotEmpty()
         setState {
             copy(
                 toolsActive = plan.toolsEnabled,
@@ -364,6 +385,10 @@ class ChatViewModel @Inject constructor(
                     request = request,
                     reuseWhenResident = resumeConversationId == null,
                 )
+                // After open(), not as part of the request: the model may well have been warmed in
+                // the background before this screen existed, and the runner belongs to this screen.
+                // Harmlessly ignored by an engine without native tool support.
+                selected.toolRunner = if (nativeToolsActive) nativeToolRunner() else null
                 setState {
                     copy(
                         loadState = ModelLoadState.Ready,
@@ -515,7 +540,10 @@ class ChatViewModel @Inject constructor(
                 // the hop cap stops runaway chaining, an identical repeated call (a small model
                 // spinning on the same search) breaks early, and a navigation tool ends the turn
                 // since the user has been moved.
-                if (toolsEnabled) {
+                // Only the prompt protocol needs this. On a native-tool engine the runtime has
+                // already called every tool it wanted and generated the answer from the results, so
+                // `response` here is the final answer and there is nothing left to parse out of it.
+                if (toolsEnabled && !nativeToolsActive) {
                     val maxHops = settingsStore.settings.value.maxToolHops
                     var hops = 0
                     var lastSignature: String? = null
@@ -566,6 +594,7 @@ class ChatViewModel @Inject constructor(
         setState {
             copy(messages = messages + ChatMessage(id = replyId, isUser = false, text = ""))
         }
+        streamingReplyId = replyId
 
         val buffer = StringBuilder()
         var lastUiMs = 0L
@@ -603,8 +632,62 @@ class ChatViewModel @Inject constructor(
             return ""
         }
 
+        streamingReplyId = null
         pendingReplyId = replyId
         return buffer.toString()
+    }
+
+    /**
+     * Runs app functions for an engine that calls tools itself.
+     *
+     * Blocking is not an oversight here, it is the contract. LiteRT-LM invokes the tool from inside
+     * its decode loop and waits for the string, so there is nothing to suspend into --
+     * [ToolRunner] is synchronous for that reason. What matters is *which* thread blocks: this runs
+     * on the runtime's own worker, never the main thread, so the UI keeps drawing while a function
+     * does its work.
+     *
+     * Everything it touches is safe from that thread: `setState` is an atomic flow update and
+     * effects go through a buffered channel. [pendingSources] is the exception -- a plain list --
+     * so it is guarded.
+     */
+    private fun nativeToolRunner(): ToolRunner = ToolRunner { call ->
+        val result = runBlocking { AppFunctions.execute(call, appFunctionDeps) }
+
+        synchronized(pendingSources) {
+            result.sources.forEach { source ->
+                if (pendingSources.none { it.url == source.url }) pendingSources += source
+            }
+        }
+
+        // The chip goes in *above* the reply being streamed, so the transcript reads in the order
+        // things happened: the model called a function, then answered with what it learned. The
+        // prompt protocol instead rewrites its JSON bubble into a chip, because there the call was
+        // the model's visible output; here the call never appears in the text at all.
+        val chip = ChatMessage(
+            id = nextMessageId++,
+            isUser = false,
+            text = "",
+            functionCall = FunctionCallDisplay(
+                name = call.name,
+                summary = result.summary,
+                succeeded = !result.isError,
+            ),
+        )
+        val streaming = streamingReplyId
+        setState {
+            val at = messages.indexOfFirst { it.id == streaming }
+            copy(
+                messages = if (at >= 0) {
+                    messages.toMutableList().apply { add(at, chip) }
+                } else {
+                    messages + chip
+                },
+            )
+        }
+
+        result.navigation?.let { emitEffect(ChatEffect.Navigate(it)) }
+
+        result.output
     }
 
     /**
@@ -623,8 +706,10 @@ class ChatViewModel @Inject constructor(
         val result = AppFunctions.execute(call, appFunctionDeps)
 
         // Gather any web pages this call drew on, de-duplicated across the turn's tool calls.
-        result.sources.forEach { source ->
-            if (pendingSources.none { it.url == source.url }) pendingSources += source
+        synchronized(pendingSources) {
+            result.sources.forEach { source ->
+                if (pendingSources.none { it.url == source.url }) pendingSources += source
+            }
         }
 
         // Replace the JSON bubble with the function chip.

@@ -28,4 +28,6 @@ dependencies {
     // LiteRT-LM. Successor to MediaPipe's LlmInference, which is @Deprecated in source and in
     // maintenance-only mode. Google Maven only -- not on Maven Central.
     implementation(libs.litertlm.android)
+
+    testImplementation(libs.junit)
 }
