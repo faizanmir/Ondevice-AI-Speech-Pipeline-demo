@@ -43,8 +43,14 @@ class AuditPromptsTest {
         // The preamble is charged against the window of every chunk, so growth here is paid for in
         // transcript the model never sees. These ceilings are the current sizes plus a little room;
         // moving one is a decision to make deliberately, not by accumulation.
-        assertTrue("RICH is ${ContextWindow.estimateTokens(rich)} tok", ContextWindow.estimateTokens(rich) < 1850)
-        assertTrue("LEAN is ${ContextWindow.estimateTokens(lean)} tok", ContextWindow.estimateTokens(lean) < 1500)
+        //
+        // Raised once, deliberately, for both: they took the resultType field and its two rules,
+        // which is
+        // what lets classification happen here instead of in a separate grading turn per finding.
+        // A preamble paid once per chunk is cheaper than a turn paid once per finding, and a
+        // verdict decided where the evidence is cannot be softened by a second opinion later.
+        assertTrue("RICH is ${ContextWindow.estimateTokens(rich)} tok", ContextWindow.estimateTokens(rich) < 1950)
+        assertTrue("LEAN is ${ContextWindow.estimateTokens(lean)} tok", ContextWindow.estimateTokens(lean) < 1650)
     }
 
     @Test

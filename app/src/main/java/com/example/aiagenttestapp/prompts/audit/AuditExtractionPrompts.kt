@@ -153,6 +153,17 @@ object AuditExtractionPrompts {
         appendLine("  stated wording onto another scale.")
         appendLine()
 
+        // The classification the finding itself carries, as opposed to the document's own stated
+        // verdict above. Asked for here rather than graded in a later turn on purpose: a second
+        // pass re-reads a finding with no memory of what was concluded, and can only ever soften
+        // it. Severity that moves one way has to be decided once, where the evidence is.
+        appendLine("- resultType: one of resultOK, resultOkForDocumentation, minorNonconformity,")
+        appendLine("  majorNonconformity, resultPotentialImprovement. Omit the key if the text")
+        appendLine("  supports no clear conclusion -- that is an answer, not a gap to fill. Use")
+        appendLine("  resultOkForDocumentation when the work was sound but its records, approval")
+        appendLine("  or traceability were weak. If the auditor stated a result, it stands.")
+        appendLine()
+
         appendLine("Rules:")
         appendLine("- Use only what the text says. Never add, infer, or generalise beyond it.")
         appendLine("- Every non-conformity must include \"evidence\": a word-for-word quote of at most")
