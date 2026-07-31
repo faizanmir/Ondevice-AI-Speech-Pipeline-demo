@@ -1,9 +1,0 @@
-/Users/faizan.mir/Library/Android/sdk/cmake/3.22.1/bin/ninja \
-  -C \
-  /Users/faizan.mir/AndroidStudioProjects/AIAgentTestApp/engine-llamacpp/.cxx/Release/w1y5f4vy/arm64-v8a \
-  ggml \
-  ggml-base \
-  ggml-cpu \
-  ggml-vulkan \
-  llama \
-  llamajni

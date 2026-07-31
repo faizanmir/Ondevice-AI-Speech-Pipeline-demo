@@ -63,6 +63,9 @@ internal object LlamaNative {
 
     external fun nativeCancel(handle: Long)
     external fun nativeResetContext(handle: Long)
+
+    /** Ends the turn but keeps the KV cache, so the next prompt can reuse its shared prefix. */
+    external fun nativeResetTurnKeepCache(handle: Long)
     external fun nativeContextUsed(handle: Long): Int
     external fun nativeContextSize(handle: Long): Int
     external fun nativeFreeSession(handle: Long)

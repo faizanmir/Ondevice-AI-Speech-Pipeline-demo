@@ -3,8 +3,8 @@ package com.example.aiagenttestapp.data
 import android.util.Log
 import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.LoadRequest
+import com.example.aiagent.engine.core.DeviceMemoryProfile
 import com.example.aiagent.engine.core.ModelFitEvaluator
-import com.example.aiagenttestapp.AppContainer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -12,6 +12,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import javax.inject.Inject
+import javax.inject.Provider
+import javax.inject.Singleton
 
 /**
  * Keeps the default (active) model resident in its engine for the whole session, so opening its chat
@@ -27,7 +30,14 @@ import kotlinx.coroutines.sync.withLock
  * screen ([attach]/[detach] track that), the resident model is unloaded so a multi-GB model cannot
  * starve the rest of the app. The next chat then pays one load to bring it back.
  */
-class ModelResidency {
+@Singleton
+class ModelResidency @Inject constructor(
+    // Provider, not a direct reference: ChatLoadPlanner is only needed for the startup warm-up, and
+    // taking it lazily keeps residency out of the chat graph's construction order.
+    private val chatLoadPlanner: Provider<ChatLoadPlanner>,
+    private val settingsStore: Provider<SettingsStore>,
+    private val deviceMemory: Provider<DeviceMemoryProfile>,
+) {
 
     /** Serialises load / reset / unload / the on-close summary so they never overlap on the engine. */
     private val mutex = Mutex()
@@ -55,10 +65,12 @@ class ModelResidency {
     // ---- Startup warm-up ----------------------------------------------------------------------
 
     /** Kicks off the background warm-load of the active model. Non-blocking; call once, at startup. */
-    fun preloadActiveModel(container: AppContainer) {
+    fun preloadActiveModel() {
         try {
-            val modelId = container.settingsStore.settings.value.activeModelId ?: return
-            val plan = planChatLoad(container, modelId) as? ChatLoadPlan.Resolved ?: return
+            val modelId = settingsStore.get().settings.value.activeModelId ?: return
+            // Deliberately the *chat* plan: this warms the model a fresh chat will ask for, so the
+            // request it builds has to be the one ChatViewModel builds, system prompt included.
+            val plan = chatLoadPlanner.get().plan(modelId) as? ChatLoadPlan.Ready ?: return
             if (!plan.downloaded) return
 
             // Never risk taking the process down at startup for a model that would not fit anyway.
@@ -66,7 +78,7 @@ class ModelResidency {
                 model = plan.model,
                 engine = plan.engine.descriptor,
                 accelerator = plan.accelerator,
-                device = container.deviceMemory,
+                device = deviceMemory.get(),
                 isDownloaded = true,
             )
             if (!fit.canRun) return
@@ -92,10 +104,10 @@ class ModelResidency {
      *  - otherwise -> a full [InferenceEngine.load] of [request].
      *
      * Pass `reuseWhenResident = true` only for a fresh chat, whose [request] must be the plan's
-     * [ChatLoadPlan.Resolved.freshLoadRequest]; a resumed chat carries restored history and must load.
+     * [ModelLoadPlan.Resolved.freshLoadRequest]; a resumed chat carries restored history and must load.
      */
     suspend fun open(
-        plan: ChatLoadPlan.Resolved,
+        plan: ModelLoadPlan.Resolved,
         request: LoadRequest,
         reuseWhenResident: Boolean,
     ): InferenceEngine {

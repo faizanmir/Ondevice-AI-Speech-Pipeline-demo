@@ -71,6 +71,17 @@ class VoiceCommandMatcherTest {
     }
 
     @Test
+    fun `matches a german phrase with umlauts`() {
+        // Umlauts must survive normalisation -- a cleaner that only keeps a-z turns
+        // "öffne einstellungen" into "ffne einstellungen" and the phrase can never fire.
+        val german = VoiceCommandMatcher(
+            listOf(VoiceCommandSpec("open_settings", listOf("öffne einstellungen"))),
+        )
+        val match = german.match("Bitte öffne Einstellungen.", 0)
+        assertEquals("open_settings", match?.id)
+    }
+
+    @Test
     fun `reset clears cooldowns`() {
         val m = matcher()
         assertEquals("open_settings", m.match("open settings", 0)?.id)
@@ -97,6 +108,17 @@ class VoiceCommandMatcherTest {
             listOf("stop recording"),
         )
         assertEquals("First then we continue", result)
+    }
+
+    @Test
+    fun `strips a german command with umlauts`() {
+        // \b in Java regex is ASCII unless (?U) is set; without it the boundary misfires on "Öffne"
+        // and the spoken command would stay in the saved note.
+        val result = stripCommandPhrases(
+            "Notiere Milch kaufen. Öffne Einstellungen.",
+            listOf("öffne einstellungen"),
+        )
+        assertEquals("Notiere Milch kaufen.", result)
     }
 
     @Test

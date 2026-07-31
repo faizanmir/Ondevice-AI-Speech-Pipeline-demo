@@ -172,6 +172,13 @@ data class ModelSpec(
      * must live under one directory named after the model.
      */
     val files: List<ModelFile> = emptyList(),
+    /**
+     * When the user added this model to their catalogue, in epoch millis. 0 for the built-in
+     * catalogue (which has no meaningful "added" date) and for custom models saved before this was
+     * tracked -- the "newest first" sort treats both as oldest. Stamped by the custom-model store
+     * when a model is added.
+     */
+    val addedAtMillis: Long = 0L,
 ) {
 
     /** Can this model actually run app functions? */

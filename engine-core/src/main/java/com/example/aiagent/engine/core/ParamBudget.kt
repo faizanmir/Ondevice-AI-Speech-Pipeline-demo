@@ -156,4 +156,35 @@ object ParamBudget {
         engine = engine,
         accelerator = accelerator,
     )
+
+    /**
+     * The mirror of [maxRunnableParams], solved for context instead of params: the largest KV-cache
+     * length, in tokens, a model of this exact size can be given before its peak RAM would exceed
+     * [budgetBytes]. Solves the same `peak = residentWeights*activation + ctx*kvPerToken + overhead`
+     * for `ctx`.
+     *
+     * This is what lets the app size a model's context window to the device -- honouring the length
+     * a GGUF advertises when the KV cache fits, trimming it when it does not -- instead of clamping
+     * every model to one flat constant.
+     *
+     * Returns [Int.MAX_VALUE] for AICore, whose KV cache lives in the system service's process and
+     * is never billed to this app (see [estimatePeakRamBytes]); there is nothing for us to bound.
+     */
+    fun maxRunnableContext(
+        budgetBytes: Long,
+        weightsBytes: Long,
+        paramsBillions: Double,
+        engine: EngineId,
+        accelerator: Accelerator,
+    ): Int {
+        if (engine == EngineId.AICORE) return Int.MAX_VALUE
+
+        val residentWeights = weightsBytes * weightResidency(engine, accelerator)
+        // Everything except the KV cache is paid out of the budget first; the remainder buys context.
+        val kvBudget = budgetBytes - RUNTIME_OVERHEAD_BYTES -
+            (residentWeights * ACTIVATION_FACTOR).roundToLong()
+        val bytesPerToken = KV_BYTES_PER_TOKEN_PER_BILLION * paramsBillions
+        if (kvBudget <= 0 || bytesPerToken <= 0) return 0
+        return (kvBudget / bytesPerToken).toInt()
+    }
 }

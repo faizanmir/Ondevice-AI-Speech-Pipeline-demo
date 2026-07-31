@@ -10,6 +10,7 @@ import com.example.aiagent.engine.core.GenerationStats
 import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.LoadRequest
 import com.example.aiagent.engine.core.ModelFormat
+import com.example.aiagent.engine.core.OutputGuard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -51,6 +52,11 @@ class MnnEngine : InferenceEngine {
 
     private var handle: Long = 0L
 
+    // Caller-facing generation bounds, applied by an OutputGuard in generate(). Captured at load
+    // because generate() gets only the prompt, not the request.
+    private var maxOutputTokens: Int = 0
+    private var stopSequences: List<String> = emptyList()
+
     @Volatile
     override var loadedModelPath: String? = null
         private set
@@ -81,7 +87,8 @@ class MnnEngine : InferenceEngine {
             val newHandle = MnnNative.nativeCreateSession(
                 configPath = request.modelPath,
                 nCtx = request.contextTokens,
-                nThreads = recommendedThreadCount(),
+                nThreads = request.threadCount.takeIf { it > 0 }?.coerceIn(1, MAX_THREADS)
+                    ?: recommendedThreadCount(),
                 temperature = request.sampling.temperature,
                 topK = request.sampling.topK,
                 topP = request.sampling.topP,
@@ -115,6 +122,8 @@ class MnnEngine : InferenceEngine {
                 MnnNative.nativeSeedHistory(newHandle, roles.toTypedArray(), contents.toTypedArray())
             }
 
+            maxOutputTokens = request.sampling.maxOutputTokens
+            stopSequences = request.sampling.stopSequences
             handle = newHandle
             loadedModelPath = request.modelPath
             activeAccelerator = Accelerator.CPU
@@ -131,6 +140,7 @@ class MnnEngine : InferenceEngine {
 
         var firstTokenMs = 0L
         var generated = 0
+        val guard = OutputGuard(maxOutputTokens, stopSequences)
 
         while (true) {
             // Honour coroutine cancellation, not just an explicit cancel() call: if the collector
@@ -144,8 +154,14 @@ class MnnEngine : InferenceEngine {
 
             if (firstTokenMs == 0L) firstTokenMs = System.currentTimeMillis() - startMs
             generated++
-            emit(GenerationEvent.Token(piece))
+
+            val out = guard.push(piece)
+            if (out.isNotEmpty()) emit(GenerationEvent.Token(out))
+            // Stop string or token cap reached: stop pulling, which stops the native decode.
+            if (guard.isDone) break
         }
+
+        guard.drain().takeIf { it.isNotEmpty() }?.let { emit(GenerationEvent.Token(it)) }
 
         emit(
             GenerationEvent.Complete(
@@ -210,5 +226,8 @@ class MnnEngine : InferenceEngine {
 
     private companion object {
         const val ROLE_SYSTEM = "system"
+
+        /** Ceiling for a user-set thread override; a phone gains nothing past this. */
+        const val MAX_THREADS = 16
     }
 }

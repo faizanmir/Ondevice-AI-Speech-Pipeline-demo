@@ -6,11 +6,13 @@ import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
+import dagger.assisted.Assisted
+import dagger.assisted.AssistedInject
 import androidx.work.workDataOf
-import com.example.aiagenttestapp.AIAgentApplication
 import kotlin.math.absoluteValue
 
 /**
@@ -21,17 +23,19 @@ import kotlin.math.absoluteValue
  * cancelled. The actual bytes-to-disk logic lives in [ModelRepository.performDownload]; this class
  * is the WorkManager shell around it -- progress reporting and the ongoing notification.
  */
-class ModelDownloadWorker(
-    context: Context,
-    params: WorkerParameters,
+@HiltWorker
+class ModelDownloadWorker @AssistedInject constructor(
+    @Assisted context: Context,
+    @Assisted params: WorkerParameters,
+    private val models: ModelDirectory,
+    private val modelRepository: ModelRepository,
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
         val modelId = inputData.getString(ModelRepository.KEY_MODEL_ID)
             ?: return Result.failure()
 
-        val container = AIAgentApplication.instance.container
-        val model = container.findModel(modelId)
+        val model = models.find(modelId)
             ?: return Result.failure(
                 workDataOf(ModelRepository.KEY_ERROR to "That model is no longer in the catalogue."),
             )
@@ -43,7 +47,7 @@ class ModelDownloadWorker(
 
         var lastNotifMs = 0L
         return try {
-            container.modelRepository.performDownload(model) { downloaded, total, rate ->
+            modelRepository.performDownload(model) { downloaded, total, rate ->
                 setProgress(
                     workDataOf(
                         ModelRepository.KEY_DOWNLOADED to downloaded,

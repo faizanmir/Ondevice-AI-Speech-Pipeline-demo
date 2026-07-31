@@ -6,7 +6,8 @@ import com.example.aiagent.engine.core.SamplingParams
 import com.example.aiagent.engine.core.ToolCall
 import com.example.aiagent.engine.core.ToolDefinition
 import com.example.aiagent.engine.core.ToolParameter
-import com.example.aiagenttestapp.AppContainer
+import com.example.aiagenttestapp.functions.AppFunctionDeps
+import com.example.aiagenttestapp.data.Source
 import com.example.aiagenttestapp.ui.components.formatBytes
 import com.example.aiagenttestapp.ui.components.formatParams
 
@@ -28,6 +29,8 @@ data class AppFunctionResult(
     val output: String,
     val navigation: AppNavigation? = null,
     val isError: Boolean = false,
+    /** Web pages this call drew on, surfaced to the user as citations under the reply. */
+    val sources: List<Source> = emptyList(),
 )
 
 /**
@@ -40,7 +43,7 @@ data class AppFunctionResult(
  */
 class AppFunction(
     val definition: ToolDefinition,
-    val invoke: suspend (args: Map<String, String>, container: AppContainer) -> AppFunctionResult,
+    val invoke: suspend (args: Map<String, String>, deps: AppFunctionDeps) -> AppFunctionResult,
 )
 
 /**
@@ -55,8 +58,7 @@ object AppFunctions {
     private val openSettings = AppFunction(
         ToolDefinition(
             name = "open_settings",
-            description = "Open the app's Settings screen, where the user can change the " +
-                "inference engine, the accelerator, and the sampling parameters.",
+            description = "Open the app's Settings screen: engine, accelerator and sampling.",
         ),
     ) { _, _ ->
         AppFunctionResult(
@@ -69,7 +71,7 @@ object AppFunctions {
     private val openModelCatalog = AppFunction(
         ToolDefinition(
             name = "open_model_catalog",
-            description = "Show the list of AI models that can be downloaded and run on this phone.",
+            description = "Show the AI models that can be downloaded and run on this phone.",
         ),
     ) { _, _ ->
         AppFunctionResult(
@@ -108,12 +110,12 @@ object AppFunctions {
     private val getDeviceMemory = AppFunction(
         ToolDefinition(
             name = "get_device_memory",
-            description = "Find out how much memory this phone has and how large a model it can " +
-                "run. Use this whenever the user asks about RAM, storage, or what size of model " +
+            description = "How much RAM and storage this phone has, and the largest model it " +
+                "can run. Use whenever the user asks about RAM, storage, or what size of model " +
                 "fits on their device.",
         ),
-    ) { _, container ->
-        val device = container.deviceMemory
+    ) { _, deps ->
+        val device = deps.deviceMemory
         val maxParams = ParamBudget.maxRunnableParams(
             device = device,
             quantization = Quantization.Q4,
@@ -138,11 +140,11 @@ object AppFunctions {
     private val listDownloadedModels = AppFunction(
         ToolDefinition(
             name = "list_downloaded_models",
-            description = "List the AI models that are already downloaded onto this phone.",
+            description = "List the AI models already downloaded on this phone.",
         ),
-    ) { _, container ->
-        val models = container.allModelsSnapshot()
-            .filter { container.modelRepository.isDownloaded(it) }
+    ) { _, deps ->
+        val models = deps.models.snapshot()
+            .filter { deps.modelRepository.isDownloaded(it) }
 
         AppFunctionResult(
             summary = "Listed downloaded models",
@@ -159,11 +161,11 @@ object AppFunctions {
     private val getCurrentModel = AppFunction(
         ToolDefinition(
             name = "get_current_model",
-            description = "Find out which model, engine and accelerator are running right now. " +
-                "Use this when the user asks what model they are talking to.",
+            description = "Which model, engine and accelerator are running now. Use when the " +
+                "user asks what model they are talking to.",
         ),
-    ) { _, container ->
-        val engine = container.engines.all.firstOrNull { it.loadedModelPath != null }
+    ) { _, deps ->
+        val engine = deps.engines.all.firstOrNull { it.loadedModelPath != null }
 
         AppFunctionResult(
             summary = "Checked the running model",
@@ -185,8 +187,8 @@ object AppFunctions {
     private val setTemperature = AppFunction(
         ToolDefinition(
             name = "set_temperature",
-            description = "Change how creative or focused the AI's replies are. Lower values are " +
-                "more focused and repeatable, higher values more varied.",
+            description = "Change how creative or focused replies are: lower is more focused " +
+                "and repeatable, higher more varied.",
             parameters = listOf(
                 ToolParameter(
                     name = "value",
@@ -195,7 +197,7 @@ object AppFunctions {
                 ),
             ),
         ),
-    ) { args, container ->
+    ) { args, deps ->
         val value = args["value"]?.toFloatOrNull()
 
         if (value == null || value !in 0f..2f) {
@@ -205,7 +207,7 @@ object AppFunctions {
                 isError = true,
             )
         } else {
-            container.settingsStore.update { settings ->
+            deps.settingsStore.update { settings ->
                 settings.copy(sampling = settings.sampling.copy(temperature = value))
             }
             AppFunctionResult(
@@ -220,8 +222,8 @@ object AppFunctions {
             name = "reset_sampling",
             description = "Put the AI's creativity settings back to their defaults.",
         ),
-    ) { _, container ->
-        container.settingsStore.update { it.copy(sampling = SamplingParams()) }
+    ) { _, deps ->
+        deps.settingsStore.update { it.copy(sampling = SamplingParams()) }
         AppFunctionResult(
             summary = "Reset sampling to defaults",
             output = "Sampling is back to the defaults: temperature 0.8, top-P 0.95, top-K 40.",
@@ -236,12 +238,10 @@ object AppFunctions {
     private val webSearch = AppFunction(
         ToolDefinition(
             name = "web_search",
-            description = "Search the web for current, real-time or niche information you do not " +
-                "already know -- news, prices, recent events, documentation, specific facts. " +
-                "Returns short snippets from the top results. Use it whenever the answer may have " +
-                "changed since your training, or when you are unsure of a fact. If you do not have " +
-                "credible, up-to-date information to answer accurately, search rather than guessing " +
-                "or replying that you do not know.",
+            description = "Search the web for current, real-time or niche information -- news, " +
+                "prices, recent events, documentation, specific facts. Use it whenever the answer " +
+                "may have changed since your training, or you are unsure of a fact: search rather " +
+                "than guessing or replying that you do not know.",
             parameters = listOf(
                 ToolParameter(
                     name = "query",
@@ -249,7 +249,7 @@ object AppFunctions {
                 ),
             ),
         ),
-    ) { args, container ->
+    ) { args, deps ->
         val query = args["query"]?.trim().orEmpty()
         if (query.isBlank()) {
             return@AppFunction AppFunctionResult(
@@ -261,7 +261,7 @@ object AppFunctions {
 
         // Fail fast when offline rather than making the model wait out a connection timeout. The
         // model cannot see the network state itself, so it may reach for search while disconnected.
-        if (!container.networkMonitor.isOnline()) {
+        if (!deps.networkMonitor.isOnline()) {
             return@AppFunction AppFunctionResult(
                 summary = "Sorry, device is not connected",
                 output = "This device is not connected to the internet, so the web search could not " +
@@ -271,16 +271,20 @@ object AppFunctions {
             )
         }
 
-        val key = container.settingsStore.settings.value.tavilyApiKey?.takeIf { it.isNotBlank() }
+        val key = deps.settingsStore.settings.value.tavilyApiKey?.takeIf { it.isNotBlank() }
             ?: return@AppFunction AppFunctionResult(
                 summary = "Web search is not set up",
                 output = "Web search is unavailable: no Tavily API key is configured in Settings.",
                 isError = true,
             )
 
-        container.webSearch.search(query, key).fold(
-            onSuccess = { results ->
-                AppFunctionResult(summary = "Searched the web for \"$query\"", output = results)
+        deps.webSearch.search(query, key).fold(
+            onSuccess = { result ->
+                AppFunctionResult(
+                    summary = "Searched the web for \"$query\"",
+                    output = result.text,
+                    sources = result.sources,
+                )
             },
             onFailure = { e ->
                 AppFunctionResult(
@@ -299,17 +303,17 @@ object AppFunctions {
     private val fetchUrl = AppFunction(
         ToolDefinition(
             name = "fetch_url",
-            description = "Read the full text of a specific web page when you already have its URL " +
-                "-- a link from web_search results, or one the user gave you. Returns the page's " +
-                "readable text. Use web_search first if you do not yet have a URL.",
+            description = "Read the full text of a web page you already have the URL for -- " +
+                "from web_search results, or one the user gave you. Use web_search first if you " +
+                "do not yet have a URL.",
             parameters = listOf(
                 ToolParameter(
                     name = "url",
-                    description = "The full URL to read, including the https:// prefix.",
+                    description = "The full URL, including the https:// prefix.",
                 ),
             ),
         ),
-    ) { args, container ->
+    ) { args, deps ->
         val url = args["url"]?.trim().orEmpty()
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
             return@AppFunction AppFunctionResult(
@@ -320,7 +324,7 @@ object AppFunctions {
         }
 
         // Same as web_search: reading a page needs the network, so fail fast and clearly when offline.
-        if (!container.networkMonitor.isOnline()) {
+        if (!deps.networkMonitor.isOnline()) {
             return@AppFunction AppFunctionResult(
                 summary = "Sorry, device is not connected",
                 output = "This device is not connected to the internet, so the page could not be " +
@@ -329,7 +333,7 @@ object AppFunctions {
             )
         }
 
-        val key = container.settingsStore.settings.value.tavilyApiKey?.takeIf { it.isNotBlank() }
+        val key = deps.settingsStore.settings.value.tavilyApiKey?.takeIf { it.isNotBlank() }
             ?: return@AppFunction AppFunctionResult(
                 summary = "Web access is not set up",
                 output = "Reading pages is unavailable: no Tavily API key is configured in Settings.",
@@ -337,8 +341,10 @@ object AppFunctions {
             )
 
         val host = runCatching { java.net.URI(url).host }.getOrNull() ?: "the page"
-        container.webSearch.fetchUrl(url, key).fold(
-            onSuccess = { page -> AppFunctionResult(summary = "Read $host", output = page) },
+        deps.webSearch.fetchUrl(url, key).fold(
+            onSuccess = { page ->
+                AppFunctionResult(summary = "Read $host", output = page.text, sources = page.sources)
+            },
             onFailure = { e ->
                 AppFunctionResult(
                     summary = "Could not read the page",
@@ -374,7 +380,7 @@ object AppFunctions {
     private val byName: Map<String, AppFunction> = all.associateBy { it.definition.name }
 
     /** Runs [call], or reports back that no such function exists so the model can recover. */
-    suspend fun execute(call: ToolCall, container: AppContainer): AppFunctionResult {
+    suspend fun execute(call: ToolCall, deps: AppFunctionDeps): AppFunctionResult {
         val function = byName[call.name]
             ?: return AppFunctionResult(
                 summary = "Unknown function \"${call.name}\"",
@@ -384,7 +390,7 @@ object AppFunctions {
             )
 
         return try {
-            function.invoke(call.arguments, container)
+            function.invoke(call.arguments, deps)
         } catch (e: Exception) {
             AppFunctionResult(
                 summary = "\"${call.name}\" failed",

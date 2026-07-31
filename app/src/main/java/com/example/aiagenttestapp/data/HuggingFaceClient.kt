@@ -1,9 +1,12 @@
 package com.example.aiagenttestapp.data
 
 import com.example.aiagent.engine.core.Accelerator
+import com.example.aiagent.engine.core.DeviceMemoryProfile
+import com.example.aiagent.engine.core.EngineId
 import com.example.aiagent.engine.core.ModelFile
 import com.example.aiagent.engine.core.ModelFormat
 import com.example.aiagent.engine.core.ModelSpec
+import com.example.aiagent.engine.core.ParamBudget
 import com.example.aiagent.engine.core.Quantization
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -57,6 +60,12 @@ data class HfRepoDetail(
     val files: List<HfModelFile>,
 )
 
+/** One page of search results, plus the URL of the next page ([nextUrl]) or null when it is the last. */
+data class HfSearchPage(
+    val repos: List<HfRepo>,
+    val nextUrl: String?,
+)
+
 /**
  * Reads the HuggingFace Hub API.
  *
@@ -83,33 +92,48 @@ class HuggingFaceClient(
      * that search is scoped to the `litert-community` org, which is where Google publishes them.
      */
     suspend fun search(query: String, format: ModelFormat): List<HfRepo> = withContext(Dispatchers.IO) {
-        val encoded = URLEncoder.encode(query, "UTF-8")
+        parseRepoArray(get(searchFirstUrl(query, format, SEARCH_LIMIT)))
+    }
 
-        val url = when (format) {
+    /**
+     * The URL of the first page of results for a query. The paging source fetches this, then follows
+     * the `Link: ...; rel="next"` header for each subsequent page (see [fetchRepoPage]).
+     *
+     * With a query, the Hub ranks by relevance. Forcing sort=downloads buries a specific smaller
+     * model under the more-downloaded members of its family -- a search for "qwen3" would return the
+     * popular 8B/14B GGUFs and never the 1.7B, even though it matches. Only browse mode (a blank
+     * query) sorts by popularity, where "most downloaded" is what you want.
+     */
+    fun searchFirstUrl(query: String, format: ModelFormat, limit: Int): String {
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        val order = if (query.isBlank()) "&sort=downloads&direction=-1" else ""
+        return when (format) {
             ModelFormat.GGUF ->
-                "$API/models?search=$encoded&filter=gguf&limit=$SEARCH_LIMIT" +
-                    "&sort=downloads&direction=-1"
+                "$API/models?search=$encoded&filter=gguf&limit=$limit$order"
 
             ModelFormat.LITERTLM ->
-                "$API/models?search=$encoded&author=litert-community&limit=$SEARCH_LIMIT" +
-                    "&sort=downloads&direction=-1"
+                "$API/models?search=$encoded&author=litert-community&limit=$limit$order"
 
             // Same story as LiteRT-LM: no Hub-wide tag, but Alibaba publishes its MNN LLM
             // exports under one org, so the search is scoped there.
             ModelFormat.MNN ->
-                "$API/models?search=$encoded&author=taobao-mnn&limit=$SEARCH_LIMIT" +
-                    "&sort=downloads&direction=-1"
+                "$API/models?search=$encoded&author=taobao-mnn&limit=$limit$order"
 
             // Unreachable: the Hub search UI only offers the downloadable formats. Gemini Nano is
             // delivered by the OS, not by HuggingFace.
             ModelFormat.AICORE ->
                 throw IllegalArgumentException("AICore models cannot be searched on HuggingFace")
         }
+    }
 
-        val body = get(url)
-        val array = json.parseToJsonElement(body).jsonArray
+    /** Fetches one page of results at [url] and the URL of the next page from the `Link` header. */
+    suspend fun fetchRepoPage(url: String): HfSearchPage = withContext(Dispatchers.IO) {
+        val (body, next) = getWithNext(url)
+        HfSearchPage(repos = parseRepoArray(body), nextUrl = next)
+    }
 
-        array.mapNotNull { element ->
+    private fun parseRepoArray(body: String): List<HfRepo> =
+        json.parseToJsonElement(body).jsonArray.mapNotNull { element ->
             val obj = element.jsonObject
             val id = obj.string("id") ?: obj.string("modelId") ?: return@mapNotNull null
             HfRepo(
@@ -120,6 +144,21 @@ class HuggingFaceClient(
                 gated = obj.isGated(),
             )
         }
+
+    /**
+     * The search-result summary for a single repo by id, for the "paste a HuggingFace link" path --
+     * a repo the user names directly, which search may never have surfaced (see the sort note above).
+     */
+    suspend fun repo(repoId: String): HfRepo = withContext(Dispatchers.IO) {
+        val obj = json.parseToJsonElement(get("$API/models/$repoId")).jsonObject
+        val id = obj.string("id") ?: obj.string("modelId") ?: repoId
+        HfRepo(
+            id = id,
+            author = obj.string("author") ?: id.substringBefore('/'),
+            downloads = obj.long("downloads") ?: 0L,
+            likes = obj.int("likes") ?: 0,
+            gated = obj.isGated(),
+        )
     }
 
     /** Everything needed to turn a repo into runnable [ModelSpec]s: metadata plus the file list. */
@@ -216,7 +255,10 @@ class HuggingFaceClient(
         )
     }.sortedBy { it.sizeBytes }
 
-    private fun get(url: String): String {
+    private fun get(url: String): String = getWithNext(url).first
+
+    /** GET [url], returning the body and the next-page URL from the `Link` header (null if last). */
+    private fun getWithNext(url: String): Pair<String, String?> {
         val request = Request.Builder()
             .url(url)
             .apply {
@@ -236,7 +278,9 @@ class HuggingFaceClient(
                     },
                 )
             }
-            return response.body?.string() ?: throw IOException("Empty response from HuggingFace")
+            val body = response.body?.string() ?: throw IOException("Empty response from HuggingFace")
+            val next = response.header("Link")?.let { NEXT_LINK.find(it)?.groupValues?.get(1) }
+            return body to next
         }
     }
 
@@ -245,6 +289,9 @@ class HuggingFaceClient(
         const val SEARCH_LIMIT = 30
 
         val SPLIT_FILE = Regex("""-\d{5}-of-\d{5}\.""")
+
+        /** The `<url>; rel="next"` entry of a HuggingFace `Link` header -- the cursor to the next page. */
+        val NEXT_LINK = Regex("""<([^>]+)>;\s*rel="next"""")
 
         /** `gated` is `false`, `"auto"`, or `"manual"` -- a boolean *or* a string, so test both. */
         fun JsonObject.isGated(): Boolean {
@@ -264,6 +311,35 @@ class HuggingFaceClient(
         fun JsonObject.long(key: String): Long? = this[key]?.jsonPrimitive?.longOrNull
         fun JsonObject.int(key: String): Int? = this[key]?.jsonPrimitive?.intOrNull
     }
+}
+
+/** A HuggingFace reference a user pasted: the repo, plus the specific file if the link named one. */
+data class HfRef(val repoId: String, val filePath: String?)
+
+/**
+ * Parses a pasted HuggingFace reference into a repo id, and the file path when the link points at a
+ * file. Accepts a full URL (`.../owner/repo`, `.../owner/repo/resolve/main/model.gguf`, `/blob/`,
+ * `/tree/`, with or without scheme, `www.` or `hf.co`) or a bare `owner/repo` id. Returns null for
+ * anything that is not a two-segment repo reference -- an ordinary search query, in other words, so
+ * the Hub screen can tell a link to open from text to search for.
+ */
+internal fun parseHuggingFaceRef(input: String): HfRef? {
+    var s = input.trim()
+    if (s.isEmpty()) return null
+    s = s.removePrefix("https://").removePrefix("http://").removePrefix("www.")
+    s = s.removePrefix("huggingface.co/").removePrefix("hf.co/").trim('/')
+
+    val segments = s.split('/').filter { it.isNotEmpty() }
+    if (segments.size < 2 || segments[0].isBlank() || segments[1].isBlank()) return null
+
+    val repoId = "${segments[0]}/${segments[1]}"
+    // .../resolve/<ref>/<path...> or .../blob/<ref>/<path...> names a specific file.
+    val filePath = if (segments.size >= 5 && (segments[2] == "resolve" || segments[2] == "blob")) {
+        segments.drop(4).joinToString("/").substringBefore('?')
+    } else {
+        null
+    }
+    return HfRef(repoId, filePath)
 }
 
 /** Pulls "1.5B" / "360M" out of a repo name, for repos with no published parameter count. */
@@ -291,17 +367,19 @@ internal fun parseParamsFromName(name: String): Double? =
  * hardware the way Google's allowlist tiers were, so it carries no curated tier and the fit check
  * falls through to the computed RAM formula, which is the only honest authority available here.
  */
-fun HfRepoDetail.toModelSpec(file: HfModelFile): ModelSpec {
+fun HfRepoDetail.toModelSpec(file: HfModelFile, device: DeviceMemoryProfile): ModelSpec {
     val name = id.substringAfter('/')
+
+    // A missing parameter count only affects the KV-cache term. Infer from file size rather than
+    // give up: at this quantization, bytes/param is at least a usable approximation.
+    val resolvedParams = paramsBillions
+        ?: (file.sizeBytes / 1_000_000_000.0 / file.quantization.bytesPerWeight)
 
     return ModelSpec(
         id = "hf:$id:${file.path}",
         name = name,
         vendor = id.substringBefore('/'),
-        // A missing parameter count only affects the KV-cache term. Infer from file size rather
-        // than give up: at this quantization, bytes/param is at least a usable approximation.
-        paramsBillions = paramsBillions
-            ?: (file.sizeBytes / 1_000_000_000.0 / file.quantization.bytesPerWeight),
+        paramsBillions = resolvedParams,
         quantization = file.quantization,
         format = file.format,
         downloadUrl = "https://huggingface.co/$id/resolve/main/${file.path}?download=true",
@@ -314,9 +392,17 @@ fun HfRepoDetail.toModelSpec(file: HfModelFile): ModelSpec {
             "${id.replace('/', '_')}/${file.path}"
         },
         sizeBytes = file.sizeBytes,
-        // Cap the context we actually allocate. Modern GGUFs advertise 32K or 128K, and honouring
-        // that would reserve gigabytes of KV cache on a phone -- far more than the weights.
-        contextTokens = (contextTokens ?: DEFAULT_CONTEXT).coerceAtMost(MAX_CONTEXT),
+        // Context window sized to THIS device, not a flat cap. Honour the length the GGUF
+        // advertises (its real training context) when the KV cache fits the device's RAM budget,
+        // and trim it to what fits when it does not -- so a 128K model runs at 128K on a phone that
+        // can hold the cache and at a smaller window on one that cannot, instead of everything
+        // being pinned to 4096. See [deviceContext].
+        contextTokens = deviceContext(
+            advertised = contextTokens ?: DEFAULT_CONTEXT,
+            file = file,
+            paramsBillions = resolvedParams,
+            device = device,
+        ),
         minDeviceMemoryGb = 0,
         accelerators = when (file.format) {
             ModelFormat.GGUF -> setOf(Accelerator.CPU)
@@ -338,5 +424,42 @@ fun HfRepoDetail.toModelSpec(file: HfModelFile): ModelSpec {
     )
 }
 
+/**
+ * The context window to give a HuggingFace model on THIS device: the length it [advertised], capped
+ * by the largest KV cache the device's RAM budget can actually hold for a model this size.
+ *
+ * The cap is computed against CPU -- the most pessimistic accelerator for every engine here, since
+ * CPU keeps the weights fully resident and so leaves the least room for KV -- so we never size a
+ * cache the device cannot afford. The result is rounded down to a whole [CONTEXT_GRANULARITY] block
+ * (the estimate runs high, so under-fill) and floored at [MIN_CONTEXT] so a tight device still gets
+ * a usable window rather than a few hundred tokens; a model that genuinely will not fit is caught
+ * separately by ModelFitEvaluator, which reports it as EXCEEDS_MEMORY.
+ */
+private fun deviceContext(
+    advertised: Int,
+    file: HfModelFile,
+    paramsBillions: Double,
+    device: DeviceMemoryProfile,
+): Int {
+    val engine = when (file.format) {
+        ModelFormat.GGUF -> EngineId.LLAMA_CPP
+        ModelFormat.LITERTLM -> EngineId.LITE_RT_LM
+        ModelFormat.MNN -> EngineId.MNN
+        // Unreachable: AICore models never come from HuggingFace. Nothing to size -- honour as-is.
+        ModelFormat.AICORE -> return advertised
+    }
+    val deviceMax = ParamBudget.maxRunnableContext(
+        budgetBytes = device.modelRamBudgetBytes,
+        weightsBytes = file.sizeBytes,
+        paramsBillions = paramsBillions,
+        engine = engine,
+        accelerator = Accelerator.CPU,
+    )
+    val capped = advertised.coerceAtMost(deviceMax.coerceAtLeast(MIN_CONTEXT))
+    return (capped / CONTEXT_GRANULARITY) * CONTEXT_GRANULARITY
+}
+
+/** Fallback context when a GGUF advertises none, and the window a tight device is still given. */
 private const val DEFAULT_CONTEXT = 4096
-private const val MAX_CONTEXT = 4096
+private const val MIN_CONTEXT = 1024
+private const val CONTEXT_GRANULARITY = 256

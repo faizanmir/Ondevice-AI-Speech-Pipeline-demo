@@ -10,6 +10,12 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+/** A web page the model consulted, surfaced to the user as a citation under the reply. */
+data class Source(val title: String, val url: String)
+
+/** A web-tool result: [text] is fed to the model, [sources] are shown to the user as citations. */
+data class WebSearchResult(val text: String, val sources: List<Source>)
+
 /**
  * Web search via Tavily, an LLM-oriented search API: it returns clean snippets and a synthesised
  * answer rather than raw HTML, which matters because the on-device model has only a few thousand
@@ -17,7 +23,7 @@ import java.util.concurrent.TimeUnit
  *
  * The model never touches the network itself. It emits a `web_search` tool call, this makes the
  * request, and the text comes back into its context. The search *query* leaves the device; nothing
- * else does.
+ * else does. The pages it drew on come back as [Source]s too, so the user can see and open them.
  */
 class WebSearchClient {
 
@@ -26,8 +32,8 @@ class WebSearchClient {
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    /** Runs one search. Returns text formatted for the model, or a failure with a user-facing reason. */
-    suspend fun search(query: String, apiKey: String): Result<String> = withContext(Dispatchers.IO) {
+    /** Runs one search. Returns text for the model plus the sources, or a user-facing failure. */
+    suspend fun search(query: String, apiKey: String): Result<WebSearchResult> = withContext(Dispatchers.IO) {
         val payload = JSONObject()
             .put("query", query)
             .put("search_depth", "basic")
@@ -53,7 +59,8 @@ class WebSearchClient {
                     }
                     return@withContext Result.failure(IOException(reason))
                 }
-                Result.success(formatForModel(query, JSONObject(body)))
+                val json = JSONObject(body)
+                Result.success(WebSearchResult(formatForModel(query, json), extractSources(json)))
             }
         } catch (e: Exception) {
             Result.failure(e)
@@ -65,7 +72,7 @@ class WebSearchClient {
      * HTML -- again because the model has little context to spend. Returns text formatted for the
      * model, or a failure with a user-facing reason.
      */
-    suspend fun fetchUrl(url: String, apiKey: String): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun fetchUrl(url: String, apiKey: String): Result<WebSearchResult> = withContext(Dispatchers.IO) {
         val payload = JSONObject()
             .put("urls", url) // Tavily accepts a single URL string or an array
             .put("extract_depth", "basic")
@@ -107,12 +114,29 @@ class WebSearchClient {
                     )
                 }
 
-                Result.success(formatPage(url, content))
+                Result.success(
+                    WebSearchResult(formatPage(url, content), listOf(Source(hostOf(url), url))),
+                )
             }
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
+
+    /** The pages behind the top results, as citations. */
+    private fun extractSources(json: JSONObject): List<Source> {
+        val results = json.optJSONArray("results") ?: return emptyList()
+        val count = minOf(results.length(), MAX_RESULTS)
+        return (0 until count).mapNotNull { i ->
+            val result = results.getJSONObject(i)
+            val url = result.optString("url")
+            if (url.isBlank()) null
+            else Source(title = result.optString("title").ifBlank { hostOf(url) }, url = url)
+        }
+    }
+
+    private fun hostOf(url: String): String =
+        runCatching { java.net.URI(url).host }.getOrNull()?.removePrefix("www.") ?: url
 
     private fun formatPage(url: String, content: String): String = buildString {
         appendLine("Content of $url:")

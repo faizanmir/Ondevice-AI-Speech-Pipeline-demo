@@ -46,7 +46,8 @@ class CustomModelStore(context: Context) {
     /** Adding a model already present is a no-op, so re-adding from search cannot duplicate it. */
     fun add(model: ModelSpec) {
         if (_models.value.any { it.id == model.id }) return
-        persist(_models.value + model)
+        // Stamp the add time so the catalogue can offer a "newest first" sort.
+        persist(_models.value + model.copy(addedAtMillis = System.currentTimeMillis()))
     }
 
     fun remove(modelId: String) {

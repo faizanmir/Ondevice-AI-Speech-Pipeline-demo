@@ -37,22 +37,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.aiagent.engine.core.ModelFit
 import com.example.aiagent.engine.core.ModelFitEvaluator
 import com.example.aiagent.engine.core.ModelSpec
-import com.example.aiagenttestapp.AppContainer
 import com.example.aiagenttestapp.data.MnnMarketModel
 import com.example.aiagenttestapp.ui.components.FitBadge
 import com.example.aiagenttestapp.ui.components.GridCardMinWidth
 import com.example.aiagenttestapp.ui.components.formatBytes
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import com.example.aiagenttestapp.ui.mvi.MviViewModel
+import com.example.aiagenttestapp.ui.mvi.UiIntent
+import com.example.aiagenttestapp.ui.mvi.UiState
 import kotlinx.coroutines.launch
+import com.example.aiagenttestapp.data.MnnMarketClient
+import com.example.aiagenttestapp.data.CustomModelStore
+import com.example.aiagent.engine.core.EngineRegistry
+import com.example.aiagent.engine.core.DeviceMemoryProfile
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 /** A market entry opened for a closer look: its real file list fetched, its fit judged. */
 data class MnnMarketDetail(
@@ -72,7 +75,7 @@ data class MnnMarketUiState(
     val openModel: MnnMarketModel? = null,
     val openDetail: MnnMarketDetail? = null,
     val isLoadingDetail: Boolean = false,
-) {
+) : UiState {
     /** Client-side filter: the market is one small JSON, so no per-keystroke requests. */
     val visibleModels: List<MnnMarketModel>
         get() = if (query.isBlank()) models else models.filter {
@@ -81,93 +84,110 @@ data class MnnMarketUiState(
         }
 }
 
+sealed interface MnnMarketIntent : UiIntent {
+    /** Re-fetches the market list. Self-dispatched once when the tab's ViewModel is created. */
+    data object Refresh : MnnMarketIntent
+    data class QueryChanged(val query: String) : MnnMarketIntent
+    /** Expands an entry, or collapses it when it is already the open one. */
+    data class Open(val model: MnnMarketModel) : MnnMarketIntent
+    data class Add(val detail: MnnMarketDetail) : MnnMarketIntent
+    data class Remove(val detail: MnnMarketDetail) : MnnMarketIntent
+}
+
 /**
  * The MNN tab: Alibaba's own model market (the list MnnLlmChat ships), downloading from
  * ModelScope -- no HuggingFace involved.
  */
-class MnnMarketViewModel(private val container: AppContainer) : ViewModel() {
-
-    private val _uiState = MutableStateFlow(MnnMarketUiState())
-    val uiState: StateFlow<MnnMarketUiState> = _uiState.asStateFlow()
+@HiltViewModel
+class MnnMarketViewModel @Inject constructor(
+    private val mnnMarket: MnnMarketClient,
+    private val customModelStore: CustomModelStore,
+    private val engines: EngineRegistry,
+    private val deviceMemory: DeviceMemoryProfile,
+) : MviViewModel<MnnMarketUiState, MnnMarketIntent, Nothing>(MnnMarketUiState()) {
 
     init {
-        refresh()
+        onIntent(MnnMarketIntent.Refresh)
     }
 
-    fun refresh() {
+    override fun reduce(intent: MnnMarketIntent) = when (intent) {
+        MnnMarketIntent.Refresh -> refresh()
+        is MnnMarketIntent.QueryChanged -> setState { copy(query = intent.query) }
+        is MnnMarketIntent.Open -> open(intent.model)
+        is MnnMarketIntent.Add -> add(intent.detail)
+        is MnnMarketIntent.Remove -> remove(intent.detail)
+    }
+
+    private fun refresh() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null) }
+            setState { copy(isLoading = true, error = null) }
             try {
-                val models = container.mnnMarket.fetchMarket()
-                _uiState.update {
-                    it.copy(
+                val models = mnnMarket.fetchMarket()
+                setState {
+                    copy(
                         isLoading = false,
                         models = models,
                         addedIds = models
                             .map(MnnMarketModel::specId)
-                            .filter(container.customModelStore::contains)
+                            .filter(customModelStore::contains)
                             .toSet(),
                     )
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(isLoading = false, error = e.message ?: "Could not reach the MNN market")
+                setState {
+                    copy(isLoading = false, error = e.message ?: "Could not reach the MNN market")
                 }
             }
         }
     }
 
-    fun onQueryChange(query: String) {
-        _uiState.update { it.copy(query = query) }
-    }
-
     /** Expands an entry: fetches its file list from ModelScope and judges it against this device. */
-    fun open(model: MnnMarketModel) {
-        if (_uiState.value.openModel?.specId == model.specId) {
-            _uiState.update { it.copy(openModel = null, openDetail = null) }
+    private fun open(model: MnnMarketModel) {
+        if (currentState.openModel?.specId == model.specId) {
+            setState { copy(openModel = null, openDetail = null) }
             return
         }
 
-        _uiState.update { it.copy(openModel = model, openDetail = null, isLoadingDetail = true) }
+        setState { copy(openModel = model, openDetail = null, isLoadingDetail = true) }
         viewModelScope.launch {
             try {
-                val spec = container.mnnMarket.modelSpec(model)
-                val engine = container.engines.defaultFor(spec)?.descriptor
-                    ?: container.engines.all.map { it.descriptor }
+                val spec = mnnMarket.modelSpec(model)
+                val engine = engines.defaultFor(spec)?.descriptor
+                    ?: engines.all.map { it.descriptor }
                         .firstOrNull { it.canLoad(spec.format) }
                     ?: error("MNN engine is not part of this build")
-                val fit = ModelFitEvaluator.evaluateBest(spec, engine, container.deviceMemory)
-                _uiState.update {
+                val fit = ModelFitEvaluator.evaluateBest(spec, engine, deviceMemory)
+                setState {
                     // Only publish if this entry is still the open one; a slow response must not
                     // attach itself to whatever the user opened next.
-                    if (it.openModel?.specId == model.specId) {
-                        it.copy(openDetail = MnnMarketDetail(spec, fit), isLoadingDetail = false)
-                    } else it
+                    if (openModel?.specId == model.specId) {
+                        copy(openDetail = MnnMarketDetail(spec, fit), isLoadingDetail = false)
+                    } else this
                 }
             } catch (e: Exception) {
-                _uiState.update {
-                    if (it.openModel?.specId == model.specId) {
-                        it.copy(
+                setState {
+                    if (openModel?.specId == model.specId) {
+                        copy(
                             isLoadingDetail = false,
                             openModel = null,
                             error = e.message ?: "Could not open ${model.name}",
                         )
-                    } else it
+                    } else this
                 }
             }
         }
     }
 
-    fun add(detail: MnnMarketDetail) {
-        container.customModelStore.add(detail.spec)
-        _uiState.update { it.copy(addedIds = it.addedIds + detail.spec.id) }
+    private fun add(detail: MnnMarketDetail) {
+        customModelStore.add(detail.spec)
+        setState { copy(addedIds = addedIds + detail.spec.id) }
     }
 
-    fun remove(detail: MnnMarketDetail) {
-        container.customModelStore.remove(detail.spec.id)
-        _uiState.update { it.copy(addedIds = it.addedIds - detail.spec.id) }
+    private fun remove(detail: MnnMarketDetail) {
+        customModelStore.remove(detail.spec.id)
+        setState { copy(addedIds = addedIds - detail.spec.id) }
     }
 }
 
@@ -176,12 +196,12 @@ fun MnnMarketContent(
     viewModel: MnnMarketViewModel,
     modifier: Modifier = Modifier,
 ) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val state by viewModel.state.collectAsStateWithLifecycle()
 
     Column(modifier) {
         OutlinedTextField(
             value = state.query,
-            onValueChange = viewModel::onQueryChange,
+            onValueChange = { viewModel.onIntent(MnnMarketIntent.QueryChanged(it)) },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -236,9 +256,9 @@ fun MnnMarketContent(
                             state.openDetail
                         } else null,
                         isAdded = model.specId in state.addedIds,
-                        onClick = { viewModel.open(model) },
-                        onAdd = viewModel::add,
-                        onRemove = viewModel::remove,
+                        onClick = { viewModel.onIntent(MnnMarketIntent.Open(model)) },
+                        onAdd = { viewModel.onIntent(MnnMarketIntent.Add(it)) },
+                        onRemove = { viewModel.onIntent(MnnMarketIntent.Remove(it)) },
                     )
                 }
             }

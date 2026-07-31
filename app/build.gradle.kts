@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt)
 }
 
 /**
@@ -10,25 +11,38 @@ plugins {
  */
 ksp {
     arg("appfunctions:aggregateAppFunctions", "true")
+
+    // Export Room's schema JSON. Hand-written migrations have to reproduce Room's generated DDL
+    // *exactly* -- it compares an identity hash on first open and throws if they differ -- so having
+    // the real schema checked in is the difference between verifying a migration and guessing at it.
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 /**
  * Ship the AppFunctions metadata that KSP generates.
  *
  * The AppFunctions compiler writes `app_functions.xml` -- the manifest of what this app exposes --
- * into KSP's *resources* output directory, and the merged manifest points the system at it as an
- * asset. AGP 9's built-in Kotlin does not wire that directory into the Android asset set the way
- * the standalone Kotlin plugin does, so without this the APK ships the manifest `<property>` and
- * not the file it names.
+ * into KSP's *resources* output directory, under an `assets/` path, and the merged manifest points
+ * the system at it as an asset. The failure mode if it does not ship is silent and total: the app
+ * installs, the service is enabled, nothing errors, and
+ * `adb shell cmd app_function list-app-functions` simply never lists this package.
  *
- * The failure is silent and total: the app installs, the service is enabled, nothing errors, and
- * `adb shell cmd app_function list-app-functions` simply never lists this package. Worth the
- * explicit wiring to avoid.
+ * It used to be copied in by hand, by registering KSP's output as an extra `assets.srcDir`. That is
+ * no longer needed *and* actively breaks packaging: with the Hilt plugin's ASM transform in the
+ * pipeline, KSP's resources output also reaches `processDebugJavaRes`, which packages it at
+ * `assets/app_functions.xml` on its own. Both routes then write the same entry and `packageDebug`
+ * fails with "already contains entry 'assets/app_functions.xml'".
+ *
+ * So the copy is left to the resources path, which delivers it unaided -- verified by unzipping the
+ * APK and confirming `assets/app_functions.xml` is present.
  */
 tasks.configureEach {
     // dependsOn(String), not tasks.named(...): KSP registers its tasks after this block is
     // configured, so resolving them eagerly throws UnknownTaskException. A name is resolved when
     // the task graph is built, by which point KSP has registered.
+    //
+    // Kept even though the asset now travels the resources path: the merged *manifest* still names
+    // the file, and ordering the asset merge after KSP costs nothing.
     when (name) {
         "mergeDebugAssets" -> dependsOn("kspDebugKotlin")
         "mergeReleaseAssets" -> dependsOn("kspReleaseKotlin")
@@ -78,21 +92,9 @@ android {
         compose = true
     }
 
-    // See the androidComponents block above: KSP's generated assets are not picked up automatically
-    // under AGP 9's built-in Kotlin, so the AppFunctions metadata is added to the asset set by hand.
-    //
-    // Plain path strings rather than layout.buildDirectory providers: AGP rejects Providers in the
-    // SourceSet API (it cannot tell generated from static), and its suggested Variant API needs a
-    // task with a DirectoryProperty output that KSP does not expose. A literal path sidesteps both,
-    // and the task ordering AGP would otherwise infer is declared explicitly above.
-    sourceSets {
-        getByName("debug") {
-            assets.srcDir("build/generated/ksp/debug/resources/assets")
-        }
-        getByName("release") {
-            assets.srcDir("build/generated/ksp/release/resources/assets")
-        }
-    }
+    // No `assets.srcDir` for KSP's output here -- see the comment on tasks.configureEach above.
+    // Registering it duplicates an entry that the Java-resources path already packages, and the
+    // duplicate is a hard packaging failure rather than a warning.
 
     packaging {
         // Both engines ship their own libc++_shared.so. Without this, merging them into one APK
@@ -107,6 +109,13 @@ android {
 }
 
 dependencies {
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
+    // Constructor injection into WorkManager workers, and hiltViewModel() from Compose.
+    implementation(libs.hilt.work)
+    implementation(libs.hilt.navigation.compose)
+    ksp(libs.androidx.hilt.compiler)
+
     implementation(project(":engine-core"))
     implementation(project(":engine-aicore"))
     implementation(project(":engine-litertlm"))
@@ -124,6 +133,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.paging.runtime)
+    implementation(libs.androidx.paging.compose)
+    implementation(libs.pdfbox.android)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
 
@@ -157,12 +169,19 @@ dependencies {
             "${libs.versions.sherpaOnnx.get()}@aar",
     )
 
+    // bzip2 + tar. Needed for exactly one thing: sherpa-onnx publishes its keyword-spotting models
+    // only as .tar.bz2 attachments on GitHub releases -- no per-file mirror exists -- and the Android
+    // runtime ships neither codec. Every other model this app downloads is a plain file.
+    implementation(libs.commons.compress)
+
     // Saved notes.
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
 
     testImplementation(libs.junit)
+    // Drives the MVI base class's coroutines deterministically -- see MviViewModelTest.
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

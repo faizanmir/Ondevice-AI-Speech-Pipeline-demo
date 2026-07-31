@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material3.DropdownMenu
@@ -30,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,9 +62,10 @@ fun CatalogScreen(
     onSignIn: () -> Unit,
     onBack: () -> Unit,
 ) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
-    var tab by remember { mutableIntStateOf(TAB_DOWNLOADED) }
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    var tab by rememberSaveable { mutableIntStateOf(TAB_DOWNLOADED) }
     var filterMenuOpen by remember { mutableStateOf(false) }
+    var sortMenuOpen by remember { mutableStateOf(false) }
 
     val downloaded = state.entries.filter { it.downloadState is DownloadState.Downloaded }
 
@@ -76,9 +79,23 @@ fun CatalogScreen(
                     }
                 },
                 actions = {
-                    // The engine filter drives the two model-list tabs; the HuggingFace and MNN
-                    // tabs have their own search, so the filter is hidden there.
+                    // Sort and engine filter drive the two model-list tabs; the HuggingFace and MNN
+                    // tabs have their own search, so both are hidden there.
                     if (tab == TAB_DOWNLOADED || tab == TAB_CATALOG) {
+                        Box {
+                            IconButton(onClick = { sortMenuOpen = true }) {
+                                Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort")
+                            }
+                            SortMenu(
+                                expanded = sortMenuOpen,
+                                selected = state.sort,
+                                onSelect = {
+                                    viewModel.onIntent(CatalogIntent.SortChanged(it))
+                                    sortMenuOpen = false
+                                },
+                                onDismiss = { sortMenuOpen = false },
+                            )
+                        }
                         Box {
                             IconButton(onClick = { filterMenuOpen = true }) {
                                 Icon(Icons.Default.FilterList, contentDescription = "Filter")
@@ -88,7 +105,7 @@ fun CatalogScreen(
                                 options = state.engineOptions,
                                 selected = state.engineFilter,
                                 onSelect = {
-                                    viewModel.setEngineFilter(it)
+                                    viewModel.onIntent(CatalogIntent.EngineFilterChanged(it))
                                     filterMenuOpen = false
                                 },
                                 onDismiss = { filterMenuOpen = false },
@@ -158,7 +175,9 @@ fun CatalogScreen(
                             device = state.device,
                             quantization = state.budgetQuantization,
                             maxParamsBillions = state.maxParamsBillions,
-                            onQuantizationChange = viewModel::setBudgetQuantization,
+                            onQuantizationChange = {
+                                viewModel.onIntent(CatalogIntent.BudgetQuantizationChanged(it))
+                            },
                         )
                     },
                     emptyText = "No models match this filter.",
@@ -222,18 +241,46 @@ private fun ModelList(
         }
 
         items(entries, key = { it.model.id }) { entry ->
+            // The card's confirm-dialog state, hoisted out of ModelCard. Keyed item scope keeps
+            // it with this model across list changes.
+            var pendingConfirmation by remember {
+                mutableStateOf<ModelCardConfirmation?>(null)
+            }
             ModelCard(
                 entry = entry,
-                onDownload = { viewModel.download(entry.model) },
-                onCancelDownload = { viewModel.cancelDownload(entry.model) },
+                pendingConfirmation = pendingConfirmation,
+                onPendingConfirmationChange = { pendingConfirmation = it },
+                onDownload = { viewModel.onIntent(CatalogIntent.Download(entry.model)) },
+                onCancelDownload = { viewModel.onIntent(CatalogIntent.CancelDownload(entry.model)) },
                 onOpenChat = { onOpenChat(entry.model) },
-                onDeleteDownload = { viewModel.delete(entry.model) },
-                onRemoveCustom = { viewModel.removeCustom(entry.model) },
+                onDeleteDownload = { viewModel.onIntent(CatalogIntent.DeleteDownload(entry.model)) },
+                onRemoveCustom = { viewModel.onIntent(CatalogIntent.RemoveCustom(entry.model)) },
                 onSignIn = onSignIn,
                 // Tapping the card body is a shortcut into chat, so it respects the same gate as the
                 // Chat button -- otherwise it opens a chat for a model that is not downloaded or does
                 // not fit, which just shows an error.
                 onClick = { if (entry.isReadyToChat) onOpenDetail(entry.model) },
+            )
+        }
+    }
+}
+
+/** Sort order as a dropdown, mirroring the engine filter. */
+@Composable
+private fun SortMenu(
+    expanded: Boolean,
+    selected: CatalogSort,
+    onSelect: (CatalogSort) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        CatalogSort.entries.forEach { option ->
+            DropdownMenuItem(
+                text = { Text(option.label) },
+                onClick = { onSelect(option) },
+                trailingIcon = {
+                    if (selected == option) Icon(Icons.Default.Check, contentDescription = null)
+                },
             )
         }
     }

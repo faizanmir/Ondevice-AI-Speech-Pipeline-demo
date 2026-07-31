@@ -19,13 +19,23 @@ REPO="https://github.com/alibaba/MNN.git"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 dest="${script_dir}/../engine-mnn/third_party/MNN"
 
-if [ -d "${dest}/.git" ]; then
-  current="$(git -C "${dest}" describe --tags --always 2>/dev/null || echo unknown)"
-  if [ "${current}" = "${TAG}" ]; then
-    echo "MNN already vendored at ${TAG}"
-    exit 0
+if [ -e "${dest}" ]; then
+  current=""
+  if [ -d "${dest}/.git" ]; then
+    current="$(git -C "${dest}" describe --tags --always 2>/dev/null || echo unknown)"
+    if [ "${current}" = "${TAG}" ]; then
+      echo "MNN already vendored at ${TAG}"
+      exit 0
+    fi
   fi
-  echo "MNN is at ${current}, want ${TAG} -- re-cloning"
+  # dest exists but is not a clean checkout at ${TAG}: wrong tag, a trimmed
+  # (non-git) source tree, or a partial/broken clone. git clone refuses to
+  # write into a non-empty directory, so clear it out for a clean slate.
+  if [ -n "${current}" ]; then
+    echo "MNN is at ${current}, want ${TAG} -- re-cloning"
+  else
+    echo "MNN at ${dest} is not a git checkout -- re-cloning"
+  fi
   rm -rf "${dest}"
 fi
 

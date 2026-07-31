@@ -18,6 +18,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,8 +32,55 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.aiagenttestapp.data.HfAccount
 import com.example.aiagenttestapp.data.HuggingFaceAuth
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+
+/**
+ * Holds the sign-in form's state and drives token verification, so the composables below stay
+ * stateless. Create via [rememberHuggingFaceSignInState].
+ */
+@Stable
+class HuggingFaceSignInState(
+    private val auth: HuggingFaceAuth,
+    private val scope: CoroutineScope,
+) {
+    var tokenInput by mutableStateOf("")
+        private set
+    var isVerifying by mutableStateOf(false)
+        private set
+    var error by mutableStateOf<String?>(null)
+        private set
+
+    fun onTokenChange(value: String) {
+        tokenInput = value
+        error = null
+    }
+
+    fun signIn() {
+        isVerifying = true
+        error = null
+        scope.launch {
+            val result = auth.signIn(tokenInput)
+            isVerifying = false
+            result.onSuccess { tokenInput = "" }
+            result.onFailure { error = it.message ?: "Could not sign in" }
+        }
+    }
+
+    fun signOut() {
+        auth.signOut()
+        tokenInput = ""
+        error = null
+    }
+}
+
+@Composable
+fun rememberHuggingFaceSignInState(auth: HuggingFaceAuth): HuggingFaceSignInState {
+    val scope = rememberCoroutineScope()
+    return remember(auth) { HuggingFaceSignInState(auth, scope) }
+}
 
 /**
  * Sign in to HuggingFace with a personal access token.
@@ -40,16 +88,35 @@ import kotlinx.coroutines.launch
  * A pasted token rather than OAuth: it is what HuggingFace's own tooling uses, it needs no client
  * secret shipped inside the APK, and it lets the user issue a read-only token scoped to exactly
  * this purpose and revoke it independently.
+ *
+ * Stateful entry point; the stateless overload below takes the hoisted state directly.
  */
 @Composable
 fun HuggingFaceAccountSection(auth: HuggingFaceAuth) {
     val account by auth.account.collectAsStateWithLifecycle()
-    val scope = rememberCoroutineScope()
+    val signInState = rememberHuggingFaceSignInState(auth)
 
-    var tokenInput by remember { mutableStateOf("") }
-    var isVerifying by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    HuggingFaceAccountSection(
+        account = account,
+        tokenInput = signInState.tokenInput,
+        isVerifying = signInState.isVerifying,
+        error = signInState.error,
+        onTokenChange = signInState::onTokenChange,
+        onSignIn = signInState::signIn,
+        onSignOut = signInState::signOut,
+    )
+}
 
+@Composable
+fun HuggingFaceAccountSection(
+    account: HfAccount?,
+    tokenInput: String,
+    isVerifying: Boolean,
+    error: String?,
+    onTokenChange: (String) -> Unit,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+) {
     if (account != null) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
@@ -61,21 +128,17 @@ fun HuggingFaceAccountSection(auth: HuggingFaceAuth) {
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    text = account?.fullName ?: account!!.username,
+                    text = account.fullName ?: account.username,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                 )
                 Text(
-                    text = "@${account!!.username}",
+                    text = "@${account.username}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            OutlinedButton(onClick = {
-                auth.signOut()
-                tokenInput = ""
-                error = null
-            }) {
+            OutlinedButton(onClick = onSignOut) {
                 Text("Sign out")
             }
         }
@@ -106,10 +169,7 @@ fun HuggingFaceAccountSection(auth: HuggingFaceAuth) {
 
     OutlinedTextField(
         value = tokenInput,
-        onValueChange = {
-            tokenInput = it
-            error = null
-        },
+        onValueChange = onTokenChange,
         modifier = Modifier.fillMaxWidth(),
         label = { Text("Access token") },
         placeholder = { Text("hf_...") },
@@ -129,16 +189,7 @@ fun HuggingFaceAccountSection(auth: HuggingFaceAuth) {
     )
 
     Button(
-        onClick = {
-            isVerifying = true
-            error = null
-            scope.launch {
-                val result = auth.signIn(tokenInput)
-                isVerifying = false
-                result.onSuccess { tokenInput = "" }
-                result.onFailure { error = it.message ?: "Could not sign in" }
-            }
-        },
+        onClick = onSignIn,
         enabled = tokenInput.isNotBlank() && !isVerifying,
         modifier = Modifier.fillMaxWidth(),
     ) {

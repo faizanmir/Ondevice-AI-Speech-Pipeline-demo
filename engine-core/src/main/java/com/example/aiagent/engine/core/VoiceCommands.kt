@@ -1,5 +1,34 @@
 package com.example.aiagent.engine.core
 
+/**
+ * Lowercase, drop everything but letters/digits/spaces, collapse runs of space.
+ *
+ * Stripping punctuation is what lets "Open settings." match the phrase "open settings", and it is
+ * also what makes "non-conformity", "nonconformity" and "non conformity" fold to the same text --
+ * the hyphen becomes a space and the space run collapses. Letters from *any* script are kept
+ * ("öffne einstellungen" must survive intact); safety against recogniser noise comes from
+ * whole-phrase containment in [containsSpokenPhrase], not from throwing characters away.
+ *
+ * Public and top-level rather than private to [VoiceCommandMatcher] because three separate callers
+ * have to agree on it exactly: the live command matcher, the spoken-marker scanner that runs over a
+ * finished transcript, and the fallback phrase matcher used for languages the keyword spotter has no
+ * model for. If those ever normalised differently, markers found by one would be invisible to
+ * another -- a bug that presents as "it works sometimes", which is the worst kind here.
+ */
+fun normalizeSpokenText(text: String): String = text
+    .lowercase()
+    .replace(Regex("[^\\p{L}\\p{N} ]"), " ")
+    .replace(Regex("\\s+"), " ")
+    .trim()
+
+/**
+ * Whole-phrase containment. The space padding is what stops "open" matching inside "reopened".
+ *
+ * Both arguments must already be [normalizeSpokenText]-ed.
+ */
+fun containsSpokenPhrase(text: String, phrase: String): Boolean =
+    " $text ".contains(" $phrase ")
+
 /** One voice command and the phrases that trigger it. */
 data class VoiceCommandSpec(
     val id: String,
@@ -47,15 +76,15 @@ class VoiceCommandMatcher(
      * a bare "open" that some other command might use.
      */
     fun match(rawText: String, nowMs: Long): VoiceCommandMatch? {
-        val text = normalize(rawText)
+        val text = normalizeSpokenText(rawText)
         if (text.isBlank()) return null
 
         var best: VoiceCommandMatch? = null
         for (command in commands) {
             for (phrase in command.phrases) {
-                val normalisedPhrase = normalize(phrase)
+                val normalisedPhrase = normalizeSpokenText(phrase)
                 if (normalisedPhrase.isBlank()) continue
-                if (!containsPhrase(text, normalisedPhrase)) continue
+                if (!containsSpokenPhrase(text, normalisedPhrase)) continue
 
                 if (best == null || normalisedPhrase.length > best.matchedPhrase.length) {
                     best = VoiceCommandMatch(command.id, normalisedPhrase)
@@ -74,22 +103,6 @@ class VoiceCommandMatcher(
 
     /** Forget every cooldown. Call when a new recording starts. */
     fun reset() = lastFiredMs.clear()
-
-    private companion object {
-        /** Lowercase, drop everything but letters/digits/spaces, collapse runs of space.
-         *  Stripping punctuation is what lets "Open settings." match the phrase "open settings",
-         *  and dropping non-ASCII means a window the recogniser filled with CJK noise simply
-         *  fails to match rather than firing something at random. */
-        fun normalize(text: String): String = text
-            .lowercase()
-            .replace(Regex("[^a-z0-9 ]"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-
-        /** Whole-phrase containment: the space-padding stops "open" matching inside "reopened". */
-        fun containsPhrase(text: String, phrase: String): Boolean =
-            " $text ".contains(" $phrase ")
-    }
 }
 
 /**
@@ -106,8 +119,9 @@ fun stripCommandPhrases(transcript: String, phrases: Collection<String>): String
     for (phrase in phrases) {
         if (phrase.isBlank()) continue
         // Optional leading space and trailing punctuation are consumed with the phrase, so removing
-        // it does not leave "Sam.  ." behind.
-        val pattern = Regex("(?i)\\s*\\b" + Regex.escape(phrase) + "\\b[.,!?;:]*")
+        // it does not leave "Sam.  ." behind. (?U) makes \b Unicode-aware; without it the boundary
+        // misfires on phrases that start or end with a non-ASCII letter, like "öffne".
+        val pattern = Regex("(?iU)\\s*\\b" + Regex.escape(phrase) + "\\b[.,!?;:]*")
         result = result.replace(pattern, "")
     }
 

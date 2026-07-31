@@ -13,6 +13,7 @@ import com.example.aiagent.engine.core.HistoryTurn
 import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.LoadRequest
 import com.example.aiagent.engine.core.ModelFormat
+import com.example.aiagent.engine.core.OutputGuard
 import com.example.aiagent.engine.core.SamplingParams
 import com.google.mlkit.genai.common.DownloadStatus
 import com.google.mlkit.genai.common.FeatureStatus
@@ -195,14 +196,24 @@ class AiCoreEngine : InferenceEngine {
         var firstTokenMs = 0L
         val response = StringBuilder()
         val promptText = transcriptPrompt(prompt)
+        val guard = OutputGuard(sampling.maxOutputTokens, sampling.stopSequences)
+        var stopped = false
 
         try {
             client.generateContentStream(buildRequest(promptText)).collect { chunk ->
+                // After a bound is hit, keep the output trimmed and ignore the rest -- the Prompt API
+                // has no interruptible cancel, so it finishes on its own. response holds the trimmed
+                // text, so the transcript it seeds the next turn with matches what the user saw.
+                if (stopped) return@collect
                 val text = chunk.candidates.firstOrNull()?.text.orEmpty()
                 if (text.isNotEmpty()) {
                     if (firstTokenMs == 0L) firstTokenMs = System.currentTimeMillis() - startMs
-                    response.append(text)
-                    emit(GenerationEvent.Token(text))
+                    val out = guard.push(text)
+                    if (out.isNotEmpty()) {
+                        response.append(out)
+                        emit(GenerationEvent.Token(out))
+                    }
+                    if (guard.isDone) stopped = true
                 }
             }
         } catch (t: Throwable) {
@@ -210,6 +221,13 @@ class AiCoreEngine : InferenceEngine {
             throw EngineException.GenerationFailed(t.describeForUser(), t)
         } finally {
             generationJob = null
+        }
+
+        if (!stopped) {
+            guard.drain().takeIf { it.isNotEmpty() }?.let {
+                response.append(it)
+                emit(GenerationEvent.Token(it))
+            }
         }
 
         history += HistoryTurn(HistoryTurn.ROLE_USER, prompt)

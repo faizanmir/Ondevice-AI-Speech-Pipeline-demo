@@ -1,6 +1,6 @@
 package com.example.aiagenttestapp.ui.chat
 
-import androidx.lifecycle.ViewModel
+import android.net.Uri
 import androidx.lifecycle.viewModelScope
 import com.example.aiagent.engine.core.Accelerator
 import com.example.aiagent.engine.core.ContextWindow
@@ -13,28 +13,33 @@ import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagent.engine.core.ToolCall
 import com.example.aiagent.engine.core.ToolCallingProtocol
-import com.example.aiagenttestapp.AppContainer
+import com.example.aiagenttestapp.functions.AppFunctionDeps
 import com.example.aiagenttestapp.data.ChatLoadPlan
-import com.example.aiagenttestapp.data.planChatLoad
+import com.example.aiagenttestapp.data.ChatLoadPlanner
+import com.example.aiagenttestapp.data.FileTextExtractor
+import com.example.aiagenttestapp.data.Source
 import com.example.aiagenttestapp.data.chat.Conversation
 import com.example.aiagenttestapp.data.chat.StoredMessage
 import com.example.aiagenttestapp.data.chat.toHistoryTurn
 import com.example.aiagenttestapp.functions.AppFunctions
 import com.example.aiagenttestapp.functions.AppNavigation
 import com.example.aiagenttestapp.stt.SpeechModelState
+import com.example.aiagenttestapp.ui.mvi.MviViewModel
+import com.example.aiagenttestapp.ui.mvi.UiEffect
+import com.example.aiagenttestapp.ui.mvi.UiIntent
+import com.example.aiagenttestapp.ui.mvi.UiState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
+import com.example.aiagenttestapp.data.ModelResidency
+import com.example.aiagenttestapp.data.SettingsStore
+import com.example.aiagenttestapp.data.chat.ChatDao
+import com.example.aiagenttestapp.stt.AudioRecorder
+import com.example.aiagenttestapp.stt.SpeechModelRepository
+import com.example.aiagenttestapp.stt.SpeechRecognizer
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 
 data class ChatMessage(
     val id: Long,
@@ -45,6 +50,10 @@ data class ChatMessage(
     val isError: Boolean = false,
     /** Set when this "message" is really the model having done something to the app. */
     val functionCall: FunctionCallDisplay? = null,
+    /** Web pages the model consulted this turn, shown as citations under the answer. */
+    val sources: List<Source> = emptyList(),
+    /** Name of the file attached to a user message, shown as a paperclip chip on the bubble. */
+    val attachmentName: String? = null,
 )
 
 /** An app function the model invoked, rendered as a chip in the transcript. */
@@ -90,9 +99,27 @@ data class ChatUiState(
 
     /** The message being quote-replied to, shown as a chip above the input. */
     val replyingTo: ChatMessage? = null,
-) {
+
+    // ---- Attached file (extracted into the next message's prompt) ------------------------------
+    /** Name of the file staged for the next message, or null. Shown as a chip above the input. */
+    val attachmentName: String? = null,
+    /** A file is being read and its text extracted right now. */
+    val isExtractingFile: Boolean = false,
+    /** The attached file was longer than the model can take, so only the start was kept. */
+    val attachmentTruncated: Boolean = false,
+    /** Why the last attachment failed to read, shown briefly above the input. */
+    val attachmentError: String? = null,
+
+    /**
+     * Whether reasoning is shown for this chat. Captured at open from the thinking setting (which is
+     * baked into the system prompt). Off means model output is rendered as a plain answer with any
+     * residual `<think>` tags stripped, never a thinking card.
+     */
+    val showThinking: Boolean = true,
+) : UiState {
     val canSend: Boolean
-        get() = loadState is ModelLoadState.Ready && !isGenerating && !isDictating && !isTranscribing
+        get() = loadState is ModelLoadState.Ready && !isGenerating && !isDictating &&
+            !isTranscribing && !isExtractingFile
 
     val isSpeechReady: Boolean get() = speechModelState is SpeechModelState.Ready
 
@@ -102,12 +129,54 @@ data class ChatUiState(
         else (contextUsed.toFloat() / contextTotal.toFloat()).coerceIn(0f, 1f)
 }
 
-class ChatViewModel(private val container: AppContainer) : ViewModel() {
+sealed interface ChatIntent : UiIntent {
+    /**
+     * Loads a model and gets the chat ready. Sent once per (model, conversation) by the nav host --
+     * re-sending it reloads the chat from scratch, so it is not a per-recomposition intent.
+     */
+    data class OpenChat(val modelId: String, val resumeConversationId: Long?) : ChatIntent
 
-    private val _uiState = MutableStateFlow(
-        ChatUiState(speechModelSizeBytes = container.speechModels.totalBytes),
-    )
-    val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+    data class DraftChanged(val text: String) : ChatIntent
+    data object Send : ChatIntent
+    data object StopGenerating : ChatIntent
+    data object ResetConversation : ChatIntent
+
+    /** Reads a picked file, extracts its text, and stages it for the next message. */
+    data class AttachFile(val uri: Uri) : ChatIntent
+    data object ClearAttachment : ChatIntent
+
+    data object DownloadSpeechModel : ChatIntent
+    /** The caller must already hold RECORD_AUDIO. */
+    data object StartVoiceInput : ChatIntent
+    data object StopVoiceInput : ChatIntent
+
+    data class DeleteMessage(val id: Long) : ChatIntent
+    data class StartReply(val message: ChatMessage) : ChatIntent
+    data object CancelReply : ChatIntent
+}
+
+sealed interface ChatEffect : UiEffect {
+    /**
+     * The model asked to move the user. One-shot, not state: replaying "open settings" on every
+     * recomposition would trap them on the Settings screen.
+     */
+    data class Navigate(val destination: AppNavigation) : ChatEffect
+}
+
+@HiltViewModel
+class ChatViewModel @Inject constructor(
+    private val audioRecorder: AudioRecorder,
+    private val appFunctionDeps: AppFunctionDeps,
+    private val chatDao: ChatDao,
+    private val chatLoadPlanner: ChatLoadPlanner,
+    private val fileTextExtractor: FileTextExtractor,
+    private val modelResidency: ModelResidency,
+    private val settingsStore: SettingsStore,
+    private val speechModels: SpeechModelRepository,
+    private val speechRecognizer: SpeechRecognizer,
+) : MviViewModel<ChatUiState, ChatIntent, ChatEffect>(
+    ChatUiState(speechModelSizeBytes = speechModels.totalBytes),
+) {
 
     private var engine: InferenceEngine? = null
     private var generationJob: Job? = null
@@ -123,13 +192,33 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
     init {
         // Dictation reuses the Voice Notes speech model, so mirror its readiness here -- that lets
         // the mic button offer a one-time download when it is missing instead of failing silently.
-        container.speechModels.state
-            .onEach { s -> _uiState.update { it.copy(speechModelState = s) } }
-            .launchIn(viewModelScope)
+        speechModels.state.collectIntoState { s -> copy(speechModelState = s) }
+    }
+
+    override fun reduce(intent: ChatIntent): Unit = when (intent) {
+        is ChatIntent.OpenChat -> openChat(intent.modelId, intent.resumeConversationId)
+        is ChatIntent.DraftChanged -> setState { copy(draft = intent.text) }
+        ChatIntent.Send -> send()
+        ChatIntent.StopGenerating -> stopGenerating()
+        ChatIntent.ResetConversation -> resetConversation()
+        is ChatIntent.AttachFile -> attachFile(intent.uri)
+        ChatIntent.ClearAttachment -> clearAttachment()
+        ChatIntent.DownloadSpeechModel -> speechModels.enqueueDownload()
+        ChatIntent.StartVoiceInput -> startVoiceInput()
+        ChatIntent.StopVoiceInput -> stopVoiceInput()
+        is ChatIntent.DeleteMessage -> deleteMessage(intent.id)
+        is ChatIntent.StartReply -> setState { copy(replyingTo = intent.message) }
+        ChatIntent.CancelReply -> setState { copy(replyingTo = null) }
     }
 
     /** Id of the bubble the current turn is streaming into, so a tool call can rewrite it. */
     private var pendingReplyId: Long? = null
+
+    /** Web sources gathered across this turn's tool calls, attached to the final answer. */
+    private val pendingSources = mutableListOf<Source>()
+
+    /** Extracted text of the staged file. Kept off UI state -- it can be large -- until sent. */
+    private var attachedFileText: String? = null
 
     /** Whether app functions were switched on when this chat's model was loaded. */
     private var toolsEnabled = false
@@ -144,30 +233,23 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
     private var attachedResidency = false
 
     /**
-     * Navigation the model asked for. A one-shot event, not state: replaying "open settings" on
-     * every recomposition would trap the user on the Settings screen.
-     */
-    private val _navigation = MutableSharedFlow<AppNavigation>(extraBufferCapacity = 4)
-    val navigation: SharedFlow<AppNavigation> = _navigation.asSharedFlow()
-
-    /**
      * Loads [modelId] into an engine and gets the chat ready.
      *
      * How the engine, accelerator and system prompt are chosen lives in [planChatLoad], shared with
      * the startup [com.example.aiagenttestapp.data.ModelResidency] so the two agree exactly -- that
      * agreement is what lets a fresh chat reuse the resident model with a reset instead of a load.
      */
-    fun openChat(modelId: String, resumeConversationId: Long?) {
+    private fun openChat(modelId: String, resumeConversationId: Long?) {
         // planChatLoad looks in the built-in catalogue *and* the user's added models -- a model
         // pulled from HuggingFace has to open a chat exactly like a built-in one.
-        val plan = when (val result = planChatLoad(container, modelId)) {
+        val plan = when (val result = chatLoadPlanner.plan(modelId)) {
             is ChatLoadPlan.UnknownModel -> {
-                _uiState.update { it.copy(loadState = ModelLoadState.Failed("Unknown model")) }
+                setState { copy(loadState = ModelLoadState.Failed("Unknown model")) }
                 return
             }
             is ChatLoadPlan.NoEngine -> {
-                _uiState.update {
-                    it.copy(
+                setState {
+                    copy(
                         model = result.model,
                         loadState = ModelLoadState.Failed(
                             "No engine in this build can load ${result.model.format.label} files",
@@ -176,7 +258,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                 }
                 return
             }
-            is ChatLoadPlan.Resolved -> result
+            is ChatLoadPlan.Ready -> result
         }
 
         val model = plan.model
@@ -186,7 +268,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         // Publish which engine and accelerator we settled on *before* anything can fail, so the
         // title bar reads "LiteRT-LM · GPU" even on the error screens. Filling it in only on the
         // success path leaves a failed load captioned with a bare "· CPU".
-        _uiState.update { current ->
+        setState {
             ChatUiState(
                 model = model,
                 engineId = plan.engineId,
@@ -194,10 +276,13 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                 accelerator = accelerator,
                 loadState = ModelLoadState.Loading("Loading ${model.name} on ${accelerator.label}"),
                 contextTotal = model.contextTokens,
+                // Fixed for the life of the loaded model, like tools: the thinking setting is baked
+                // into the system prompt, so a mid-chat toggle cannot change how this chat renders.
+                showThinking = settingsStore.settings.value.thinkingEnabled,
                 // Dictation readiness is not part of the conversation, so carry it across the reset
                 // rather than briefly flashing the mic button as unavailable on every model open.
-                speechModelState = current.speechModelState,
-                speechModelSizeBytes = current.speechModelSizeBytes,
+                speechModelState = speechModelState,
+                speechModelSizeBytes = speechModelSizeBytes,
             )
         }
 
@@ -205,18 +290,16 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         // toggling the setting mid-chat cannot retroactively give the model tools it was never told
         // about. (Whether this model gets the tool section at all is decided in planChatLoad.)
         toolsEnabled = plan.toolsEnabled
-        _uiState.update {
-            it.copy(
+        setState {
+            copy(
                 toolsActive = plan.toolsEnabled,
                 toolsUnavailableReason = plan.toolsUnavailableReason,
             )
         }
 
         if (!plan.downloaded) {
-            _uiState.update {
-                it.copy(
-                    loadState = ModelLoadState.Failed("${model.name} is not downloaded"),
-                )
+            setState {
+                copy(loadState = ModelLoadState.Failed("${model.name} is not downloaded"))
             }
             return
         }
@@ -227,7 +310,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         // Tell the residency manager a chat is now using the engine, so it will not release the
         // resident model under memory pressure while this chat is on screen. Balanced by onCleared.
         if (!attachedResidency) {
-            container.modelResidency.attach()
+            modelResidency.attach()
             attachedResidency = true
         }
 
@@ -236,14 +319,14 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
             // transcript is restored to the display; only a fitted tail is fed to the model, with the
             // rolling summary of the older turns folded into the system prompt ahead of it.
             val restored = resumeConversationId
-                ?.let { id -> runCatching { container.chatDao.conversationById(id) }.getOrNull() }
+                ?.let { id -> runCatching { chatDao.conversationById(id) }.getOrNull() }
             val pastMessages = restored?.messages.orEmpty().sortedBy { it.id }
             conversationId = restored?.conversation?.id
             if (pastMessages.isNotEmpty()) {
                 // Reuse the DB ids as bubble ids (unique), and start new bubbles past them.
                 nextMessageId = pastMessages.maxOf { it.id } + 1
-                _uiState.update { st ->
-                    st.copy(
+                setState {
+                    copy(
                         messages = pastMessages.map { m ->
                             ChatMessage(
                                 id = m.id,
@@ -276,13 +359,13 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
             )
 
             try {
-                container.modelResidency.open(
-                    plan = plan,
+                modelResidency.open(
+                    plan = plan.resolved,
                     request = request,
                     reuseWhenResident = resumeConversationId == null,
                 )
-                _uiState.update {
-                    it.copy(
+                setState {
+                    copy(
                         loadState = ModelLoadState.Ready,
                         // The engine may have fallen back (GPU -> CPU) if the requested accelerator
                         // turned out to be unusable. Show what actually happened, not what we asked
@@ -291,8 +374,8 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                     )
                 }
             } catch (e: EngineException.OutOfMemory) {
-                _uiState.update {
-                    it.copy(
+                setState {
+                    copy(
                         loadState = ModelLoadState.Failed(
                             "${model.name} ran out of memory while loading. Close other apps and " +
                                 "try again, or pick a smaller model.",
@@ -300,8 +383,8 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                     )
                 }
             } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(
+                setState {
+                    copy(
                         loadState = ModelLoadState.Failed(
                             e.message ?: "Could not load ${model.name}",
                         ),
@@ -311,40 +394,111 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    fun onDraftChange(text: String) {
-        _uiState.update { it.copy(draft = text) }
+    private fun attachFile(uri: Uri) {
+        setState {
+            copy(
+                isExtractingFile = true,
+                attachmentError = null,
+                attachmentName = null,
+                attachmentTruncated = false,
+            )
+        }
+        viewModelScope.launch {
+            when (val result = fileTextExtractor.extract(uri, maxChars = fileCharBudget())) {
+                is FileTextExtractor.Result.Success -> {
+                    attachedFileText = result.text
+                    setState {
+                        copy(
+                            isExtractingFile = false,
+                            attachmentName = result.name,
+                            attachmentTruncated = result.truncated,
+                        )
+                    }
+                }
+
+                is FileTextExtractor.Result.Failure -> {
+                    attachedFileText = null
+                    setState {
+                        copy(
+                            isExtractingFile = false,
+                            attachmentName = null,
+                            attachmentTruncated = false,
+                            attachmentError = result.message,
+                        )
+                    }
+                }
+            }
+        }
     }
 
-    fun send() {
+    /**
+     * How much of an attached file to feed the loaded model, in characters.
+     *
+     * The file shares the model's context window with the system prompt, the user's question and the
+     * summary the model has to write, so it gets [FILE_CONTEXT_FRACTION] of the window and the rest
+     * is left as headroom. Sized off the *loaded* model's context ([ChatUiState.contextTotal]), which
+     * is now device-dependent -- so a large-context model swallows a whole document while a 4K model
+     * still takes the ~10K chars it always did. Falls back to a 4K-model budget before a model loads.
+     */
+    private fun fileCharBudget(): Int {
+        val contextTokens = currentState.contextTotal.takeIf { it > 0 } ?: DEFAULT_CONTEXT_TOKENS
+        val fileTokens = (contextTokens * FILE_CONTEXT_FRACTION).toInt()
+        return ContextWindow.estimateChars(fileTokens)
+    }
+
+    private fun clearAttachment() {
+        attachedFileText = null
+        setState {
+            copy(attachmentName = null, attachmentTruncated = false, attachmentError = null)
+        }
+    }
+
+    private fun send() {
         val activeEngine = engine ?: return
-        val typed = _uiState.value.draft.trim()
-        if (!_uiState.value.canSend || typed.isBlank()) return
+        val typed = currentState.draft.trim()
+        if (!currentState.canSend || typed.isBlank()) return
 
         // A quote-reply prepends the message being answered so the model knows which earlier point
         // the user means. The model has the whole transcript, but not which part they are picking out.
-        val quoted = _uiState.value.replyingTo?.text?.trim()?.replace('\n', ' ')?.take(240)
-        val prompt = if (quoted != null) {
+        val quoted = currentState.replyingTo?.text?.trim()?.replace('\n', ' ')?.take(240)
+        val userText = if (quoted != null) {
             "Regarding this earlier message:\n\"$quoted\"\n\n$typed"
         } else {
             typed
         }
 
-        _uiState.update {
-            it.copy(
+        // The model also gets the attached file's text, prepended; the bubble shows only what the
+        // user wrote plus a paperclip, so a many-page file does not become a many-page message.
+        val fileName = currentState.attachmentName
+        val fileText = attachedFileText
+        val modelPrompt = if (fileText != null && fileName != null) {
+            "The user attached a file named \"$fileName\". Use its contents to answer.\n\n" +
+                "----- BEGIN $fileName -----\n$fileText\n----- END $fileName -----\n\n$userText"
+        } else {
+            userText
+        }
+
+        setState {
+            copy(
                 draft = "",
                 replyingTo = null,
-                messages = it.messages + ChatMessage(
+                attachmentName = null,
+                attachmentTruncated = false,
+                attachmentError = null,
+                messages = messages + ChatMessage(
                     id = nextMessageId++,
                     isUser = true,
-                    text = prompt,
+                    text = userText,
+                    attachmentName = fileName,
                 ),
                 isGenerating = true,
             )
         }
+        attachedFileText = null
 
         generationJob = viewModelScope.launch {
             try {
-                persistMessage(HistoryTurn.ROLE_USER, prompt, title = prompt)
+                persistMessage(HistoryTurn.ROLE_USER, userText, title = userText)
 
                 // Let the send transition settle before prefill starts. The keyboard is dismissed on
                 // send, and prefill is the heaviest CPU/GPU burst of the whole turn; starting it while
@@ -353,7 +507,8 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                 // wait costs nothing they can see -- prefill alone runs into seconds regardless.
                 delay(SEND_SETTLE_MS.milliseconds)
 
-                var response = runTurn(activeEngine, prompt)
+                pendingSources.clear()
+                var response = runTurn(activeEngine, modelPrompt)
 
                 // Let the model chain a few tool calls per turn -- search, read a result, search
                 // again -- and then answer, instead of stopping after one. Kept bounded and guarded:
@@ -361,9 +516,10 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                 // spinning on the same search) breaks early, and a navigation tool ends the turn
                 // since the user has been moved.
                 if (toolsEnabled) {
+                    val maxHops = settingsStore.settings.value.maxToolHops
                     var hops = 0
                     var lastSignature: String? = null
-                    while (hops < MAX_TOOL_HOPS) {
+                    while (hops < maxHops) {
                         val call = ToolCallingProtocol.parse(response) ?: break
                         val signature = "${call.name}(${call.arguments})"
                         if (signature == lastSignature) break
@@ -382,13 +538,20 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                     }
                 }
 
+                // Attach the web sources gathered this turn to the final answer, as citations.
+                if (pendingSources.isNotEmpty()) {
+                    pendingReplyId?.let { id ->
+                        updateMessage(id) { it.copy(sources = pendingSources.toList()) }
+                    }
+                }
+
                 // Tool-call chips are not persisted, but the model's final answer is.
-                persistMessage(HistoryTurn.ROLE_ASSISTANT, response, title = prompt)
+                persistMessage(HistoryTurn.ROLE_ASSISTANT, response, title = userText)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } finally {
-                _uiState.update {
-                    it.copy(
+                setState {
+                    copy(
                         isGenerating = false,
                         contextUsed = activeEngine.contextTokensUsed(),
                     )
@@ -400,8 +563,8 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
     /** Streams one model response into a fresh bubble and returns the full text. */
     private suspend fun runTurn(activeEngine: InferenceEngine, prompt: String): String {
         val replyId = nextMessageId++
-        _uiState.update {
-            it.copy(messages = it.messages + ChatMessage(id = replyId, isUser = false, text = ""))
+        setState {
+            copy(messages = messages + ChatMessage(id = replyId, isUser = false, text = ""))
         }
 
         val buffer = StringBuilder()
@@ -457,7 +620,12 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         activeEngine: InferenceEngine,
         call: ToolCall,
     ): Pair<String, Boolean> {
-        val result = AppFunctions.execute(call, container)
+        val result = AppFunctions.execute(call, appFunctionDeps)
+
+        // Gather any web pages this call drew on, de-duplicated across the turn's tool calls.
+        result.sources.forEach { source ->
+            if (pendingSources.none { it.url == source.url }) pendingSources += source
+        }
 
         // Replace the JSON bubble with the function chip.
         pendingReplyId?.let { id ->
@@ -474,7 +642,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         }
 
         result.navigation?.let { navigation ->
-            _navigation.emit(navigation)
+            emitEffect(ChatEffect.Navigate(navigation))
         }
 
         // Hand the result back so the model can use it. Without this the user gets a bare chip and
@@ -508,89 +676,84 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         )
     }
 
-    fun stopGenerating() {
+    private fun stopGenerating() {
         engine?.cancel()
         generationJob?.cancel()
     }
 
     // ---- Voice input (dictation) -----------------------------------------------------------------
 
-    /** Kicks off the one-time speech-model download used for dictation. */
-    fun downloadSpeechModel() {
-        viewModelScope.launch { container.speechModels.download() }
-    }
-
     /**
-     * Starts dictation. The caller must already hold RECORD_AUDIO. Audio is buffered until
-     * [stopVoiceInput], which transcribes it on-device and *appends* the text to the message box for
-     * the user to edit before sending -- speech recognition mishears, so nothing is ever sent blind.
+     * Starts dictation. Audio is buffered until [stopVoiceInput], which transcribes it on-device and
+     * *appends* the text to the message box for the user to edit before sending -- speech
+     * recognition mishears, so nothing is ever sent blind.
      */
-    fun startVoiceInput() {
-        val state = _uiState.value
+    private fun startVoiceInput() {
+        val state = currentState
         if (state.isDictating || state.isTranscribing || !state.isSpeechReady) return
 
         synchronized(voiceLock) { voiceSamples.clear() }
-        _uiState.update { it.copy(isDictating = true, micLevel = 0f) }
+        setState { copy(isDictating = true, micLevel = 0f) }
 
         voiceJob = viewModelScope.launch {
             try {
-                container.audioRecorder.record().collect { chunk ->
+                audioRecorder.record().collect { chunk ->
                     synchronized(voiceLock) { chunk.samples.forEach(voiceSamples::add) }
-                    _uiState.update { it.copy(micLevel = chunk.level) }
+                    setState { copy(micLevel = chunk.level) }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(isDictating = false, micLevel = 0f)
-                }
+                setState { copy(isDictating = false, micLevel = 0f) }
             }
         }
     }
 
     /** Stops the mic, transcribes what was captured, and appends the text to the draft. */
-    fun stopVoiceInput() {
-        if (!_uiState.value.isDictating) return
+    private fun stopVoiceInput() {
+        if (!currentState.isDictating) return
         voiceJob?.cancel()
         voiceJob = null
-        _uiState.update { it.copy(isDictating = false, micLevel = 0f, isTranscribing = true) }
+        setState { copy(isDictating = false, micLevel = 0f, isTranscribing = true) }
 
         viewModelScope.launch {
             try {
-                val recogniser = container.speechRecognizer
-                val paths = container.speechModels.selectedPaths()
+                val recogniser = speechRecognizer
+                val paths = speechModels.selectedPaths()
                 if (recogniser.loadedModelId != paths.id) {
                     recogniser.load(paths)
                     loadedRecogniserForVoice = true
                 }
 
                 val samples = synchronized(voiceLock) { voiceSamples.toFloatArray() }
-                val text = recogniser.transcribe(samples)
+                // Dictation only wants the words; the reply's language is the conversation's business.
+                // transcribeLong so a dictation past ~30 s is not clipped to its first half-minute.
+                val text = recogniser.transcribeLong(samples).text
 
-                _uiState.update { st ->
+                setState {
                     // Append, not replace: the user may have already typed something, and dictation
                     // is meant to add to the message, not clobber it.
                     val merged = when {
-                        text.isBlank() -> st.draft
-                        st.draft.isBlank() -> text
-                        else -> "${st.draft.trimEnd()} $text"
+                        text.isBlank() -> draft
+                        draft.isBlank() -> text
+                        else -> "${draft.trimEnd()} $text"
                     }
-                    st.copy(isTranscribing = false, draft = merged)
+                    copy(isTranscribing = false, draft = merged)
                 }
             } catch (e: Exception) {
-                _uiState.update { it.copy(isTranscribing = false) }
+                setState { copy(isTranscribing = false) }
             }
         }
     }
 
-    fun resetConversation() {
+    private fun resetConversation() {
         viewModelScope.launch {
             stopGenerating()
             runCatching { engine?.resetConversation() }
             // Detach from the saved conversation: the next message starts a fresh one, and the old
             // conversation stays in history.
             conversationId = null
-            _uiState.update { it.copy(messages = emptyList(), contextUsed = 0, replyingTo = null) }
+            setState { copy(messages = emptyList(), contextUsed = 0, replyingTo = null) }
         }
     }
 
@@ -599,7 +762,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
     private suspend fun ensureConversationId(title: String): Long {
         conversationId?.let { return it }
         val now = System.currentTimeMillis()
-        return container.chatDao.insertConversation(
+        return chatDao.insertConversation(
             Conversation(
                 modelId = currentModelId.orEmpty(),
                 title = title.trim().replace('\n', ' ').take(60).ifBlank { "New chat" },
@@ -614,10 +777,10 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         if (content.isBlank()) return
         val id = ensureConversationId(title)
         val now = System.currentTimeMillis()
-        container.chatDao.insertMessage(
+        chatDao.insertMessage(
             StoredMessage(conversationId = id, role = role, content = content, createdAtMillis = now),
         )
-        container.chatDao.touchConversation(id, now)
+        chatDao.touchConversation(id, now)
     }
 
     // ---- Per-message actions ---------------------------------------------------------------------
@@ -627,28 +790,18 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
      * -- evicting a single turn from the running KV cache is not something the engines expose -- so
      * this is a display edit, not a memory edit.
      */
-    fun deleteMessage(id: Long) {
-        _uiState.update { state ->
-            state.copy(
-                messages = state.messages.filterNot { it.id == id },
-                replyingTo = state.replyingTo?.takeUnless { it.id == id },
+    private fun deleteMessage(id: Long) {
+        setState {
+            copy(
+                messages = messages.filterNot { it.id == id },
+                replyingTo = replyingTo?.takeUnless { it.id == id },
             )
         }
     }
 
-    fun startReply(message: ChatMessage) {
-        _uiState.update { it.copy(replyingTo = message) }
-    }
-
-    fun cancelReply() {
-        _uiState.update { it.copy(replyingTo = null) }
-    }
-
     private fun updateMessage(id: Long, transform: (ChatMessage) -> ChatMessage) {
-        _uiState.update { state ->
-            state.copy(
-                messages = state.messages.map { if (it.id == id) transform(it) else it },
-            )
+        setState {
+            copy(messages = messages.map { if (it.id == id) transform(it) else it })
         }
     }
 
@@ -663,7 +816,16 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         // The speech recogniser holds ~240 MB of native memory. Release it only if dictation here is
         // what loaded it, so leaving a chat does not tear down a recogniser the Voice Notes screen
         // still owns.
-        if (loadedRecogniserForVoice) container.speechRecognizer.release()
+        //
+        // On its own scope because releasing now *waits* for any decode still in flight -- the
+        // recogniser is shared with the background transcription worker, and freeing native memory
+        // under a running decode takes the process down. viewModelScope is already cancelled here.
+        if (loadedRecogniserForVoice) {
+            val recogniser = speechRecognizer
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()).launch {
+                runCatching { recogniser.release() }
+            }
+        }
 
         val active = engine
         val convId = conversationId
@@ -674,7 +836,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         // it summarises itself in a single turn; and because its context is [previous summary] +
         // recent turns, each close produces an *updated* rolling summary rather than starting over.
         val shouldSummarise = active != null && convId != null &&
-            !_uiState.value.isGenerating && needsSummary(active)
+            !currentState.isGenerating && needsSummary(active)
 
         engine = null
 
@@ -688,19 +850,19 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()).launch {
             try {
                 if (shouldSummarise && active != null && convId != null) {
-                    container.modelResidency.runExclusive {
+                    modelResidency.runExclusive {
                         runCatching { rollUpSummary(active, convId) }
                     }
                 }
             } finally {
-                container.modelResidency.detach()
+                modelResidency.detach()
             }
         }
     }
 
     /** True once the live context is over half full -- the point where older turns start falling off. */
     private fun needsSummary(engine: InferenceEngine): Boolean {
-        val total = _uiState.value.contextTotal
+        val total = currentState.contextTotal
         return total > 0 && engine.contextTokensUsed() > total * SUMMARY_TRIGGER_FRACTION
     }
 
@@ -711,13 +873,10 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
             if (event is GenerationEvent.Token) builder.append(event.text)
         }
         val summary = builder.toString().trim()
-        if (summary.isNotBlank()) container.chatDao.updateSummary(convId, summary)
+        if (summary.isNotBlank()) chatDao.updateSummary(convId, summary)
     }
 
     private companion object {
-        /** Most tool calls the model may chain in a single turn before it must answer. */
-        const val MAX_TOOL_HOPS = 4
-
         /** Minimum gap between streamed-text UI updates, so recomposition does not fight the GPU. */
         const val UI_STREAM_INTERVAL_MS = 60L
 
@@ -732,6 +891,16 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
 
         /** Context fraction past which a chat is summarised on close, so reopening stays in budget. */
         const val SUMMARY_TRIGGER_FRACTION = 0.5f
+
+        /**
+         * Share of the model's context window an attached file may fill. The remaining ~30% holds the
+         * system prompt, the user's question and the model's reply. At a 4K context this lands on the
+         * ~10K-char cap the extractor used before; a larger context scales it up proportionally.
+         */
+        const val FILE_CONTEXT_FRACTION = 0.7
+
+        /** Attachment budget before a model is loaded and [ChatUiState.contextTotal] is known. */
+        const val DEFAULT_CONTEXT_TOKENS = 4096
 
         const val SUMMARISE_PROMPT =
             "Summarise our conversation so far in 3 to 5 sentences, capturing the key facts, " +

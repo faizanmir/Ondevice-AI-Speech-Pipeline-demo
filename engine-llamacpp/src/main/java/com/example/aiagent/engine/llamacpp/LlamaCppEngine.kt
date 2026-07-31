@@ -11,6 +11,7 @@ import com.example.aiagent.engine.core.GenerationStats
 import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.LoadRequest
 import com.example.aiagent.engine.core.ModelFormat
+import com.example.aiagent.engine.core.OutputGuard
 import com.example.aiagent.engine.core.SamplingParams
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -66,6 +67,11 @@ class LlamaCppEngine : InferenceEngine {
     private val transcript = mutableListOf<ChatTurn>()
     private var systemPrompt: String? = null
 
+    // Caller-facing generation bounds, applied by an OutputGuard in generate(). Captured at load
+    // because generate() gets only the prompt, not the request.
+    private var maxOutputTokens: Int = 0
+    private var stopSequences: List<String> = emptyList()
+
     @Volatile
     override var loadedModelPath: String? = null
         private set
@@ -108,7 +114,8 @@ class LlamaCppEngine : InferenceEngine {
                 val newHandle = LlamaNative.nativeCreateSession(
                     modelPath = request.modelPath,
                     nCtx = request.contextTokens,
-                    nThreads = recommendedThreadCount(),
+                    nThreads = request.threadCount.takeIf { it > 0 }?.coerceIn(1, MAX_THREADS)
+                        ?: recommendedThreadCount(),
                     // -1 offloads every layer. Partial offload is possible but a poor deal on a
                     // phone: the layers left on the CPU become the bottleneck for every token, so a
                     // half-offloaded model is often slower than an all-CPU one.
@@ -126,6 +133,8 @@ class LlamaCppEngine : InferenceEngine {
                 if (newHandle != 0L) {
                     handle = newHandle
                     systemPrompt = request.systemPrompt
+                    maxOutputTokens = request.sampling.maxOutputTokens
+                    stopSequences = request.sampling.stopSequences
                     // Seed the transcript with any restored history. llama.cpp re-renders the whole
                     // transcript through the chat template each turn, so prior turns become context
                     // for free -- the first generate() prefills them, and the KV cache carries them.
@@ -173,6 +182,7 @@ class LlamaCppEngine : InferenceEngine {
         var firstTokenMs = 0L
         var generated = 0
         val reply = StringBuilder()
+        val guard = OutputGuard(maxOutputTokens, stopSequences)
 
         while (true) {
             // Honour coroutine cancellation, not just an explicit cancel() call: if the collector
@@ -186,8 +196,21 @@ class LlamaCppEngine : InferenceEngine {
 
             if (firstTokenMs == 0L) firstTokenMs = System.currentTimeMillis() - startMs
             generated++
-            reply.append(piece)
-            emit(GenerationEvent.Token(piece))
+
+            val out = guard.push(piece)
+            if (out.isNotEmpty()) {
+                reply.append(out)
+                emit(GenerationEvent.Token(out))
+            }
+            // Hitting the token cap or a stop string ends the turn; not calling nextToken again is
+            // all it takes to stop the native decode -- this is a pull loop.
+            if (guard.isDone) break
+        }
+
+        // Release any tail the stop-string guard was holding back, if we reached a natural stop.
+        guard.drain().takeIf { it.isNotEmpty() }?.let {
+            reply.append(it)
+            emit(GenerationEvent.Token(it))
         }
 
         transcript += ChatTurn(role = ROLE_ASSISTANT, content = reply.toString())
@@ -212,11 +235,33 @@ class LlamaCppEngine : InferenceEngine {
         if (session != 0L) LlamaNative.nativeCancel(session)
     }
 
+    /**
+     * Safe here: nativeCancel only sets a flag, nativeNextToken then returns null, and the decode
+     * loop ends the turn the same way an end-of-sequence token would. Nothing throws.
+     */
+    override val supportsMidTurnCancel: Boolean get() = true
+
     override suspend fun resetConversation() = withContext(Dispatchers.IO) {
         lifecycleLock.withLock {
             val session = handle
             if (session == 0L) throw EngineException.NotLoaded()
             LlamaNative.nativeResetContext(session)
+            transcript.clear()
+        }
+    }
+
+    /**
+     * The transcript is dropped exactly as in [resetConversation], so the next prompt is rendered on
+     * its own with no prior turns -- but the KV cache is left standing. nativeIngestPrompt already
+     * diffs each prompt against the tokens it last decoded and evicts everything past the shared
+     * prefix, so isolation comes from that diff rather than from a wholesale clear, and a repeated
+     * preamble is not decoded twice.
+     */
+    override suspend fun resetKeepingPrefixCache() = withContext(Dispatchers.IO) {
+        lifecycleLock.withLock {
+            val session = handle
+            if (session == 0L) throw EngineException.NotLoaded()
+            LlamaNative.nativeResetTurnKeepCache(session)
             transcript.clear()
         }
     }
@@ -273,6 +318,9 @@ class LlamaCppEngine : InferenceEngine {
 
     private companion object {
         const val TAG = "LlamaCppEngine"
+
+        /** Ceiling for a user-set thread override; a phone gains nothing past this. */
+        const val MAX_THREADS = 16
 
         /** llama.cpp treats a negative n_gpu_layers as "offload all of them". */
         const val ALL_LAYERS = -1

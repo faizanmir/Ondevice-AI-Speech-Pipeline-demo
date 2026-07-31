@@ -73,11 +73,13 @@ object ToolCallingProtocol {
             appendLine("""{"tool": "tool_name", "args": {"param": "value"}}""")
             appendLine()
             // Small models will otherwise narrate a tool call in prose, or call one on every turn.
+            // Every rule here earns its place; the wording is as short as it can be said, because
+            // this section sits in the system prompt of every turn of every chat.
             appendLine("Rules:")
-            appendLine("- Only call a tool when the user is asking you to DO something in the app.")
-            appendLine("- For ordinary questions and conversation, reply normally in plain text.")
-            appendLine("- Never explain the JSON, never wrap it in code fences, never add text around it.")
-            appendLine("- Use an empty object {} for args when a tool takes no parameters.")
+            appendLine("- Call a tool only when the user asks you to DO something in the app.")
+            appendLine("- Otherwise reply normally, in plain text.")
+            appendLine("- Never explain the JSON, wrap it in code fences, or add text around it.")
+            appendLine("- Use {} for args when a tool takes no parameters.")
         }
     }
 

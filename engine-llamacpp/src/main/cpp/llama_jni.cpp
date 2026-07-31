@@ -469,6 +469,31 @@ Java_com_example_aiagent_engine_llamacpp_LlamaNative_nativeCancel(JNIEnv *, jobj
     if (session != nullptr) session->cancelled.store(true);
 }
 
+/**
+ * Ends the turn but deliberately KEEPS the KV cache and cache_tokens.
+ *
+ * For a run of self-contained prompts that share a long fixed preamble, clearing the cache throws
+ * away the one thing worth keeping. Leaving it lets the next nativeIngestPrompt diff against
+ * cache_tokens, reuse the shared prefix, and llama_memory_seq_rm evicts whatever the new prompt does
+ * not share -- so the previous prompt's text and its reply are dropped by that diff rather than by a
+ * wholesale clear, and isolation is preserved either way.
+ *
+ * The sampler still has to be reset: the chain carries repetition penalties over a 64-token window,
+ * and letting those leak across prompts would penalise the next reply for words the last one used --
+ * badly wrong when every reply is JSON reusing the same keys.
+ */
+JNIEXPORT void JNICALL
+Java_com_example_aiagent_engine_llamacpp_LlamaNative_nativeResetTurnKeepCache(JNIEnv *, jobject,
+                                                                             jlong handle) {
+    LlamaSession *session = as_session(handle);
+    if (session == nullptr) return;
+
+    llama_sampler_reset(session->sampler);
+    session->utf8_pending.clear();
+    session->cancelled.store(false);
+    // n_past and cache_tokens are intentionally left intact -- they are the reusable prefix.
+}
+
 /** Drops conversation history but keeps the (expensively loaded) weights resident. */
 JNIEXPORT void JNICALL
 Java_com_example_aiagent_engine_llamacpp_LlamaNative_nativeResetContext(JNIEnv *, jobject,

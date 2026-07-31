@@ -24,6 +24,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.automirrored.filled.FactCheck
+import com.example.aiagenttestapp.data.audit.AuditDocument
+import com.example.aiagenttestapp.data.audit.AuditMode
+import com.example.aiagenttestapp.data.audit.AuditStatus
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Memory
@@ -32,6 +36,8 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.aiagent.engine.core.ModelSpec
+import com.example.aiagenttestapp.ui.components.formatDuration
 import com.example.aiagenttestapp.ui.components.readableWidth
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -64,15 +71,53 @@ fun HistoryScreen(
     onGetModels: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenNotes: () -> Unit,
+    onOpenAudit: (AuditMode) -> Unit,
+    onOpenAuditReport: (Long) -> Unit,
 ) {
-    val items by viewModel.conversations.collectAsStateWithLifecycle()
-    val chatModels by viewModel.chatModels.collectAsStateWithLifecycle()
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val items = state.entries
+    val chatModels = state.chatModels
+    var newChatMenuExpanded by rememberSaveable { mutableStateOf(false) }
+    var auditMenuOpen by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Chats", fontWeight = FontWeight.SemiBold) },
                 actions = {
+                    // Same two-option entry point as the chat top bar, so the choice is offered
+                    // wherever a document can be started -- see ChatScreen's AuditMenuButton.
+                    Box {
+                        IconButton(onClick = { auditMenuOpen = true }) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.FactCheck,
+                                contentDescription = "Read a document",
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = auditMenuOpen,
+                            onDismissRequest = { auditMenuOpen = false },
+                        ) {
+                            AuditMode.entries.forEach { mode ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(mode.label)
+                                            Text(
+                                                mode.blurb,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        auditMenuOpen = false
+                                        onOpenAudit(mode)
+                                    },
+                                )
+                            }
+                        }
+                    }
                     IconButton(onClick = onOpenNotes) {
                         Icon(Icons.Default.Mic, contentDescription = "Voice notes")
                     }
@@ -84,6 +129,8 @@ fun HistoryScreen(
         },
         floatingActionButton = {
             NewChatMenu(
+                expanded = newChatMenuExpanded,
+                onExpandedChange = { newChatMenuExpanded = it },
                 models = chatModels,
                 onPick = onNewChat,
                 onGetModels = onGetModels,
@@ -99,7 +146,7 @@ fun HistoryScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    "No chats yet. Tap New chat and pick a model to begin.",
+                    "Nothing yet. Tap New chat to begin, or audit a document from the check icon above.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -114,12 +161,31 @@ fun HistoryScreen(
                 // Rows are capped at a readable width; on a tablet this centres them.
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                items(items, key = { it.id }) { item ->
-                    HistoryRow(
-                        item = item,
-                        onClick = { onOpenChat(item.modelId, item.id) },
-                        onDelete = { viewModel.delete(item.id) },
-                    )
+                items(
+                    items,
+                    key = { entry ->
+                        when (entry) {
+                            is HistoryEntry.Chat -> "c${entry.item.id}"
+                            is HistoryEntry.Audit -> "a${entry.doc.id}"
+                        }
+                    },
+                ) { entry ->
+                    when (entry) {
+                        is HistoryEntry.Chat -> HistoryRow(
+                            item = entry.item,
+                            onClick = { onOpenChat(entry.item.modelId, entry.item.id) },
+                            onDelete = { viewModel.onIntent(HistoryIntent.DeleteChat(entry.item.id)) },
+                        )
+
+                        is HistoryEntry.Audit -> AuditHistoryRow(
+                            doc = entry.doc,
+                            modelName = entry.modelName,
+                            onClick = {
+                                if (entry.doc.status == AuditStatus.DONE) onOpenAuditReport(entry.doc.id)
+                            },
+                            onDelete = { viewModel.onIntent(HistoryIntent.DeleteAudit(entry.doc.id)) },
+                        )
+                    }
                 }
             }
         }
@@ -136,14 +202,14 @@ fun HistoryScreen(
  */
 @Composable
 private fun NewChatMenu(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
     models: List<ModelSpec>,
     onPick: (ModelSpec) -> Unit,
     onGetModels: () -> Unit,
 ) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
-
     // The system back gesture should close the fan, not leave the screen.
-    BackHandler(enabled = expanded) { expanded = false }
+    BackHandler(enabled = expanded) { onExpandedChange(false) }
 
     Column(
         horizontalAlignment = Alignment.End,
@@ -167,7 +233,7 @@ private fun NewChatMenu(
                         label = model.name,
                         icon = Icons.Default.Memory,
                         onClick = {
-                            expanded = false
+                            onExpandedChange(false)
                             onPick(model)
                         },
                     )
@@ -179,7 +245,7 @@ private fun NewChatMenu(
                         label = "Download a model",
                         icon = Icons.Default.Download,
                         onClick = {
-                            expanded = false
+                            onExpandedChange(false)
                             onGetModels()
                         },
                     )
@@ -190,7 +256,7 @@ private fun NewChatMenu(
                         label = "${model.name} · Built-in",
                         icon = Icons.Default.AutoAwesome,
                         onClick = {
-                            expanded = false
+                            onExpandedChange(false)
                             onPick(model)
                         },
                     )
@@ -205,7 +271,7 @@ private fun NewChatMenu(
             label = "newChatFabRotation",
         )
         ExtendedFloatingActionButton(
-            onClick = { expanded = !expanded },
+            onClick = { onExpandedChange(!expanded) },
             shape = CircleShape,
             icon = {
                 Icon(
@@ -249,6 +315,111 @@ private fun NewChatOption(
                 fontWeight = FontWeight.Medium,
             )
         }
+    }
+}
+
+@Composable
+private fun AuditHistoryRow(
+    doc: AuditDocument,
+    modelName: String,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .readableWidth()
+            .clickable(enabled = doc.status == AuditStatus.DONE, onClick = onClick),
+    ) {
+        androidx.compose.foundation.layout.Row(
+            Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.FactCheck,
+                contentDescription = null,
+                modifier = Modifier
+                    .padding(end = 12.dp)
+                    .size(20.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = doc.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = auditSubtitle(doc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                // Provenance on its own line rather than appended to the status: an audit row already
+                // carries counts, and one line holding all of it ellipsizes away exactly the model
+                // name and timing this line exists to show.
+                Text(
+                    text = auditProvenance(doc, modelName),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Default.DeleteOutline,
+                    contentDescription = "Delete audit",
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+private fun auditSubtitle(doc: AuditDocument): String {
+    // The row's own word for itself. A quick read is not an audit -- it grades nothing and looks for
+    // no non-conformities -- so calling it one on the home list would misdescribe what it produced.
+    val kind = if (doc.mode == AuditMode.QUICK) "Summary" else "Audit"
+    return when (doc.status) {
+        AuditStatus.QUEUED -> "$kind · queued"
+        AuditStatus.ANALYSING -> when {
+            doc.summarising -> "$kind · summarising…"
+            doc.chunkCount > 1 -> "$kind · reading ${doc.currentSection}/${doc.chunkCount}"
+            else -> "$kind · reading…"
+        }
+        AuditStatus.DONE -> doc.result?.let { result ->
+            buildString {
+                append(
+                    if (doc.mode == AuditMode.QUICK) "$kind · ${result.keyPoints.size} key points"
+                    else "$kind · ${result.nonConformities.size} non-conformities",
+                )
+                append(" · ${result.actions.size} actions")
+                // Incompleteness travels with the summary line: a row that looks like every other
+                // finished audit is exactly how a partial result gets mistaken for a clean one.
+                if (result.unanalysedSections > 0) {
+                    append(" · ${result.unanalysedSections} section(s) unanalysed")
+                }
+            }
+        } ?: "$kind · done"
+        AuditStatus.FAILED -> "$kind · failed"
+        AuditStatus.CANCELLED -> "$kind · cancelled"
+    }
+}
+
+/**
+ * "Gemma 3 4B · 4m 12s" -- the model that wrote the summary, and how long it took. While a document
+ * is still running the time is the elapsed-so-far (the worker banks it at every chunk), which is why
+ * it is worded as "in" only once the report is DONE.
+ */
+private fun auditProvenance(doc: AuditDocument, modelName: String): String = buildString {
+    append(modelName)
+    formatDuration(doc.analysisMillis).takeIf { it.isNotEmpty() }?.let { duration ->
+        append(" · ")
+        append(if (doc.status == AuditStatus.DONE) "generated in $duration" else duration)
     }
 }
 

@@ -1,6 +1,5 @@
 package com.example.aiagenttestapp.ui.catalog
 
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.aiagent.engine.core.Accelerator
 import com.example.aiagent.engine.core.DeviceMemoryProfile
@@ -13,17 +12,31 @@ import com.example.aiagent.engine.core.ModelFitEvaluator
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagent.engine.core.ParamBudget
 import com.example.aiagent.engine.core.Quantization
-import com.example.aiagenttestapp.AppContainer
 import com.example.aiagenttestapp.data.DownloadState
-import com.example.aiagenttestapp.data.ModelCatalog
+import com.example.aiagenttestapp.ui.mvi.MviViewModel
+import com.example.aiagenttestapp.ui.mvi.UiIntent
+import com.example.aiagenttestapp.ui.mvi.UiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import com.example.aiagenttestapp.data.CustomModelStore
+import com.example.aiagenttestapp.data.HuggingFaceAuth
+import com.example.aiagenttestapp.data.ModelDirectory
+import com.example.aiagenttestapp.data.ModelRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
+
+/** How the catalogue list is ordered. [BEST_FIT] is the default the screen opens on. */
+enum class CatalogSort(val label: String) {
+    BEST_FIT("Best fit"),
+    NEWEST("Newest first"),
+    NAME("Name (A–Z)"),
+    PARAMS("Parameters"),
+    SIZE_DESC("Size: largest"),
+    SIZE_ASC("Size: smallest"),
+}
 
 /** One row in the catalogue: the model, whether it fits, and where its download has got to. */
 data class CatalogEntry(
@@ -56,7 +69,9 @@ data class CatalogUiState(
     /** Which quantization the headline parameter budget is quoted at. */
     val budgetQuantization: Quantization = Quantization.Q4,
     val isSignedIn: Boolean = false,
-) {
+    /** The order [entries] is in. */
+    val sort: CatalogSort = CatalogSort.BEST_FIT,
+) : UiState {
     /**
      * The headline: how many parameters this device can actually run.
      *
@@ -78,28 +93,64 @@ data class CatalogUiState(
     }
 }
 
-class CatalogViewModel(private val container: AppContainer) : ViewModel() {
+sealed interface CatalogIntent : UiIntent {
+    /** Null shows every engine's models. */
+    data class EngineFilterChanged(val id: EngineId?) : CatalogIntent
+    data class SortChanged(val order: CatalogSort) : CatalogIntent
+    data class BudgetQuantizationChanged(val quantization: Quantization) : CatalogIntent
+    data class Download(val model: ModelSpec) : CatalogIntent
+    data class CancelDownload(val model: ModelSpec) : CatalogIntent
+    data class DeleteDownload(val model: ModelSpec) : CatalogIntent
+    /** Removes a user-added model from the catalogue, and its file from disk with it. */
+    data class RemoveCustom(val model: ModelSpec) : CatalogIntent
+}
 
+@HiltViewModel
+class CatalogViewModel @Inject constructor(
+    private val models: ModelDirectory,
+    private val customModelStore: CustomModelStore,
+    private val deviceMemory: DeviceMemoryProfile,
+    private val engines: EngineRegistry,
+    private val huggingFaceAuth: HuggingFaceAuth,
+    private val modelRepository: ModelRepository,
+) : MviViewModel<CatalogUiState, CatalogIntent, Nothing>(CatalogUiState(device = deviceMemory)) {
+
+    // The filters are flows, not plain state reads, because the catalogue is *derived*: every one
+    // of them re-runs the combine below. They mirror into the published state, which is what the
+    // screen renders -- so the state stays the single source of truth for the UI either way.
     private val engineFilter = MutableStateFlow<EngineId?>(null)
     private val budgetQuantization = MutableStateFlow(Quantization.Q4)
-
-    private val _uiState = MutableStateFlow(CatalogUiState(device = container.deviceMemory))
-    val uiState: StateFlow<CatalogUiState> = _uiState
+    private val sort = MutableStateFlow(CatalogSort.BEST_FIT)
 
     init {
-        combine(
-            container.allModels,
-            container.modelRepository.downloadStates,
+        val base = combine(
+            models.all,
+            modelRepository.downloadStates,
             engineFilter,
             budgetQuantization,
-            container.huggingFaceAuth.token,
+            huggingFaceAuth.token,
         ) { models, downloadStates, filter, quant, token ->
             buildState(models, downloadStates, filter, quant, signedIn = token != null)
         }
             // buildState checks the disk for each model, so keep it off the main thread.
             .flowOn(Dispatchers.IO)
-            .onEach { _uiState.value = it }
-            .launchIn(viewModelScope)
+
+        // Sort is applied after the (disk-touching) build: reordering an in-memory list is cheap and
+        // does not need to re-run the fit checks, so changing the order never re-hits the disk.
+        combine(base, sort) { state, order ->
+            state.copy(sort = order, entries = sortEntries(state.entries, order))
+        }
+            .collectIntoState { built -> built }
+    }
+
+    override fun reduce(intent: CatalogIntent) = when (intent) {
+        is CatalogIntent.EngineFilterChanged -> { engineFilter.value = intent.id }
+        is CatalogIntent.SortChanged -> { sort.value = intent.order }
+        is CatalogIntent.BudgetQuantizationChanged -> { budgetQuantization.value = intent.quantization }
+        is CatalogIntent.Download -> modelRepository.enqueueDownload(intent.model)
+        is CatalogIntent.CancelDownload -> modelRepository.cancelDownload(intent.model)
+        is CatalogIntent.DeleteDownload -> delete(intent.model)
+        is CatalogIntent.RemoveCustom -> removeCustom(intent.model)
     }
 
     private fun buildState(
@@ -109,8 +160,8 @@ class CatalogViewModel(private val container: AppContainer) : ViewModel() {
         quant: Quantization,
         signedIn: Boolean,
     ): CatalogUiState {
-        val device = container.deviceMemory
-        val registry: EngineRegistry = container.engines
+        val device = deviceMemory
+        val registry: EngineRegistry = engines
 
         val entries = models
             .map { model ->
@@ -122,7 +173,7 @@ class CatalogViewModel(private val container: AppContainer) : ViewModel() {
 
                 // Downloaded is the disk's call, not WorkManager's -- a finished job whose file was
                 // since deleted must not still read as Downloaded.
-                val isDownloaded = container.modelRepository.isDownloaded(model)
+                val isDownloaded = modelRepository.isDownloaded(model)
                 val downloadState = when {
                     isDownloaded -> DownloadState.Downloaded
                     else -> downloadStates[model.id] ?: DownloadState.NotDownloaded
@@ -141,12 +192,6 @@ class CatalogViewModel(private val container: AppContainer) : ViewModel() {
                 )
             }
             .filter { filter == null || it.engine?.id == filter }
-            // Best fit first, then largest model: the strongest thing the phone can actually run
-            // should be the first thing the user sees.
-            .sortedWith(
-                compareByDescending<CatalogEntry> { it.fit.verdict.ordinal }
-                    .thenByDescending { it.model.paramsBillions },
-            )
 
         return CatalogUiState(
             device = device,
@@ -159,6 +204,31 @@ class CatalogViewModel(private val container: AppContainer) : ViewModel() {
             isSignedIn = signedIn,
         )
     }
+
+    private fun sortEntries(entries: List<CatalogEntry>, sort: CatalogSort): List<CatalogEntry> =
+        when (sort) {
+            // Best fit first, then largest: the strongest thing the phone can actually run should be
+            // the first thing the user sees. This is the default the list opens on.
+            CatalogSort.BEST_FIT -> entries.sortedWith(
+                compareByDescending<CatalogEntry> { it.fit.verdict.ordinal }
+                    .thenByDescending { it.model.paramsBillions },
+            )
+            // Most-recently-added first. The source list runs oldest -> newest, so a plain
+            // sortedByDescending would leave equal timestamps (built-ins, and customs saved before
+            // add-time was tracked, all carry 0) in their oldest-first order -- which reads as
+            // reversed. Breaking ties by descending list position puts the later-added entry first,
+            // so newest-first is right even for models with no real timestamp.
+            CatalogSort.NEWEST -> entries.withIndex()
+                .sortedWith(
+                    compareByDescending<IndexedValue<CatalogEntry>> { it.value.model.addedAtMillis }
+                        .thenByDescending { it.index },
+                )
+                .map { it.value }
+            CatalogSort.NAME -> entries.sortedBy { it.model.name.lowercase() }
+            CatalogSort.PARAMS -> entries.sortedByDescending { it.model.paramsBillions }
+            CatalogSort.SIZE_DESC -> entries.sortedByDescending { it.model.sizeBytes }
+            CatalogSort.SIZE_ASC -> entries.sortedBy { it.model.sizeBytes }
+        }
 
     private fun unsupportedFit(model: ModelSpec, device: DeviceMemoryProfile) =
         ModelFitEvaluator.evaluate(
@@ -176,31 +246,14 @@ class CatalogViewModel(private val container: AppContainer) : ViewModel() {
             device = device,
         )
 
-    fun setEngineFilter(id: EngineId?) {
-        engineFilter.value = id
+    private fun delete(model: ModelSpec) {
+        viewModelScope.launch { modelRepository.delete(model) }
     }
 
-    fun setBudgetQuantization(quant: Quantization) {
-        budgetQuantization.value = quant
-    }
-
-    fun download(model: ModelSpec) {
-        container.modelRepository.enqueueDownload(model)
-    }
-
-    fun cancelDownload(model: ModelSpec) {
-        container.modelRepository.cancelDownload(model)
-    }
-
-    fun delete(model: ModelSpec) {
-        viewModelScope.launch { container.modelRepository.delete(model) }
-    }
-
-    /** Removes a user-added model from the catalogue, and its file from disk with it. */
-    fun removeCustom(model: ModelSpec) {
+    private fun removeCustom(model: ModelSpec) {
         viewModelScope.launch {
-            container.modelRepository.delete(model)
-            container.customModelStore.remove(model.id)
+            modelRepository.delete(model)
+            customModelStore.remove(model.id)
         }
     }
 }

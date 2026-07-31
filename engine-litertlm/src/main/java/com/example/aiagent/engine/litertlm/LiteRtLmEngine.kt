@@ -12,6 +12,7 @@ import com.example.aiagent.engine.core.HistoryTurn
 import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.LoadRequest
 import com.example.aiagent.engine.core.ModelFormat
+import com.example.aiagent.engine.core.OutputGuard
 import com.example.aiagent.engine.core.SamplingParams
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Content
@@ -63,6 +64,10 @@ class LiteRtLmEngine : InferenceEngine {
     private var engine: Engine? = null
     private var conversation: Conversation? = null
     private var conversationConfig: ConversationConfig = ConversationConfig()
+
+    // Caller-facing generation bounds, applied by an OutputGuard in generate().
+    private var maxOutputTokens: Int = 0
+    private var stopSequences: List<String> = emptyList()
 
     @Volatile
     override var loadedModelPath: String? = null
@@ -129,6 +134,8 @@ class LiteRtLmEngine : InferenceEngine {
 
     /** Caller must hold [lifecycleLock]. Throws if this accelerator cannot run the model. */
     private fun loadOn(accelerator: Accelerator, request: LoadRequest) {
+        maxOutputTokens = request.sampling.maxOutputTokens
+        stopSequences = request.sampling.stopSequences
         val newEngine = Engine(
             EngineConfig(
                 modelPath = request.modelPath,
@@ -194,16 +201,24 @@ class LiteRtLmEngine : InferenceEngine {
         // These are the floor; the runtime's figures refine them when they are actually there.
         var measuredFirstTokenMs = 0L
         var chunks = 0
+        val guard = OutputGuard(maxOutputTokens, stopSequences)
+        var stopped = false
 
         try {
             activeConversation.sendMessageAsync(prompt).collect { message ->
+                // Once a bound is hit we keep the output trimmed and ignore the rest. The runtime has
+                // no interruptible cancel we can call mid-collect without risking a spurious
+                // cancellation, so it decodes to its own stop -- correct output, a little wasted work.
+                if (stopped) return@collect
                 val text = message.text()
                 if (text.isNotEmpty()) {
                     if (measuredFirstTokenMs == 0L) {
                         measuredFirstTokenMs = System.currentTimeMillis() - startMs
                     }
                     chunks++
-                    emit(GenerationEvent.Token(text))
+                    val out = guard.push(text)
+                    if (out.isNotEmpty()) emit(GenerationEvent.Token(out))
+                    if (guard.isDone) stopped = true
                 }
             }
         } catch (t: Throwable) {
@@ -212,6 +227,10 @@ class LiteRtLmEngine : InferenceEngine {
                 t.message ?: "LiteRT-LM failed while generating",
                 t,
             )
+        }
+
+        if (!stopped) {
+            guard.drain().takeIf { it.isNotEmpty() }?.let { emit(GenerationEvent.Token(it)) }
         }
 
         // getBenchmarkInfo()/getTokenCount() are declared as functions, not properties, so they do
