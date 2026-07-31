@@ -467,9 +467,11 @@ object AuditExtractionPrompts {
      * MAP stage, run once per chunk. Everything variable lives below the preamble, which is what
      * lets a prefix-reusing engine skip re-decoding it.
      *
-     * Emits facts + non-conformities + actions. Severity is NOT asked for here -- it is graded in a
-     * separate pass ([gradeSeverity]) so this step never splits its attention away from finding
-     * everything. Parsed leniently by [AuditAnalysisParser]; quotes are checked by [AuditEvidence].
+     * Emits facts + verdict + non-conformities + actions, each finding carrying its own
+     * `resultType`. Stated here rather than graded afterwards: a later pass re-reads a finding
+     * with no memory of what was concluded, so it can only soften one, and severity that moves in
+     * a single direction has to be decided where the evidence is. Parsed leniently by
+     * [AuditAnalysisParser]; quotes are checked by [AuditEvidence].
      */
     fun extraction(
         part: String,

@@ -251,10 +251,14 @@ data class AuditAnalysis(
 /**
  * Prompt builders for the chunked transcript audit pipeline.
  *
- * Three stages:
- *   MAP    - [extraction] runs once per chunk: facts + verdict + non-conformities + actions
- *   GRADE  - [gradeSeverity] runs once per merged non-conformity
+ * Two stages:
+ *   MAP    - [extraction] runs once per chunk: facts + verdict + non-conformities + actions,
+ *            each finding stating its own result type
  *   REDUCE - [finalSummary] runs once, emits the overall prose summary only
+ *
+ * There was a third, between them, that graded each merged finding. It went with the shared result
+ * vocabulary: a grading pass is a second opinion by construction, and a second opinion can only
+ * ever soften a finding.
  *
  * Non-conformities and actions are merged in code between the stages, NOT by the model. Handing a
  * small model 40 findings and asking it to consolidate is where recall silently dies. The split of

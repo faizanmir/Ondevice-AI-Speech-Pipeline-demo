@@ -2,7 +2,6 @@ package com.example.aiagenttestapp.prompts
 
 import com.example.aiagenttestapp.prompts.audit.AuditExtractionPrompts
 import com.example.aiagenttestapp.prompts.audit.AuditPromptBudget
-import com.example.aiagenttestapp.prompts.audit.AuditSeverityPrompts
 import com.example.aiagenttestapp.prompts.audit.AuditSummaryPrompts
 import com.example.aiagenttestapp.prompts.audit.AuditSystemPrompts
 import com.example.aiagent.engine.core.ContextWindow
@@ -161,22 +160,6 @@ class AuditPromptsTest {
     /** Just the notes block, without the fence lines the budget does not cover. */
     private fun notes(prompt: String) =
         prompt.substringAfter("BEGIN NOTES -----\n").substringBefore("----- END NOTES")
-
-    @Test
-    fun `both fast grading prompts ask for one word and suppress thinking`() {
-        val finding = AuditFinding("Calibration certificate not signed", evidence = "never signed off")
-        val single = AuditSeverityPrompts.gradeSeverityFast(finding)
-        val batch = AuditSeverityPrompts.gradeSeverityBatch(listOf(finding, AuditFinding("Exit blocked")))
-
-        // The cap that makes these cheap is ~8 tokens; a model that thinks first would spend all of
-        // it before reaching the word. Suppression is what makes the cap safe, not an optimisation.
-        assertTrue(single.contains("/no_think"))
-        assertTrue(batch.contains("/no_think"))
-        assertTrue(single.contains("exactly one word"))
-        assertTrue(single.contains("Calibration certificate not signed"))
-        // The reasoned prompt is the fallback and must keep its reasoning.
-        assertTrue(AuditSeverityPrompts.gradeSeverity(finding).contains("reasoning"))
-    }
 
     @Test
     fun `a model echoing the options is not read as the last one`() {

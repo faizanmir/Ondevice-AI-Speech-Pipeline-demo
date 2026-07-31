@@ -3,7 +3,6 @@ package com.example.aiagenttestapp.data.audit
 import com.example.aiagenttestapp.prompts.audit.AuditExtractionPrompts
 import com.example.aiagenttestapp.prompts.audit.AuditPromptBudget
 import com.example.aiagenttestapp.prompts.audit.AuditQuickPrompts
-import com.example.aiagenttestapp.prompts.audit.AuditSeverityPrompts
 import com.example.aiagenttestapp.prompts.audit.AuditSummaryPrompts
 import android.Manifest
 import android.R
@@ -101,7 +100,6 @@ class AuditDrainWorker @AssistedInject constructor(
 
         modelResidency.attach()
         val extractStats = PhaseStats("extract")
-        val gradeStats = PhaseStats("grade")
         val summaryStats = PhaseStats("summarise")
         try {
             // llama.cpp reuses a shared prompt prefix, so it can afford the fuller preamble; the
@@ -345,20 +343,12 @@ class AuditDrainWorker @AssistedInject constructor(
             // that was actually running had no name anywhere the user could see.
             dao.setSummarising(doc.id, summarising = true, ts = now())
 
-            // Quick mode skips grading entirely -- it has nothing to grade -- which on a document
-            // with many findings is the largest single saving of the whole mode: grading sweeps the
-            // merged list up to three times, and only the first of those is batched.
-            val graded = if (mode == AuditMode.DETAILED) {
-                safeSetForeground(
-                    foregroundInfo(doc.name, doc.chunkCount, doc.chunkCount, phase = "Grading findings…"),
-                )
-                // Second pass: grade severity on the merged (deduplicated) set, one finding at a
-                // time, rather than asking the extraction step to do it while also finding
-                // everything. Resumes from whatever a previous run already graded.
-                gradeSeverities(engine, doc.id, nonConformities, doc.gradedJson, sliceMillis, gradeStats)
-            } else {
-                emptyList()
-            }
+            // Extraction states each finding's conclusion now, so there is no grading pass. It
+            // was a second opinion by construction -- it re-read a finding with no memory of what
+            // had been concluded, so it could only ever soften one, which is what "never
+            // downgrade" forbids. Deciding once, where the evidence is, also takes up to three
+            // sweeps of the merged list out of every detailed run.
+            val graded = nonConformities
 
             safeSetForeground(
                 foregroundInfo(doc.name, doc.chunkCount, doc.chunkCount, phase = "Writing the summary…"),
@@ -378,7 +368,7 @@ class AuditDrainWorker @AssistedInject constructor(
             Log.i(
                 TAG,
                 "audit '${doc.name}' on ${engine.activeAccelerator?.label ?: "unknown"} -- " +
-                    "$extractStats | $gradeStats | $summaryStats",
+                    "$extractStats | $summaryStats",
             )
 
             val unanalysed = partials.count { it.parseFailed }
@@ -800,164 +790,6 @@ class AuditDrainWorker @AssistedInject constructor(
     private var warnedNoPromptTokens = false
 
     /**
-     * The severity second pass: grade each merged non-conformity on its own. A fresh conversation per
-     * finding keeps them from contaminating each other, and the model only has to emit one word, read
-     * back leniently. A blank or unrecognised answer stays UNGRADED -- the old MINOR floor here let
-     * the artefact assert a grade nobody, model or auditor, ever gave, and a report that says
-     * "3 minor" over a document whose auditor said "OK for documentation" is a wrong answer, not a
-     * safe default. An ungraded finding is still shown, just without a badge, which is the true
-     * state of knowledge. These grades are the app's own triage; the source's stated classification,
-     * when there is one, travels separately in [AuditAnalysis.verdict].
-     *
-     * Checkpointed like the chunk loop: [previousJson] is what an earlier run had already graded, and
-     * the accumulated list is written back after every grade. Findings are matched to the checkpoint
-     * by title rather than by position, so a resume stays correct even if the merged order shifted.
-     */
-    private suspend fun gradeSeverities(
-        engine: InferenceEngine,
-        docId: Long,
-        findings: List<AuditFinding>,
-        previousJson: String?,
-        sliceMillis: () -> Long,
-        phase: PhaseStats,
-    ): List<AuditFinding> {
-        val alreadyGraded = previousJson
-            ?.let { AuditResultCodec.decode(it) }
-            ?.nonConformities
-            ?.associate { it.title to it.severity }
-            .orEmpty()
-
-        // Everything graded so far, by title. Seeded from the checkpoint, then filled by the batch
-        // pass and the per-finding fallback; written back after each step so a kill resumes.
-        val severities = alreadyGraded.filterValues { it.isNotBlank() }.toMutableMap()
-
-        suspend fun checkpoint() {
-            val snapshot = findings.mapNotNull { finding ->
-                severities[finding.title]?.let { finding.copy(severity = it) }
-            }
-            if (snapshot.isEmpty()) return
-            dao.setGraded(
-                docId,
-                AuditResultCodec.encode(AuditAnalysis(nonConformities = snapshot)),
-                System.currentTimeMillis(),
-            )
-            dao.addElapsed(docId, sliceMillis())
-        }
-
-        // Three passes, cheapest first, each catching what the one before it could not settle.
-        //
-        // Step 1 -- batch, one word per finding. A grade is one of three words, and until now every
-        // one of them cost a paragraph of reasoning: the model was asked to think aloud before
-        // answering, which is why this phase could run for half an hour and look like a hung summary.
-        val pending = findings.filter { severities[it.title] == null }
-        for (group in pending.chunked(GRADE_BATCH_SIZE)) {
-            if (group.size == 1) continue // a batch of one saves nothing; the fallback handles it
-            modelResidency.runExclusive { engine.resetKeepingPrefixCache() }
-            val raw = generateFull(
-                engine,
-                AuditSeverityPrompts.gradeSeverityBatch(group),
-                phase,
-                maxTokens = fastGradeMaxTokens(group.size),
-                label = "grade batch of ${group.size}",
-            ).text
-            // stripThinking, not stripAllThinking: an audit run leaves reasoning ON, so there may be
-            // a real <think> block here whose closing tag is the only boundary between the model's
-            // working and its answer. stripAllThinking would delete the tag and fuse the two.
-            AuditSeverity.parseBatch(Reasoning.stripThinking(raw)).forEach { (index, severity) ->
-                group.getOrNull(index)?.let { severities[it.title] = severity }
-            }
-            checkpoint()
-        }
-
-        // Step 2 -- one word, one finding at a time, for whatever the batch skipped or garbled.
-        for (finding in findings) {
-            if (severities[finding.title] != null) continue
-            modelResidency.runExclusive { engine.resetKeepingPrefixCache() }
-            val raw = generateFull(
-                engine,
-                AuditSeverityPrompts.gradeSeverityFast(finding),
-                phase,
-                maxTokens = fastGradeMaxTokens(1),
-                label = "grade \"${finding.title.take(40)}\"",
-            ).text
-            // First grade word wins here, not the last: nothing reasoned before this answer, and the
-            // realistic failure is a model echoing the options back. See AuditSeverity.normaliseFirst.
-            severities[finding.title] = AuditSeverity.normaliseFirst(Reasoning.stripAllThinking(raw))
-            checkpoint()
-        }
-
-        // Step 3 -- the reasoning prompt, kept as the last resort for the few findings neither fast
-        // pass could settle. A blank from step 2 means the model named no grade at all, which is
-        // exactly the case where letting it think is worth paying for.
-        for (finding in findings) {
-            if (!severities[finding.title].isNullOrBlank()) continue
-            modelResidency.runExclusive { engine.resetKeepingPrefixCache() }
-            val raw = generateFull(
-                engine,
-                AuditSeverityPrompts.gradeSeverity(finding),
-                phase,
-                maxTokens = gradeMaxTokens(1),
-                label = "grade (reasoned) \"${finding.title.take(40)}\"",
-            ).text
-            // Last grade word wins: this prompt reasons before answering, so an earlier mention may
-            // be a possibility the model went on to reject.
-            severities[finding.title] = AuditSeverity.normalise(Reasoning.stripThinking(raw))
-            checkpoint()
-        }
-
-        if (COMPARE_GRADING) compareGrading(engine, findings, severities, phase)
-
-        return findings.map { finding ->
-            finding.copy(severity = severities[finding.title].orEmpty())
-        }
-    }
-
-    /**
-     * Measurement mode: re-grades every finding with the reasoning prompt and reports how often it
-     * disagrees with the fast answer that will actually be used.
-     *
-     * The reasoning prompt is what this pipeline shipped before, so this is a no-regression check
-     * rather than a search for truth -- there is no ground truth here to check against, and the
-     * grades a document states about itself are not it. If the two agree, the fast path is strictly
-     * better. If they disagree often, the honest response is to keep reasoning for the cases that
-     * disagree, not to argue about which is right.
-     *
-     * Off by default and deliberately expensive when on: it doubles the grading pass.
-     */
-    private suspend fun compareGrading(
-        engine: InferenceEngine,
-        findings: List<AuditFinding>,
-        fast: Map<String, String>,
-        phase: PhaseStats,
-    ) {
-        var agree = 0
-        var differ = 0
-        for (finding in findings) {
-            modelResidency.runExclusive { engine.resetKeepingPrefixCache() }
-            val raw = generateFull(
-                engine,
-                AuditSeverityPrompts.gradeSeverity(finding),
-                phase,
-                maxTokens = gradeMaxTokens(1),
-                label = "compare \"${finding.title.take(40)}\"",
-            ).text
-            val reasoned = AuditSeverity.normalise(Reasoning.stripThinking(raw))
-            val quick = fast[finding.title].orEmpty()
-            if (reasoned == quick) {
-                agree++
-            } else {
-                differ++
-                Log.w(
-                    TAG,
-                    "grading differs on \"${finding.title.take(60)}\": " +
-                        "fast=${quick.ifBlank { "none" }} reasoned=${reasoned.ifBlank { "none" }}",
-                )
-            }
-        }
-        Log.i(TAG, "grading comparison: $agree agree, $differ differ, of ${findings.size}")
-    }
-
-    /**
      * setForeground that never crashes the drain. Android 12+ forbids starting a foreground service
      * from the background (and the expedited quota can run out), which throws
      * ForegroundServiceStartNotAllowedException. When that happens we keep going as an ordinary
@@ -1165,12 +997,6 @@ class AuditDrainWorker @AssistedInject constructor(
          */
         fun fastGradeMaxTokens(count: Int): Int = 32 + 8 * count
 
-        /**
-         * Run every finding through both grading prompts and log how often they disagree. Costs a
-         * full extra grading pass, so it is a thing you turn on for one document, read the log line,
-         * and turn off again.
-         */
-        const val COMPARE_GRADING = false
 
         /**
          * Wall-clock ceiling for one turn.
