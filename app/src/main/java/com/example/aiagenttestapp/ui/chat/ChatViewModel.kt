@@ -232,8 +232,8 @@ class ChatViewModel @Inject constructor(
     /** Web sources gathered across this turn's tool calls, attached to the final answer. */
     private val pendingSources = mutableListOf<Source>()
 
-    /** Extracted text of the staged file. Kept off UI state -- it can be large -- until sent. */
-    private var attachedFileText: String? = null
+    /** The file staged for the next message. Its text is kept off UI state -- it can be large. */
+    private val attachment = ChatAttachment(fileTextExtractor)
 
     /** Whether app functions were switched on when this chat's model was loaded. */
     private var toolsEnabled = false
@@ -384,15 +384,13 @@ class ChatViewModel @Inject constructor(
                 }
             }
 
-            val effectiveSystemPrompt = restored?.conversation?.summary
-                ?.takeIf { it.isNotBlank() }
-                ?.let { "${plan.systemPrompt}\n\nSummary of the earlier part of this conversation:\n$it" }
-                ?: plan.systemPrompt
+            val effectiveSystemPrompt =
+                ChatResume.systemPrompt(plan.systemPrompt, restored?.conversation?.summary)
 
-            val initialHistory = ContextWindow.fit(
-                history = pastMessages.map { it.toHistoryTurn() },
+            val initialHistory = ChatResume.fittedHistory(
+                past = pastMessages.map { it.toHistoryTurn() },
                 contextTokens = model.contextTokens,
-                systemPromptTokens = ContextWindow.estimateTokens(effectiveSystemPrompt),
+                systemPrompt = effectiveSystemPrompt,
             )
 
             // A fresh chat's request is exactly plan.freshLoadRequest(), which is what the model was
@@ -462,50 +460,29 @@ class ChatViewModel @Inject constructor(
             )
         }
         viewModelScope.launch {
-            when (val result = fileTextExtractor.extract(uri, maxChars = fileCharBudget())) {
-                is FileTextExtractor.Result.Success -> {
-                    attachedFileText = result.text
-                    setState {
-                        copy(
-                            isExtractingFile = false,
-                            attachmentName = result.name,
-                            attachmentTruncated = result.truncated,
-                        )
-                    }
+            when (val outcome = attachment.stage(uri, currentState.contextTotal)) {
+                is ChatAttachment.Outcome.Attached -> setState {
+                    copy(
+                        isExtractingFile = false,
+                        attachmentName = outcome.name,
+                        attachmentTruncated = outcome.truncated,
+                    )
                 }
 
-                is FileTextExtractor.Result.Failure -> {
-                    attachedFileText = null
-                    setState {
-                        copy(
-                            isExtractingFile = false,
-                            attachmentName = null,
-                            attachmentTruncated = false,
-                            attachmentError = result.message,
-                        )
-                    }
+                is ChatAttachment.Outcome.Failed -> setState {
+                    copy(
+                        isExtractingFile = false,
+                        attachmentName = null,
+                        attachmentTruncated = false,
+                        attachmentError = outcome.message,
+                    )
                 }
             }
         }
     }
 
-    /**
-     * How much of an attached file to feed the loaded model, in characters.
-     *
-     * The file shares the model's context window with the system prompt, the user's question and the
-     * summary the model has to write, so it gets [FILE_CONTEXT_FRACTION] of the window and the rest
-     * is left as headroom. Sized off the *loaded* model's context ([ChatUiState.contextTotal]), which
-     * is now device-dependent -- so a large-context model swallows a whole document while a 4K model
-     * still takes the ~10K chars it always did. Falls back to a 4K-model budget before a model loads.
-     */
-    private fun fileCharBudget(): Int {
-        val contextTokens = currentState.contextTotal.takeIf { it > 0 } ?: DEFAULT_CONTEXT_TOKENS
-        val fileTokens = (contextTokens * FILE_CONTEXT_FRACTION).toInt()
-        return ContextWindow.estimateChars(fileTokens)
-    }
-
     private fun clearAttachment() {
-        attachedFileText = null
+        attachment.clear()
         setState {
             copy(attachmentName = null, attachmentTruncated = false, attachmentError = null)
         }
@@ -528,7 +505,7 @@ class ChatViewModel @Inject constructor(
         // The model also gets the attached file's text, prepended; the bubble shows only what the
         // user wrote plus a paperclip, so a many-page file does not become a many-page message.
         val fileName = currentState.attachmentName
-        val fileText = attachedFileText
+        val fileText = attachment.text
         val modelPrompt = if (fileText != null && fileName != null) {
             "The user attached a file named \"$fileName\". Use its contents to answer.\n\n" +
                 "----- BEGIN $fileName -----\n$fileText\n----- END $fileName -----\n\n$userText"
@@ -552,7 +529,7 @@ class ChatViewModel @Inject constructor(
                 isGenerating = true,
             )
         }
-        attachedFileText = null
+        attachment.clear()
 
         generationJob = viewModelScope.launch {
             try {
@@ -894,14 +871,5 @@ class ChatViewModel @Inject constructor(
          */
         const val SEND_SETTLE_MS = 1000L
 
-        /**
-         * Share of the model's context window an attached file may fill. The remaining ~30% holds the
-         * system prompt, the user's question and the model's reply. At a 4K context this lands on the
-         * ~10K-char cap the extractor used before; a larger context scales it up proportionally.
-         */
-        const val FILE_CONTEXT_FRACTION = 0.7
-
-        /** Attachment budget before a model is loaded and [ChatUiState.contextTotal] is known. */
-        const val DEFAULT_CONTEXT_TOKENS = 4096
     }
 }
