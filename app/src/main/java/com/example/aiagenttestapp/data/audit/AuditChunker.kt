@@ -1,7 +1,7 @@
 package com.example.aiagenttestapp.data.audit
 
+import com.example.aiagenttestapp.prompts.audit.AuditPromptBudget
 import com.example.aiagent.engine.core.ContextWindow
-import com.example.aiagenttestapp.prompts.AuditPrompts
 
 /**
  * Splits an over-long transcript into context-sized chunks for map-reduce analysis, and merges the
@@ -85,7 +85,7 @@ object AuditChunker {
     /**
      * The character budget for one chunk on a model with [contextTokens] of context, once
      * [promptTokens] (the system prompt and the extraction prompt's scaffolding, from
-     * [AuditPrompts.fixedPromptTokens]) and room for that chunk's reply are set aside. So the chunk
+     * [AuditPromptBudget.fixedPromptTokens]) and room for that chunk's reply are set aside. So the chunk
      * fills as much of the *actual* window as is safe (a 128K model takes near-128K chunks, a 4K
      * model small ones), rather than a flat fraction that under-fills large contexts. Floored at
      * [MIN_CHUNK_TOKENS] so a tiny context never yields a zero-length budget -- though a context

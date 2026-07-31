@@ -1,5 +1,10 @@
 package com.example.aiagenttestapp.prompts
 
+import com.example.aiagenttestapp.prompts.audit.AuditExtractionPrompts
+import com.example.aiagenttestapp.prompts.audit.AuditPromptBudget
+import com.example.aiagenttestapp.prompts.audit.AuditSeverityPrompts
+import com.example.aiagenttestapp.prompts.audit.AuditSummaryPrompts
+import com.example.aiagenttestapp.prompts.audit.AuditSystemPrompts
 import com.example.aiagent.engine.core.ContextWindow
 import com.example.aiagenttestapp.data.audit.AuditAnalysisParser
 import com.example.aiagenttestapp.data.audit.AuditChunker
@@ -19,8 +24,8 @@ import org.junit.Test
  */
 class AuditPromptsTest {
 
-    private val rich = AuditPrompts.preamble(AuditPromptProfile.RICH)
-    private val lean = AuditPrompts.preamble(AuditPromptProfile.LEAN)
+    private val rich = AuditExtractionPrompts.preamble(AuditPromptProfile.RICH)
+    private val lean = AuditExtractionPrompts.preamble(AuditPromptProfile.LEAN)
 
     @Test
     fun `the lean profile is materially smaller than the rich one`() {
@@ -84,7 +89,7 @@ class AuditPromptsTest {
     @Test
     fun `a document that fits is passed through unchanged`() {
         val facts = listOf(listOf("Calibration log signed 3 March."), listOf("Line ran at 22 units."))
-        val prompt = AuditPrompts.finalSummary(facts, maxNoteChars = 10_000)
+        val prompt = AuditSummaryPrompts.finalSummary(facts, maxNoteChars = 10_000)
 
         facts.flatten().forEach { assertTrue(prompt.contains(it)) }
     }
@@ -94,7 +99,7 @@ class AuditPromptsTest {
         // 80 sections is MAX_CHUNKS: the worst case the reduce prompt can actually be handed.
         val facts = (1..80).map { section -> (1..10).map { "Section $section fact $it: ${"x".repeat(60)}" } }
         val budget = 4_000
-        val prompt = AuditPrompts.finalSummary(facts, maxNoteChars = budget)
+        val prompt = AuditSummaryPrompts.finalSummary(facts, maxNoteChars = budget)
 
         val notes = notes(prompt)
         assertTrue("notes were ${notes.length} chars against a $budget budget", notes.length <= budget)
@@ -107,7 +112,7 @@ class AuditPromptsTest {
     @Test
     fun `a section whose first fact outruns its share is truncated, never dropped`() {
         val facts = listOf(listOf("a".repeat(500)), listOf("b".repeat(500)))
-        val prompt = AuditPrompts.finalSummary(facts, maxNoteChars = 100)
+        val prompt = AuditSummaryPrompts.finalSummary(facts, maxNoteChars = 100)
 
         // Both sections still speak -- and neither pushes the prompt back over the budget.
         assertTrue(prompt.contains("aaa"))
@@ -117,7 +122,7 @@ class AuditPromptsTest {
 
     @Test
     fun `an extraction turn fits the smallest context the planner admits`() {
-        val promptTokens = AuditPrompts.fixedPromptTokens()
+        val promptTokens = AuditPromptBudget.fixedPromptTokens()
         val minimum = AuditChunker.minimumContextTokens(promptTokens)
 
         val chunkChars = AuditChunker.chunkCharBudget(minimum, promptTokens)
@@ -131,19 +136,19 @@ class AuditPromptsTest {
     @Test
     fun `the summary note budget leaves room for the reply`() {
         val context = 4096
-        val budget = AuditPrompts.summaryNoteBudget(context, verdict = "OK for documentation")
-        val prompt = AuditPrompts.finalSummary(
+        val budget = AuditSummaryPrompts.summaryNoteBudget(context, verdict = "OK for documentation")
+        val prompt = AuditSummaryPrompts.finalSummary(
             listOf(listOf("x".repeat(budget))),
             verdict = "OK for documentation",
             maxNoteChars = budget,
         )
 
-        val used = ContextWindow.estimateTokens(AuditPrompts.SYSTEM_PROMPT) +
+        val used = ContextWindow.estimateTokens(AuditSystemPrompts.SYSTEM_PROMPT) +
             ContextWindow.estimateTokens(prompt)
         assertEquals(
             "summary turn leaves ${context - used} tokens for a reply",
             true,
-            context - used >= AuditPrompts.SUMMARY_OUTPUT_RESERVE_TOKENS,
+            context - used >= AuditSummaryPrompts.SUMMARY_OUTPUT_RESERVE_TOKENS,
         )
     }
 
@@ -154,8 +159,8 @@ class AuditPromptsTest {
     @Test
     fun `both fast grading prompts ask for one word and suppress thinking`() {
         val finding = AuditFinding("Calibration certificate not signed", evidence = "never signed off")
-        val single = AuditPrompts.gradeSeverityFast(finding)
-        val batch = AuditPrompts.gradeSeverityBatch(listOf(finding, AuditFinding("Exit blocked")))
+        val single = AuditSeverityPrompts.gradeSeverityFast(finding)
+        val batch = AuditSeverityPrompts.gradeSeverityBatch(listOf(finding, AuditFinding("Exit blocked")))
 
         // The cap that makes these cheap is ~8 tokens; a model that thinks first would spend all of
         // it before reaching the word. Suppression is what makes the cap safe, not an optimisation.
@@ -164,7 +169,7 @@ class AuditPromptsTest {
         assertTrue(single.contains("exactly one word"))
         assertTrue(single.contains("Calibration certificate not signed"))
         // The reasoned prompt is the fallback and must keep its reasoning.
-        assertTrue(AuditPrompts.gradeSeverity(finding).contains("reasoning"))
+        assertTrue(AuditSeverityPrompts.gradeSeverity(finding).contains("reasoning"))
     }
 
     @Test
@@ -203,8 +208,8 @@ class AuditPromptsTest {
         // room spent it on prose, and dense sections were truncated mid-object. The check has to
         // hold for whichever format is in use, since both describe the same fields.
         AuditOutputFormat.entries.forEach { format ->
-            val richPrompt = AuditPrompts.preamble(AuditPromptProfile.RICH, format)
-            val leanPrompt = AuditPrompts.preamble(AuditPromptProfile.LEAN, format)
+            val richPrompt = AuditExtractionPrompts.preamble(AuditPromptProfile.RICH, format)
+            val leanPrompt = AuditExtractionPrompts.preamble(AuditPromptProfile.LEAN, format)
             val detail = if (format == AuditOutputFormat.RECORDS) "detail:" else """"detail":"..."""
 
             assertTrue("$format: RICH should ask for detail", richPrompt.contains(detail))
@@ -286,8 +291,8 @@ class AuditPromptsTest {
 
     @Test
     fun `dropping the draft removes it from the instructions and the examples`() {
-        val drafted = AuditPrompts.preamble(AuditPromptProfile.RICH, AuditOutputFormat.RECORDS, draft = true)
-        val direct = AuditPrompts.preamble(AuditPromptProfile.RICH, AuditOutputFormat.RECORDS, draft = false)
+        val drafted = AuditExtractionPrompts.preamble(AuditPromptProfile.RICH, AuditOutputFormat.RECORDS, draft = true)
+        val direct = AuditExtractionPrompts.preamble(AuditPromptProfile.RICH, AuditOutputFormat.RECORDS, draft = false)
 
         assertTrue(drafted.contains("Answer in two steps"))
         assertTrue(drafted.contains("FINDINGS"))
@@ -301,7 +306,7 @@ class AuditPromptsTest {
     fun `dropping the draft leaves the recall instructions untouched`() {
         // The draft is scratch space, not part of what counts as a finding. Removing it must not
         // quietly remove the cue words that decide what the model looks for.
-        val direct = AuditPrompts.preamble(AuditPromptProfile.RICH, AuditOutputFormat.RECORDS, draft = false)
+        val direct = AuditExtractionPrompts.preamble(AuditPromptProfile.RICH, AuditOutputFormat.RECORDS, draft = false)
 
         listOf(
             "not calibrated, not trained, out of date, out of specification, not followed",
@@ -315,13 +320,13 @@ class AuditPromptsTest {
     fun `budgets are measured against the larger, drafting prompt`() {
         // Sections are sized before the accelerator is known, so the reserve must assume the bigger
         // prompt: a run that drops the draft then has more room than reserved, never less.
-        val drafted = AuditPrompts.preamble(AuditPromptProfile.RICH, AuditOutputFormat.RECORDS, draft = true)
-        val direct = AuditPrompts.preamble(AuditPromptProfile.RICH, AuditOutputFormat.RECORDS, draft = false)
+        val drafted = AuditExtractionPrompts.preamble(AuditPromptProfile.RICH, AuditOutputFormat.RECORDS, draft = true)
+        val direct = AuditExtractionPrompts.preamble(AuditPromptProfile.RICH, AuditOutputFormat.RECORDS, draft = false)
 
         assertTrue(drafted.length > direct.length)
         assertTrue(
             "fixedPromptTokens must cover the drafting prompt",
-            AuditPrompts.fixedPromptTokens(AuditPromptProfile.RICH) >=
+            AuditPromptBudget.fixedPromptTokens(AuditPromptProfile.RICH) >=
                 ContextWindow.estimateTokens(drafted),
         )
     }

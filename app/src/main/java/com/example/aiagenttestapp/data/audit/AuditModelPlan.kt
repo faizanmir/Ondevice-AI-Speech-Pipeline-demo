@@ -1,11 +1,13 @@
 package com.example.aiagenttestapp.data.audit
 
+import com.example.aiagenttestapp.prompts.audit.AuditExtractionPrompts
+import com.example.aiagenttestapp.prompts.audit.AuditPromptBudget
+import com.example.aiagenttestapp.prompts.audit.AuditSystemPrompts
 import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.LoadRequest
 import com.example.aiagenttestapp.data.ModelLoadPlan
 import com.example.aiagenttestapp.data.ModelLoadPlanner
 import com.example.aiagenttestapp.data.ModelResidency
-import com.example.aiagenttestapp.prompts.AuditPrompts
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -63,17 +65,17 @@ sealed interface AuditModelPlan {
                 // so cannot be reused here -- switching between chat and audit reloads it.
                 contextTokens = contextTokens,
                 // No reasoning directive of any kind: extraction needs the model's thinking, and
-                // suppressing it measurably cost findings. See AuditPrompts.fixedPromptTokens.
+                // suppressing it measurably cost findings. See AuditPromptBudget.fixedPromptTokens.
                 //
                 // Quick mode gets its own system prompt because it is asking for something else --
                 // report what is here, rather than judge what is wrong. Note this makes the two
                 // modes' load requests differ, so switching between them reloads the model; that is
                 // correct, since a quick run must not inherit an audit-shaped framing of the task.
                 systemPrompt = when (mode) {
-                    AuditMode.DETAILED -> AuditPrompts.SYSTEM_PROMPT
-                    AuditMode.QUICK -> AuditPrompts.QUICK_SYSTEM_PROMPT
+                    AuditMode.DETAILED -> AuditSystemPrompts.SYSTEM_PROMPT
+                    AuditMode.QUICK -> AuditSystemPrompts.QUICK_SYSTEM_PROMPT
                 },
-                sampling = base.sampling.copy(temperature = AuditPrompts.EXTRACTION_TEMPERATURE),
+                sampling = base.sampling.copy(temperature = AuditExtractionPrompts.EXTRACTION_TEMPERATURE),
             )
         }
     }
@@ -134,6 +136,6 @@ class AuditLoadPlanner @Inject constructor(
     private companion object {
         /** Derived from the prompts, so editing them moves the bar rather than invalidating it. */
         val MIN_CONTEXT_TOKENS =
-            AuditChunker.minimumContextTokens(AuditPrompts.fixedPromptTokens())
+            AuditChunker.minimumContextTokens(AuditPromptBudget.fixedPromptTokens())
     }
 }

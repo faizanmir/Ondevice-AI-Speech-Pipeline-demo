@@ -1,6 +1,6 @@
 package com.example.aiagenttestapp.data.audit
 
-import com.example.aiagenttestapp.prompts.AuditPrompts
+import com.example.aiagenttestapp.prompts.audit.AuditPromptBudget
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -33,7 +33,7 @@ class QuickAuditTest {
                 "Line ran at 22 units per hour.",
                 "Extinguisher inspection overdue by 14 months.",
             ),
-            AuditPrompts.parseQuickPoints(reply),
+            QuickPointsParser.parseQuickPoints(reply),
         )
     }
 
@@ -49,7 +49,7 @@ class QuickAuditTest {
 
         assertEquals(
             listOf("The audit covered the calibration process."),
-            AuditPrompts.parseQuickPoints(reply),
+            QuickPointsParser.parseQuickPoints(reply),
         )
     }
 
@@ -58,7 +58,7 @@ class QuickAuditTest {
         // A model asked for "at most 10" that hands back 14 -- the observed failure this guards.
         val reply = (1..14).joinToString("\n") { "- point $it" }
 
-        val points = AuditPrompts.parseQuickPoints(reply)
+        val points = QuickPointsParser.parseQuickPoints(reply)
 
         assertEquals(QuickAudit.MAX_POINTS, points.size)
         assertEquals("point 1", points.first())
@@ -69,7 +69,7 @@ class QuickAuditTest {
     fun `markdown decoration around a point is stripped`() {
         assertEquals(
             listOf("Torque wrench calibrated 12 May."),
-            AuditPrompts.parseQuickPoints("**- Torque wrench calibrated 12 May.**"),
+            QuickPointsParser.parseQuickPoints("**- Torque wrench calibrated 12 May.**"),
         )
     }
 
@@ -77,7 +77,7 @@ class QuickAuditTest {
     fun `a reply with no readable points yields an empty list rather than junk`() {
         // The worker falls back to the raw section notes on empty; it must not be handed prose.
         assertTrue(
-            AuditPrompts.parseQuickPoints("I could not summarise this document.").isEmpty(),
+            QuickPointsParser.parseQuickPoints("I could not summarise this document.").isEmpty(),
         )
     }
 
@@ -160,12 +160,12 @@ class QuickAuditTest {
 
         val detailed = AuditChunker.chunkCharBudget(
             context,
-            AuditPrompts.fixedPromptTokens(AuditMode.DETAILED, AuditPromptProfile.RICH),
+            AuditPromptBudget.fixedPromptTokens(AuditMode.DETAILED, AuditPromptProfile.RICH),
             mode = AuditMode.DETAILED,
         )
         val quick = AuditChunker.chunkCharBudget(
             context,
-            AuditPrompts.fixedPromptTokens(AuditMode.QUICK, AuditPromptProfile.RICH),
+            AuditPromptBudget.fixedPromptTokens(AuditMode.QUICK, AuditPromptProfile.RICH),
             mode = AuditMode.QUICK,
         )
 
@@ -176,8 +176,8 @@ class QuickAuditTest {
 
     @Test
     fun `quick's preamble is materially smaller than detailed's`() {
-        val detailed = AuditPrompts.fixedPromptTokens(AuditMode.DETAILED, AuditPromptProfile.RICH)
-        val quick = AuditPrompts.fixedPromptTokens(AuditMode.QUICK, AuditPromptProfile.RICH)
+        val detailed = AuditPromptBudget.fixedPromptTokens(AuditMode.DETAILED, AuditPromptProfile.RICH)
+        val quick = AuditPromptBudget.fixedPromptTokens(AuditMode.QUICK, AuditPromptProfile.RICH)
 
         assertTrue("quick=$quick should be well under detailed=$detailed", quick < detailed / 2)
     }

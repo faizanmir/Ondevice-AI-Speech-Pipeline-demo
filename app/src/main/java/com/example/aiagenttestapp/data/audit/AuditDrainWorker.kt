@@ -1,5 +1,10 @@
 package com.example.aiagenttestapp.data.audit
 
+import com.example.aiagenttestapp.prompts.audit.AuditExtractionPrompts
+import com.example.aiagenttestapp.prompts.audit.AuditPromptBudget
+import com.example.aiagenttestapp.prompts.audit.AuditQuickPrompts
+import com.example.aiagenttestapp.prompts.audit.AuditSeverityPrompts
+import com.example.aiagenttestapp.prompts.audit.AuditSummaryPrompts
 import android.Manifest
 import android.R
 import android.app.NotificationChannel
@@ -26,7 +31,6 @@ import com.example.aiagent.engine.core.InferenceEngine
 import androidx.hilt.work.HiltWorker
 import com.example.aiagenttestapp.MainActivity
 import com.example.aiagenttestapp.data.ModelResidency
-import com.example.aiagenttestapp.prompts.AuditPrompts
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import com.example.aiagenttestapp.util.Reasoning
@@ -169,7 +173,7 @@ class AuditDrainWorker @AssistedInject constructor(
                 val turn = generateFull(
                     engine,
                     when (mode) {
-                        AuditMode.DETAILED -> AuditPrompts.extraction(
+                        AuditMode.DETAILED -> AuditExtractionPrompts.extraction(
                             chunk.text,
                             chunk.chunkIndex + 1,
                             doc.chunkCount,
@@ -177,7 +181,7 @@ class AuditDrainWorker @AssistedInject constructor(
                             draft = draft,
                         )
 
-                        AuditMode.QUICK -> AuditPrompts.quickExtraction(
+                        AuditMode.QUICK -> AuditQuickPrompts.quickExtraction(
                             chunk.text,
                             chunk.chunkIndex + 1,
                             doc.chunkCount,
@@ -225,7 +229,7 @@ class AuditDrainWorker @AssistedInject constructor(
                 // so its reply goes straight to the record parser.
                 val rawParsed = when {
                     mode == AuditMode.QUICK -> AuditRecordParser.parse(raw)
-                    AuditPrompts.OUTPUT_FORMAT == AuditOutputFormat.RECORDS -> AuditRecordParser.parse(raw)
+                    AuditExtractionPrompts.OUTPUT_FORMAT == AuditOutputFormat.RECORDS -> AuditRecordParser.parse(raw)
                     else -> AuditAnalysisParser.parse(raw)
                 }
 
@@ -256,7 +260,7 @@ class AuditDrainWorker @AssistedInject constructor(
                     turn.stoppedBy == StopReason.TOKEN_CAP ->
                         "the model's reply outgrew the room reserved for it"
                     filledContext -> "the model ran out of context part-way through this section"
-                    mode == AuditMode.QUICK || AuditPrompts.OUTPUT_FORMAT == AuditOutputFormat.RECORDS ->
+                    mode == AuditMode.QUICK || AuditExtractionPrompts.OUTPUT_FORMAT == AuditOutputFormat.RECORDS ->
                         "the model's reply contained no records to read"
                     else -> AuditAnalysisParser.diagnose(raw)
                 }
@@ -265,7 +269,7 @@ class AuditDrainWorker @AssistedInject constructor(
                     // The parser's precise complaint, when it had one: which offset, and what it
                     // expected to find there. A reply that ends in a closed object and still will
                     // not parse is malformed somewhere the tail cannot show.
-                    if (mode == AuditMode.DETAILED && AuditPrompts.OUTPUT_FORMAT == AuditOutputFormat.JSON) {
+                    if (mode == AuditMode.DETAILED && AuditExtractionPrompts.OUTPUT_FORMAT == AuditOutputFormat.JSON) {
                         AuditAnalysisParser.parseFailureDetail(raw)?.let {
                             Log.w(TAG, "chunk ${chunk.chunkIndex}: $it")
                         }
@@ -586,7 +590,7 @@ class AuditDrainWorker @AssistedInject constructor(
      *
      * One turn over notes gathered from the whole document -- so the result reflects a full read
      * even though no single turn ever saw the whole text. The cap is applied in code by
-     * [AuditPrompts.parseQuickPoints], not merely asked for.
+     * [QuickPointsParser.parseQuickPoints], not merely asked for.
      *
      * Falls back to the leading section notes when the model returns nothing parseable. A quick
      * report whose points are the raw notes is thin; one with no points at all is a blank report,
@@ -602,8 +606,8 @@ class AuditDrainWorker @AssistedInject constructor(
         if (pointsByPart.all { it.isEmpty() }) return SummaryResult()
         modelResidency.runExclusive { engine.resetKeepingPrefixCache() }
 
-        val budget = AuditPrompts.quickSummaryNoteBudget(contextTokens)
-        val noteChars = AuditPrompts.noteChars(pointsByPart)
+        val budget = AuditQuickPrompts.quickSummaryNoteBudget(contextTokens)
+        val noteChars = AuditSummaryPrompts.noteChars(pointsByPart)
         val trimmed = noteChars > budget
         if (trimmed) {
             Log.w(TAG, "quick summary notes trimmed to fit context: $noteChars chars into $budget")
@@ -611,14 +615,14 @@ class AuditDrainWorker @AssistedInject constructor(
 
         val raw = generateFull(
             engine,
-            AuditPrompts.quickSummary(pointsByPart, QuickAudit.MAX_POINTS, budget),
+            AuditQuickPrompts.quickSummary(pointsByPart, QuickAudit.MAX_POINTS, budget),
             phase,
-            maxTokens = AuditPrompts.QUICK_SUMMARY_OUTPUT_RESERVE_TOKENS,
+            maxTokens = AuditQuickPrompts.QUICK_SUMMARY_OUTPUT_RESERVE_TOKENS,
             label = "quick summary",
             maxMillis = maxMillis,
         ).text
 
-        val points = AuditPrompts.parseQuickPoints(Reasoning.stripThinking(raw))
+        val points = QuickPointsParser.parseQuickPoints(Reasoning.stripThinking(raw))
             .ifEmpty {
                 Log.w(TAG, "quick summary produced no readable points; falling back to section notes")
                 pointsByPart.flatten().take(QuickAudit.MAX_POINTS)
@@ -642,8 +646,8 @@ class AuditDrainWorker @AssistedInject constructor(
         // hold, and report it when the cap bites: the trimming is invisible in the finished prose,
         // so a summary written from a fraction of the document would otherwise read exactly like one
         // written from all of it.
-        val budget = AuditPrompts.summaryNoteBudget(contextTokens, verdict)
-        val noteChars = AuditPrompts.noteChars(factsByPart)
+        val budget = AuditSummaryPrompts.summaryNoteBudget(contextTokens, verdict)
+        val noteChars = AuditSummaryPrompts.noteChars(factsByPart)
         val trimmed = noteChars > budget
         if (trimmed) {
             Log.w(TAG, "summary notes trimmed to fit context: $noteChars chars into $budget")
@@ -651,9 +655,9 @@ class AuditDrainWorker @AssistedInject constructor(
 
         val raw = generateFull(
             engine,
-            AuditPrompts.finalSummary(factsByPart, verdict, budget),
+            AuditSummaryPrompts.finalSummary(factsByPart, verdict, budget),
             phase,
-            maxTokens = AuditPrompts.SUMMARY_OUTPUT_RESERVE_TOKENS,
+            maxTokens = AuditSummaryPrompts.SUMMARY_OUTPUT_RESERVE_TOKENS,
             label = "summary",
             maxMillis = maxMillis,
         ).text
@@ -752,7 +756,7 @@ class AuditDrainWorker @AssistedInject constructor(
             }
             return
         }
-        val estimated = AuditPrompts.fixedPromptTokens(mode, profile) +
+        val estimated = AuditPromptBudget.fixedPromptTokens(mode, profile) +
             com.example.aiagent.engine.core.ContextWindow.estimateTokens(chunkText)
         val drift = (reportedPromptTokens - estimated).toDouble() / estimated
         if (kotlin.math.abs(drift) >= ESTIMATE_DRIFT_WARN) {
@@ -822,7 +826,7 @@ class AuditDrainWorker @AssistedInject constructor(
             modelResidency.runExclusive { engine.resetKeepingPrefixCache() }
             val raw = generateFull(
                 engine,
-                AuditPrompts.gradeSeverityBatch(group),
+                AuditSeverityPrompts.gradeSeverityBatch(group),
                 phase,
                 maxTokens = fastGradeMaxTokens(group.size),
                 label = "grade batch of ${group.size}",
@@ -842,7 +846,7 @@ class AuditDrainWorker @AssistedInject constructor(
             modelResidency.runExclusive { engine.resetKeepingPrefixCache() }
             val raw = generateFull(
                 engine,
-                AuditPrompts.gradeSeverityFast(finding),
+                AuditSeverityPrompts.gradeSeverityFast(finding),
                 phase,
                 maxTokens = fastGradeMaxTokens(1),
                 label = "grade \"${finding.title.take(40)}\"",
@@ -861,7 +865,7 @@ class AuditDrainWorker @AssistedInject constructor(
             modelResidency.runExclusive { engine.resetKeepingPrefixCache() }
             val raw = generateFull(
                 engine,
-                AuditPrompts.gradeSeverity(finding),
+                AuditSeverityPrompts.gradeSeverity(finding),
                 phase,
                 maxTokens = gradeMaxTokens(1),
                 label = "grade (reasoned) \"${finding.title.take(40)}\"",
@@ -903,7 +907,7 @@ class AuditDrainWorker @AssistedInject constructor(
             modelResidency.runExclusive { engine.resetKeepingPrefixCache() }
             val raw = generateFull(
                 engine,
-                AuditPrompts.gradeSeverity(finding),
+                AuditSeverityPrompts.gradeSeverity(finding),
                 phase,
                 maxTokens = gradeMaxTokens(1),
                 label = "compare \"${finding.title.take(40)}\"",
@@ -1101,7 +1105,7 @@ class AuditDrainWorker @AssistedInject constructor(
             chunkText: String,
         ): Int =
             (
-                contextTokens - AuditPrompts.fixedPromptTokens(mode, profile) -
+                contextTokens - AuditPromptBudget.fixedPromptTokens(mode, profile) -
                     com.example.aiagent.engine.core.ContextWindow.estimateTokens(chunkText)
                 ).coerceAtLeast(AuditChunker.MIN_OUTPUT_RESERVE_TOKENS)
 

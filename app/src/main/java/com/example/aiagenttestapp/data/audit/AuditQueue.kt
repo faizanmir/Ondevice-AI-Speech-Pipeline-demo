@@ -1,5 +1,6 @@
 package com.example.aiagenttestapp.data.audit
 
+import com.example.aiagenttestapp.prompts.audit.AuditPromptBudget
 import android.content.Context
 import android.util.Log
 import androidx.work.ExistingWorkPolicy
@@ -7,7 +8,6 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import com.example.aiagent.engine.core.ContextWindow
-import com.example.aiagenttestapp.prompts.AuditPrompts
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -94,7 +94,7 @@ class AuditQueue(context: Context, private val dao: AuditDao) {
         // sections are correspondingly larger and a document needs fewer of them.
         val chunkChars = AuditChunker.chunkCharBudget(
             contextTokens.coerceAtLeast(1),
-            AuditPrompts.fixedPromptTokens(mode, AuditPromptProfile.RICH),
+            AuditPromptBudget.fixedPromptTokens(mode, AuditPromptProfile.RICH),
             charsPerToken = ContextWindow.charsPerToken(trimmed),
             mode = mode,
         )

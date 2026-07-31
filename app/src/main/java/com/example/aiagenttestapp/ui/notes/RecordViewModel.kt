@@ -34,7 +34,7 @@ import com.example.aiagenttestapp.functions.SpokenKeywords
 import com.example.aiagenttestapp.functions.VoiceCommandAction
 import com.example.aiagenttestapp.functions.VoiceCommands
 import com.example.aiagenttestapp.prompts.NotePrompts
-import com.example.aiagenttestapp.prompts.ReasoningPrompts
+import com.example.aiagenttestapp.prompts.SystemPromptBuilder
 import com.example.aiagenttestapp.stt.AudioRecorder
 import com.example.aiagenttestapp.stt.KeywordDetector
 import com.example.aiagenttestapp.stt.KeywordModelPaths
@@ -894,15 +894,12 @@ class RecordViewModel @Inject constructor(
                     // reorder them, so the argmax token is the same either way.
                     temperature = 0.3f,
                 ),
-                systemPrompt = buildString {
-                    append(NotePrompts.SYSTEM_PROMPT)
-                    // A summary is the distilled result, so skip reasoning when it is turned off --
-                    // it only costs time here, since the <think> block is hidden from the note anyway.
-                    if (!settings.thinkingEnabled) {
-                        append("\n\n")
-                        append(ReasoningPrompts.NO_THINK_DIRECTIVE)
-                    }
-                },
+                // A summary is the distilled result, so reasoning off costs nothing here -- the
+                // <think> block is hidden from the note either way, it just takes time to produce.
+                systemPrompt = SystemPromptBuilder.build(
+                    base = NotePrompts.SYSTEM_PROMPT,
+                    thinkingEnabled = settings.thinkingEnabled,
+                ),
                 cacheDir = cacheDirPath,
                 nativeLibraryDir = nativeLibraryDir,
                 threadCount = settings.threadCount,

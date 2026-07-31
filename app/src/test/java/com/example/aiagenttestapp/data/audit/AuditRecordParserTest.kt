@@ -1,6 +1,6 @@
 package com.example.aiagenttestapp.data.audit
 
-import com.example.aiagenttestapp.prompts.AuditPrompts
+import com.example.aiagenttestapp.prompts.audit.AuditExtractionPrompts
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -170,7 +170,7 @@ class AuditRecordParserTest {
     fun `the worked examples the prompt teaches parse back into what they depict`() {
         // The examples are the contract. If the format they demonstrate does not survive this
         // parser, the prompt is teaching the model to produce something the app cannot read.
-        val preamble = AuditPrompts.preamble(AuditPromptProfile.RICH, AuditOutputFormat.RECORDS)
+        val preamble = AuditExtractionPrompts.preamble(AuditPromptProfile.RICH, AuditOutputFormat.RECORDS)
         val exampleA = preamble
             .substringAfter("Worked example A")
             .substringAfter("RECORDS")

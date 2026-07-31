@@ -6,7 +6,7 @@ import com.example.aiagent.engine.llamacpp.ToolCallingProtocol
 import com.example.aiagent.engine.core.ToolDefinition
 import com.example.aiagenttestapp.functions.AppFunctions
 import com.example.aiagenttestapp.prompts.ChatPrompts
-import com.example.aiagenttestapp.prompts.ReasoningPrompts
+import com.example.aiagenttestapp.prompts.SystemPromptBuilder
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -109,21 +109,18 @@ class ChatLoadPlanner @Inject constructor(
         val definitions =
             if (toolsEnabled) AppFunctions.definitionsFor(webAccessEnabled) else emptyList()
 
-        val systemPrompt = buildString {
-            append(ChatPrompts.SYSTEM_PROMPT)
-            // Off asks reasoning models to answer without a <think> block. Fixed for the loaded
-            // model, like the tool section, since both live in the system prompt.
-            if (!settings.thinkingEnabled) {
-                append("\n\n")
-                append(ReasoningPrompts.NO_THINK_DIRECTIVE)
-            }
+        // The tool section is chat's alone; the reasoning directive is app-wide and applied by the
+        // builder. Both are fixed for the life of the loaded model, since both live in the system
+        // prompt -- toggling either setting mid-chat cannot reach back into a loaded conversation.
+        val systemPrompt = SystemPromptBuilder.build(
+            base = ChatPrompts.SYSTEM_PROMPT,
+            thinkingEnabled = settings.thinkingEnabled,
             if (toolsEnabled && !nativeTools) {
-                ToolCallingProtocol.systemPromptSection(definitions)?.let {
-                    append("\n\n")
-                    append(it)
-                }
-            }
-        }
+                ToolCallingProtocol.systemPromptSection(definitions)
+            } else {
+                null
+            },
+        )
 
         return ChatLoadPlan.Ready(
             resolved = resolved,
