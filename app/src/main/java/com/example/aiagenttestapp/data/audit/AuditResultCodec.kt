@@ -52,6 +52,9 @@ object AuditResultCodec {
         put("detail", detail)
         put("evidence", evidence)
         put("severity", severity)
+        // Omitted rather than written null when absent: the spec's `nil` is an absent value, and
+        // both apps have to agree on what "no conclusion" looks like on the wire.
+        resultType?.let { put("resultType", it.wireName) }
         putJsonArray("standards") { standards.forEach { add(it) } }
     }
 }

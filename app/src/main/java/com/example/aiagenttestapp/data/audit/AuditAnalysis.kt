@@ -34,6 +34,14 @@ data class AuditFinding(
      * claimed. Declared last so existing positional constructor calls keep working.
      */
     val evidence: String = "",
+    /**
+     * The conclusion reached about this element, in the vocabulary both apps share.
+     *
+     * Null means no *clear* conclusion, which is a verdict in itself and not a gap to be filled --
+     * see [AuditResultType]. Runs alongside [severity] while the pipeline moves onto it; [severity]
+     * is the older three-way grade and will go once every producer sets this.
+     */
+    val resultType: AuditResultType? = null,
 )
 
 /**
@@ -543,10 +551,23 @@ object AuditAnalysisParser {
             val severity = AuditSeverity.normalise(
                 firstString("severity", "classification", "level", "grade", "type", "category"),
             )
+            // Read from its own key, and only that key. The severity aliases above are a net cast
+            // wide on purpose, because a three-way grade can be spelled a dozen ways; a result type
+            // is a closed vocabulary, so anything that is not one of its five names is no
+            // conclusion rather than a near miss to be guessed at.
+            val resultType = AuditResultType.fromWire(firstString("resultType"))
             when {
-                title.isNotEmpty() -> AuditFinding(title, detail, standards, severity, evidence)
-                detail.isNotEmpty() ->
-                    AuditFinding(detail, standards = standards, severity = severity, evidence = evidence)
+                title.isNotEmpty() ->
+                    AuditFinding(title, detail, standards, severity, evidence, resultType)
+
+                detail.isNotEmpty() -> AuditFinding(
+                    title = detail,
+                    standards = standards,
+                    severity = severity,
+                    evidence = evidence,
+                    resultType = resultType,
+                )
+
                 else -> null
             }
         }
