@@ -18,8 +18,6 @@ import com.example.aiagenttestapp.data.ChatLoadPlan
 import com.example.aiagenttestapp.data.ChatLoadPlanner
 import com.example.aiagenttestapp.data.FileTextExtractor
 import com.example.aiagenttestapp.data.Source
-import com.example.aiagenttestapp.data.chat.Conversation
-import com.example.aiagenttestapp.data.chat.StoredMessage
 import com.example.aiagenttestapp.data.chat.toHistoryTurn
 import com.example.aiagenttestapp.functions.AppFunctionObserver
 import com.example.aiagenttestapp.functions.AppFunctionResult
@@ -186,18 +184,22 @@ class ChatViewModel @Inject constructor(
 ),
     // Implemented rather than passed as a lambda: this is a real collaborator of
     // AppFunctionRunner, called on the runtime's thread, and worth being findable as one.
-    AppFunctionObserver {
+    AppFunctionObserver,
+    ChatDictation.Listener {
 
     private var engine: InferenceEngine? = null
     private var generationJob: Job? = null
     private var nextMessageId = 0L
 
     /** Buffers dictation audio between start and stop. Guarded by [voiceLock]. */
-    private var voiceJob: Job? = null
-    private val voiceSamples = mutableListOf<Float>()
-    private val voiceLock = Any()
-    /** So onCleared only releases the shared recogniser when this chat is what loaded it. */
-    private var loadedRecogniserForVoice = false
+    /** Dictation for the message box: mic, transcription and the recogniser's lifetime. */
+    private val dictation = ChatDictation(
+        audioRecorder = audioRecorder,
+        speechRecognizer = speechRecognizer,
+        speechModels = speechModels,
+        scope = viewModelScope,
+        listener = this,
+    )
 
     init {
         // Dictation reuses the Voice Notes speech model, so mirror its readiness here -- that lets
@@ -262,7 +264,8 @@ class ChatViewModel @Inject constructor(
     private var boundEngine: NativeToolEngine? = null
 
     /** The persisted conversation this chat is writing to. Null until the first message creates it. */
-    private var conversationId: Long? = null
+    /** Everything this chat writes down. Created when the model is known, so it can be named. */
+    private var transcript: ChatTranscriptStore? = null
 
     /** The model this chat is for, so a new conversation row records which model it belongs to. */
     private var currentModelId: String? = null
@@ -345,6 +348,7 @@ class ChatViewModel @Inject constructor(
 
         engine = selected
         currentModelId = modelId
+        transcript = ChatTranscriptStore(chatDao, modelId)
 
         // Tell the residency manager a chat is now using the engine, so it will not release the
         // resident model under memory pressure while this chat is on screen. Balanced by onCleared.
@@ -360,7 +364,7 @@ class ChatViewModel @Inject constructor(
             val restored = resumeConversationId
                 ?.let { id -> runCatching { chatDao.conversationById(id) }.getOrNull() }
             val pastMessages = restored?.messages.orEmpty().sortedBy { it.id }
-            conversationId = restored?.conversation?.id
+            restored?.conversation?.id?.let { transcript?.resume(it) }
             if (pastMessages.isNotEmpty()) {
                 // Reuse the DB ids as bubble ids (unique), and start new bubbles past them.
                 nextMessageId = pastMessages.maxOf { it.id } + 1
@@ -549,7 +553,7 @@ class ChatViewModel @Inject constructor(
 
         generationJob = viewModelScope.launch {
             try {
-                persistMessage(HistoryTurn.ROLE_USER, userText, title = userText)
+                transcript?.append(HistoryTurn.ROLE_USER, userText, title = userText)
 
                 // Let the send transition settle before prefill starts. The keyboard is dismissed on
                 // send, and prefill is the heaviest CPU/GPU burst of the whole turn; starting it while
@@ -601,7 +605,7 @@ class ChatViewModel @Inject constructor(
                 }
 
                 // Tool-call chips are not persisted, but the model's final answer is.
-                persistMessage(HistoryTurn.ROLE_ASSISTANT, response, title = userText)
+                transcript?.append(HistoryTurn.ROLE_ASSISTANT, response, title = userText)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } finally {
@@ -795,59 +799,34 @@ class ChatViewModel @Inject constructor(
         val state = currentState
         if (state.isDictating || state.isTranscribing || !state.isSpeechReady) return
 
-        synchronized(voiceLock) { voiceSamples.clear() }
         setState { copy(isDictating = true, micLevel = 0f) }
-
-        voiceJob = viewModelScope.launch {
-            try {
-                audioRecorder.record().collect { chunk ->
-                    synchronized(voiceLock) { chunk.samples.forEach(voiceSamples::add) }
-                    setState { copy(micLevel = chunk.level) }
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                setState { copy(isDictating = false, micLevel = 0f) }
-            }
-        }
+        dictation.start()
     }
 
     /** Stops the mic, transcribes what was captured, and appends the text to the draft. */
     private fun stopVoiceInput() {
         if (!currentState.isDictating) return
-        voiceJob?.cancel()
-        voiceJob = null
+
         setState { copy(isDictating = false, micLevel = 0f, isTranscribing = true) }
-
-        viewModelScope.launch {
-            try {
-                val recogniser = speechRecognizer
-                val paths = speechModels.selectedPaths()
-                if (recogniser.loadedModelId != paths.id) {
-                    recogniser.load(paths)
-                    loadedRecogniserForVoice = true
-                }
-
-                val samples = synchronized(voiceLock) { voiceSamples.toFloatArray() }
-                // Dictation only wants the words; the reply's language is the conversation's business.
-                // transcribeLong so a dictation past ~30 s is not clipped to its first half-minute.
-                val text = recogniser.transcribeLong(samples).text
-
-                setState {
-                    // Append, not replace: the user may have already typed something, and dictation
-                    // is meant to add to the message, not clobber it.
-                    val merged = when {
-                        text.isBlank() -> draft
-                        draft.isBlank() -> text
-                        else -> "${draft.trimEnd()} $text"
-                    }
-                    copy(isTranscribing = false, draft = merged)
-                }
-            } catch (e: Exception) {
-                setState { copy(isTranscribing = false) }
-            }
-        }
+        dictation.stopAndTranscribe()
     }
+
+    override fun onLevel(level: Float) = setState { copy(micLevel = level) }
+
+    override fun onRecordingFailed() = setState { copy(isDictating = false, micLevel = 0f) }
+
+    override fun onTranscribed(text: String) = setState {
+        // Append, not replace: the user may have already typed something, and dictation is meant
+        // to add to the message, not clobber it.
+        val merged = when {
+            text.isBlank() -> draft
+            draft.isBlank() -> text
+            else -> "${draft.trimEnd()} $text"
+        }
+        copy(isTranscribing = false, draft = merged)
+    }
+
+    override fun onTranscriptionFailed() = setState { copy(isTranscribing = false) }
 
     private fun resetConversation() {
         viewModelScope.launch {
@@ -855,36 +834,12 @@ class ChatViewModel @Inject constructor(
             runCatching { engine?.resetConversation() }
             // Detach from the saved conversation: the next message starts a fresh one, and the old
             // conversation stays in history.
-            conversationId = null
+            transcript = ChatTranscriptStore(chatDao, currentModelId.orEmpty())
             setState { copy(messages = emptyList(), contextUsed = 0, replyingTo = null) }
         }
     }
 
     // ---- Persistence -----------------------------------------------------------------------------
-
-    private suspend fun ensureConversationId(title: String): Long {
-        conversationId?.let { return it }
-        val now = System.currentTimeMillis()
-        return chatDao.insertConversation(
-            Conversation(
-                modelId = currentModelId.orEmpty(),
-                title = title.trim().replace('\n', ' ').take(60).ifBlank { "New chat" },
-                createdAtMillis = now,
-                updatedAtMillis = now,
-            ),
-        ).also { conversationId = it }
-    }
-
-    /** Appends one turn to the persisted conversation, creating the conversation on the first call. */
-    private suspend fun persistMessage(role: String, content: String, title: String) {
-        if (content.isBlank()) return
-        val id = ensureConversationId(title)
-        val now = System.currentTimeMillis()
-        chatDao.insertMessage(
-            StoredMessage(conversationId = id, role = role, content = content, createdAtMillis = now),
-        )
-        chatDao.touchConversation(id, now)
-    }
 
     // ---- Per-message actions ---------------------------------------------------------------------
 
@@ -922,30 +877,22 @@ class ChatViewModel @Inject constructor(
         boundEngine?.toolRunner = null
         boundEngine = null
 
-        // The speech recogniser holds ~240 MB of native memory. Release it only if dictation here is
-        // what loaded it, so leaving a chat does not tear down a recogniser the Voice Notes screen
-        // still owns.
-        //
-        // On its own scope because releasing now *waits* for any decode still in flight -- the
-        // recogniser is shared with the background transcription worker, and freeing native memory
-        // under a running decode takes the process down. viewModelScope is already cancelled here.
-        if (loadedRecogniserForVoice) {
-            val recogniser = speechRecognizer
-            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()).launch {
-                runCatching { recogniser.release() }
-            }
-        }
+        // viewModelScope is already cancelled here, so the recogniser's release -- which waits on
+        // any decode still running -- needs a scope that outlives this one.
+        dictation.releaseRecogniserIfOwned(
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()),
+        )
 
         val active = engine
-        val convId = conversationId
+        val store = transcript
         active?.cancel() // stop any in-flight decode before the engine is reused for the summary
 
         // Roll the conversation up into a stored summary on the way out -- but only once it has grown
         // enough to need one, and not mid-turn. The loaded model already holds the conversation, so
         // it summarises itself in a single turn; and because its context is [previous summary] +
         // recent turns, each close produces an *updated* rolling summary rather than starting over.
-        val shouldSummarise = active != null && convId != null &&
-            !currentState.isGenerating && needsSummary(active)
+        val shouldSummarise = active != null && store != null && !currentState.isGenerating &&
+            store.needsSummary(active, currentState.contextTotal)
 
         engine = null
 
@@ -958,9 +905,9 @@ class ChatViewModel @Inject constructor(
         // out from under it. No unload: the model stays resident for the next chat.
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()).launch {
             try {
-                if (shouldSummarise && active != null && convId != null) {
+                if (shouldSummarise && active != null && store != null) {
                     modelResidency.runExclusive {
-                        runCatching { rollUpSummary(active, convId) }
+                        runCatching { store.rollUpSummary(active) }
                     }
                 }
             } finally {
@@ -970,21 +917,6 @@ class ChatViewModel @Inject constructor(
     }
 
     /** True once the live context is over half full -- the point where older turns start falling off. */
-    private fun needsSummary(engine: InferenceEngine): Boolean {
-        val total = currentState.contextTotal
-        return total > 0 && engine.contextTokensUsed() > total * SUMMARY_TRIGGER_FRACTION
-    }
-
-    /** Asks the loaded model to summarise the conversation it already holds, and stores the result. */
-    private suspend fun rollUpSummary(engine: InferenceEngine, convId: Long) {
-        val builder = StringBuilder()
-        engine.generate(ChatPrompts.SUMMARISE_PROMPT).collect { event ->
-            if (event is GenerationEvent.Token) builder.append(event.text)
-        }
-        val summary = builder.toString().trim()
-        if (summary.isNotBlank()) chatDao.updateSummary(convId, summary)
-    }
-
     private companion object {
         /** Minimum gap between streamed-text UI updates, so recomposition does not fight the GPU. */
         const val UI_STREAM_INTERVAL_MS = 60L
@@ -997,9 +929,6 @@ class ChatViewModel @Inject constructor(
          * prefill runs into seconds regardless.
          */
         const val SEND_SETTLE_MS = 1000L
-
-        /** Context fraction past which a chat is summarised on close, so reopening stays in budget. */
-        const val SUMMARY_TRIGGER_FRACTION = 0.5f
 
         /**
          * Share of the model's context window an attached file may fill. The remaining ~30% holds the
