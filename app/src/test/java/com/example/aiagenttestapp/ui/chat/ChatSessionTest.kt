@@ -332,6 +332,7 @@ class ChatSessionTest {
         return ChatLoadPlan.Ready(
             resolved = ModelLoadPlan.Resolved(
                 model = model,
+                contextTokens = model.contextTokens,
                 engine = engine,
                 accelerator = accelerator,
                 file = java.io.File("/m.litertlm"),

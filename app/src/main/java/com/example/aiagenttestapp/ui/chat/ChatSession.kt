@@ -163,7 +163,7 @@ class ChatSession(
         val systemPrompt = ChatResume.systemPrompt(plan.systemPrompt, restored?.conversation?.summary)
         val history = ChatResume.fittedHistory(
             past = past.map { it.toHistoryTurn() },
-            contextTokens = plan.model.contextTokens,
+            contextTokens = plan.contextTokens,
             systemPrompt = systemPrompt,
         )
 

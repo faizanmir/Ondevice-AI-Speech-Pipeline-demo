@@ -376,7 +376,7 @@ fun HfRepoDetail.toModelSpec(file: HfModelFile, device: DeviceMemoryProfile): Mo
  * The cap is computed against CPU -- the most pessimistic accelerator for every engine here, since
  * CPU keeps the weights fully resident and so leaves the least room for KV -- so we never size a
  * cache the device cannot afford. The result is rounded down to a whole [CONTEXT_GRANULARITY] block
- * (the estimate runs high, so under-fill) and floored at [MIN_CONTEXT] so a tight device still gets
+ * (the estimate runs high, so under-fill) and floored at [DeviceContextWindow.MIN_CONTEXT] so a tight device still gets
  * a usable window rather than a few hundred tokens; a model that genuinely will not fit is caught
  * separately by ModelFitEvaluator, which reports it as EXCEEDS_MEMORY.
  */
@@ -390,18 +390,14 @@ private fun deviceContext(
         ModelFormat.GGUF -> EngineId.LLAMA_CPP
         ModelFormat.LITERTLM -> EngineId.LITE_RT_LM
     }
-    val deviceMax = ParamBudget.maxRunnableContext(
-        budgetBytes = device.modelRamBudgetBytes,
+    return DeviceContextWindow.cap(
+        advertised = advertised,
         weightsBytes = file.sizeBytes,
         paramsBillions = paramsBillions,
         engine = engine,
-        accelerator = Accelerator.CPU,
+        device = device,
     )
-    val capped = advertised.coerceAtMost(deviceMax.coerceAtLeast(MIN_CONTEXT))
-    return (capped / CONTEXT_GRANULARITY) * CONTEXT_GRANULARITY
 }
 
 /** Fallback context when a GGUF advertises none, and the window a tight device is still given. */
 private const val DEFAULT_CONTEXT = 4096
-private const val MIN_CONTEXT = 1024
-private const val CONTEXT_GRANULARITY = 256

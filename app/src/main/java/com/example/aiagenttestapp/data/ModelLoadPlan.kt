@@ -1,6 +1,7 @@
 package com.example.aiagenttestapp.data
 
 import com.example.aiagent.engine.core.Accelerator
+import com.example.aiagent.engine.core.DeviceMemoryProfile
 import com.example.aiagent.engine.core.EngineId
 import com.example.aiagent.engine.core.EngineRegistry
 import com.example.aiagent.engine.core.InferenceEngine
@@ -38,6 +39,13 @@ sealed interface ModelLoadPlan {
      */
     data class Resolved(
         val model: ModelSpec,
+        /**
+         * The window this model gets *here*, which is [ModelSpec.contextTokens] capped by what the
+         * device can hold. Everything downstream must use this rather than the model's own number:
+         * it is what the engine is loaded with, so it is also what history is fitted against and
+         * what the context meter is a fraction of.
+         */
+        val contextTokens: Int,
         val engine: InferenceEngine,
         val accelerator: Accelerator,
         val file: File,
@@ -62,7 +70,7 @@ sealed interface ModelLoadPlan {
         fun baseLoadRequest(): LoadRequest = LoadRequest(
             modelPath = file.absolutePath,
             accelerator = accelerator,
-            contextTokens = model.contextTokens,
+            contextTokens = contextTokens,
             sampling = sampling,
             systemPrompt = null,
             cacheDir = cacheDir,
@@ -87,6 +95,7 @@ class ModelLoadPlanner @Inject constructor(
     private val settingsStore: SettingsStore,
     private val engines: EngineRegistry,
     private val modelRepository: ModelRepository,
+    private val deviceMemory: DeviceMemoryProfile,
     @param:CacheDirPath private val cacheDirPath: String,
     @param:NativeLibraryDir private val nativeLibraryDir: String,
 ) {
@@ -112,6 +121,15 @@ class ModelLoadPlanner @Inject constructor(
 
         return ModelLoadPlan.Resolved(
             model = model,
+            // Every model, not only the added ones: a curated constant is if anything *more*
+            // likely to be wrong, because nothing has ever checked it against a real device.
+            contextTokens = DeviceContextWindow.cap(
+                advertised = model.contextTokens,
+                weightsBytes = model.sizeBytes,
+                paramsBillions = model.paramsBillions,
+                engine = engine.descriptor.id,
+                device = deviceMemory,
+            ),
             engine = engine,
             accelerator = accelerator,
             file = modelRepository.fileFor(model),

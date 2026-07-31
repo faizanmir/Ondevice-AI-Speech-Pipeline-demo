@@ -223,17 +223,17 @@ class ChatViewModel @Inject constructor(
     override fun reduce(intent: ChatIntent): Unit = when (intent) {
         is ChatIntent.OpenChat -> openChat(intent.modelId, intent.resumeConversationId)
         is ChatIntent.DraftChanged -> setState { copy(draft = intent.text) }
-        ChatIntent.Send -> send()
-        ChatIntent.StopGenerating -> stopGenerating()
-        ChatIntent.ResetConversation -> resetConversation()
+        is ChatIntent.Send -> send()
+        is ChatIntent.StopGenerating -> stopGenerating()
+        is ChatIntent.ResetConversation -> resetConversation()
         is ChatIntent.AttachFile -> attachFile(intent.uri)
-        ChatIntent.ClearAttachment -> clearAttachment()
-        ChatIntent.DownloadSpeechModel -> speechModels.enqueueDownload()
-        ChatIntent.StartVoiceInput -> startVoiceInput()
-        ChatIntent.StopVoiceInput -> stopVoiceInput()
+        is ChatIntent.ClearAttachment -> clearAttachment()
+        is ChatIntent.DownloadSpeechModel -> speechModels.enqueueDownload()
+        is ChatIntent.StartVoiceInput -> startVoiceInput()
+        is ChatIntent.StopVoiceInput -> stopVoiceInput()
         is ChatIntent.DeleteMessage -> deleteMessage(intent.id)
         is ChatIntent.StartReply -> setState { copy(replyingTo = intent.message) }
-        ChatIntent.CancelReply -> setState { copy(replyingTo = null) }
+        is ChatIntent.CancelReply -> setState { copy(replyingTo = null) }
     }
 
     /** Id of the bubble the current turn is streaming into, so a tool call can rewrite it. */
@@ -327,7 +327,7 @@ class ChatViewModel @Inject constructor(
                 loadState = ModelLoadState.Loading(
                     "Loading ${model.name} on ${plan.accelerator.label}",
                 ),
-                contextTotal = model.contextTokens,
+                contextTotal = plan.contextTokens,
                 // Fixed for the life of the loaded model, like tools: the thinking setting is baked
                 // into the system prompt, so a mid-chat toggle cannot change how this chat renders.
                 showThinking = settingsStore.settings.value.thinkingEnabled,

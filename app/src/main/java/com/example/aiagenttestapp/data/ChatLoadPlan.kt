@@ -52,6 +52,9 @@ sealed interface ChatLoadPlan {
         val model get() = resolved.model
         val engine get() = resolved.engine
         val accelerator get() = resolved.accelerator
+
+        /** The window this device affords, not the one the model advertises. */
+        val contextTokens get() = resolved.contextTokens
         val engineId get() = resolved.engineId
         val engineName get() = resolved.engineName
         val downloaded get() = resolved.downloaded
