@@ -373,6 +373,7 @@ class AuditDrainWorker @AssistedInject constructor(
             val summary = summaryResult.text
             val keyPoints = summaryResult.points
             val notesTrimmed = summaryResult.notesTrimmed
+            val summaryTruncated = summaryResult.summaryTruncated
 
             Log.i(
                 TAG,
@@ -404,7 +405,7 @@ class AuditDrainWorker @AssistedInject constructor(
                 unanalysedSections = unanalysed,
                 // Section failures first, then the document-level gaps, so the banner reads in the
                 // order a reader needs: what was unreadable, then what was never read at all.
-                unanalysedReasons = unanalysedReasons + documentGaps(doc, notesTrimmed),
+                unanalysedReasons = unanalysedReasons + documentGaps(doc, notesTrimmed, summaryTruncated),
                 truncatedChars = doc.truncatedChars,
                 notesTrimmed = notesTrimmed,
                 // Provenance on the artefact itself: which engine and prompt profile produced it.
@@ -583,6 +584,8 @@ class AuditDrainWorker @AssistedInject constructor(
         val text: String = "",
         val points: List<String> = emptyList(),
         val notesTrimmed: Boolean = false,
+        /** The reply ran into its own output cap, so the summary stops mid-thought. */
+        val summaryTruncated: Boolean = false,
     )
 
     /**
@@ -613,21 +616,29 @@ class AuditDrainWorker @AssistedInject constructor(
             Log.w(TAG, "quick summary notes trimmed to fit context: $noteChars chars into $budget")
         }
 
-        val raw = generateFull(
+        val turn = generateFull(
             engine,
             AuditQuickPrompts.quickSummary(pointsByPart, QuickAudit.MAX_POINTS, budget),
             phase,
             maxTokens = AuditQuickPrompts.QUICK_SUMMARY_OUTPUT_RESERVE_TOKENS,
             label = "quick summary",
             maxMillis = maxMillis,
-        ).text
+        )
+        val raw = turn.text
 
         val points = QuickPointsParser.parseQuickPoints(Reasoning.stripThinking(raw))
             .ifEmpty {
                 Log.w(TAG, "quick summary produced no readable points; falling back to section notes")
                 pointsByPart.flatten().take(QuickAudit.MAX_POINTS)
             }
-        return SummaryResult(points = points, notesTrimmed = trimmed)
+        // A truncated quick summary loses whole points rather than half a sentence: the parser
+        // reads bullets, so a reply cut mid-list simply yields fewer of them, with nothing to show
+        // that more were coming.
+        return SummaryResult(
+            points = points,
+            notesTrimmed = trimmed,
+            summaryTruncated = turn.stoppedBy != null,
+        )
     }
 
     private suspend fun finalSummary(
@@ -653,19 +664,27 @@ class AuditDrainWorker @AssistedInject constructor(
             Log.w(TAG, "summary notes trimmed to fit context: $noteChars chars into $budget")
         }
 
-        val raw = generateFull(
+        val turn = generateFull(
             engine,
             AuditSummaryPrompts.finalSummary(factsByPart, verdict, budget),
             phase,
             maxTokens = AuditSummaryPrompts.SUMMARY_OUTPUT_RESERVE_TOKENS,
             label = "summary",
             maxMillis = maxMillis,
-        ).text
+        )
+        val raw = turn.text
         // Plain prose, so the reply is taken as-is. Falling back to the raw facts beats showing
         // nothing if the model returns empty.
         val text = Reasoning.stripThinking(raw).trim()
             .ifBlank { factsByPart.flatten().joinToString(" ") }
-        return SummaryResult(text = text, notesTrimmed = trimmed)
+        // Trimming and truncation are different failures and both have to be reported: the notes
+        // not fitting *in* is caught above by measuring them, but a summary that fills its own
+        // output budget and stops mid-finding leaves no trace in the text at all.
+        return SummaryResult(
+            text = text,
+            notesTrimmed = trimmed,
+            summaryTruncated = turn.stoppedBy != null,
+        )
     }
 
     /**
@@ -718,12 +737,22 @@ class AuditDrainWorker @AssistedInject constructor(
      * These are the losses that happen outside any single section -- so nothing in the chunk loop
      * can report them, and without this they would be visible only in logcat.
      */
-    private fun documentGaps(doc: AuditDocumentEntity, notesTrimmed: Boolean): List<String> =
+    private fun documentGaps(
+        doc: AuditDocumentEntity,
+        notesTrimmed: Boolean,
+        summaryTruncated: Boolean = false,
+    ): List<String> =
         buildList {
             if (doc.truncatedChars > 0) {
                 add(
                     "The last ${doc.truncatedChars} characters of this document were not analysed: " +
                         "it needs more than the ${AuditQueue.MAX_CHUNKS}-section limit allows.",
+                )
+            }
+            if (summaryTruncated) {
+                add(
+                    "The overall summary stopped before it finished: it reached the limit on how " +
+                        "long a summary may be. The findings below are complete.",
                 )
             }
             if (notesTrimmed) {
