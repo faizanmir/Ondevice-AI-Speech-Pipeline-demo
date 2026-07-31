@@ -155,4 +155,4 @@ private fun AppFunctionDeps.offlineResult(
 }
 
 private fun AppFunctionDeps.tavilyKey(): String? =
-    settingsStore.settings.value.tavilyApiKey?.takeIf { it.isNotBlank() }
+    settingsStore.current.tavilyApiKey?.takeIf { it.isNotBlank() }

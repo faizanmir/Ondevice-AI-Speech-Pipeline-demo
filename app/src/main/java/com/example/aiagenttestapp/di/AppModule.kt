@@ -15,7 +15,9 @@ import com.example.aiagenttestapp.data.NetworkMonitor
 import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.WebSearchClient
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
+import com.example.aiagenttestapp.functions.AppFunctionDeps
 import com.example.aiagenttestapp.functions.AppFunctionRegistry
+import com.example.aiagenttestapp.functions.RealAppFunctionDeps
 import com.example.aiagenttestapp.data.notes.SpeakerDao
 import com.example.aiagenttestapp.data.speakers.SpeakerRepository
 import com.example.aiagenttestapp.stt.AudioRecorder
@@ -71,6 +73,11 @@ object AppModule {
     @Provides
     @Singleton
     fun appFunctionRegistry(): AppFunctionRegistry = AppFunctionRegistry.Default
+
+    /** The capabilities a function body may reach, behind the interfaces it is written against. */
+    @Provides
+    @Singleton
+    fun appFunctionDeps(real: RealAppFunctionDeps): AppFunctionDeps = real
 
     /** Read once: RAM and ABI do not change while the process is alive. */
     @Provides
