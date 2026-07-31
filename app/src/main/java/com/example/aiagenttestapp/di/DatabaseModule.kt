@@ -35,6 +35,7 @@ object DatabaseModule {
                 AuditDatabase.MIGRATION_2_3,
                 AuditDatabase.MIGRATION_3_4,
                 AuditDatabase.MIGRATION_4_5,
+                AuditDatabase.MIGRATION_5_6,
             )
             .build()
 

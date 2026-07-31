@@ -57,12 +57,6 @@ data class AuditDocumentEntity(
      * process-killed-then-resumed run all report the real time the model spent on it.
      */
     val analysisMillis: Long = 0,
-    /**
-     * Severity-grading checkpoint: the non-conformities graded so far, encoded with
-     * [AuditResultCodec]. Rewritten after every single grade, so a run killed part-way through the
-     * second pass resumes mid-list instead of re-grading everything. Cleared once the report lands.
-     */
-    val gradedJson: String? = null,
     /** The finished report as JSON ([AuditResultCodec]); null until DONE. */
     val resultJson: String? = null,
     val error: String? = null,
@@ -158,14 +152,9 @@ abstract class AuditDao {
     @Query("UPDATE audit_documents SET analysisMillis = analysisMillis + :deltaMillis WHERE id = :id")
     abstract suspend fun addElapsed(id: Long, deltaMillis: Long)
 
-    /** Checkpoints the severity pass; see [AuditDocumentEntity.gradedJson]. */
-    @Query("UPDATE audit_documents SET gradedJson = :json, updatedAtMillis = :ts WHERE id = :id")
-    abstract suspend fun setGraded(id: Long, json: String, ts: Long)
-
-    // Clears gradedJson: the finished report supersedes the checkpoint, so it need not outlive it.
     @Query(
         "UPDATE audit_documents SET status = 'DONE', resultJson = :json, summarising = 0, " +
-            "gradedJson = NULL, analysisMillis = analysisMillis + :deltaMillis, " +
+            "analysisMillis = analysisMillis + :deltaMillis, " +
             "updatedAtMillis = :ts WHERE id = :id",
     )
     abstract suspend fun setResult(id: Long, json: String, deltaMillis: Long, ts: Long)
@@ -174,7 +163,7 @@ abstract class AuditDao {
     abstract suspend fun deleteDocument(id: Long)
 }
 
-@Database(entities = [AuditDocumentEntity::class, AuditChunkEntity::class], version = 5, exportSchema = false)
+@Database(entities = [AuditDocumentEntity::class, AuditChunkEntity::class], version = 6, exportSchema = false)
 abstract class AuditDatabase : RoomDatabase() {
 
     abstract fun auditDao(): AuditDao
@@ -211,6 +200,53 @@ abstract class AuditDatabase : RoomDatabase() {
          * only read this app could perform before quick mode existed, so every stored document was
          * produced that way.
          */
+        /**
+         * Drops gradedJson, the severity-grading checkpoint, along with the pass that wrote it.
+         *
+         * A table recreation rather than an ALTER: DROP COLUMN needs SQLite 3.35, which is Android
+         * 14 and above, and this app runs from 31. Every other column is copied, so a document
+         * queued or half-analysed across the upgrade keeps its place -- only the dead checkpoint
+         * goes, and nothing reads it any more.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE audit_documents_new (
+                        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        modelId TEXT NOT NULL,
+                        mode TEXT NOT NULL DEFAULT 'DETAILED',
+                        status TEXT NOT NULL,
+                        chunkCount INTEGER NOT NULL,
+                        truncatedChars INTEGER NOT NULL DEFAULT 0,
+                        chunksDone INTEGER NOT NULL DEFAULT 0,
+                        summarising INTEGER NOT NULL DEFAULT 0,
+                        analysisMillis INTEGER NOT NULL DEFAULT 0,
+                        resultJson TEXT,
+                        error TEXT,
+                        createdAtMillis INTEGER NOT NULL,
+                        updatedAtMillis INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO audit_documents_new
+                        (id, name, modelId, mode, status, chunkCount, truncatedChars, chunksDone,
+                         summarising, analysisMillis, resultJson, error, createdAtMillis,
+                         updatedAtMillis)
+                    SELECT id, name, modelId, mode, status, chunkCount, truncatedChars, chunksDone,
+                           summarising, analysisMillis, resultJson, error, createdAtMillis,
+                           updatedAtMillis
+                    FROM audit_documents
+                    """.trimIndent(),
+                )
+                db.execSQL("DROP TABLE audit_documents")
+                db.execSQL("ALTER TABLE audit_documents_new RENAME TO audit_documents")
+            }
+        }
+
         val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
