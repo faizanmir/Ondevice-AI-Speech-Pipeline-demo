@@ -2,7 +2,6 @@ package com.example.aiagenttestapp.ui.chat
 
 import com.example.aiagent.engine.core.GenerationEvent
 import com.example.aiagent.engine.core.InferenceEngine
-import com.example.aiagenttestapp.data.chat.ChatDao
 import com.example.aiagenttestapp.data.chat.Conversation
 import com.example.aiagenttestapp.data.chat.StoredMessage
 import com.example.aiagenttestapp.prompts.ChatPrompts
@@ -19,7 +18,7 @@ import com.example.aiagenttestapp.prompts.ChatPrompts
  * row exists until the first message is actually stored.
  */
 class ChatTranscriptStore(
-    private val chatDao: ChatDao,
+    private val store: ChatStore,
     private val modelId: String,
 ) {
 
@@ -42,15 +41,15 @@ class ChatTranscriptStore(
         if (content.isBlank()) return
         val id = conversationId ?: create(title)
         val now = System.currentTimeMillis()
-        chatDao.insertMessage(
+        store.insertMessage(
             StoredMessage(conversationId = id, role = role, content = content, createdAtMillis = now),
         )
-        chatDao.touchConversation(id, now)
+        store.touch(id, now)
     }
 
     private suspend fun create(title: String): Long {
         val now = System.currentTimeMillis()
-        return chatDao.insertConversation(
+        return store.insertConversation(
             Conversation(
                 modelId = modelId,
                 title = title.trim().replace('\n', ' ').take(60).ifBlank { "New chat" },
@@ -82,7 +81,7 @@ class ChatTranscriptStore(
             if (event is GenerationEvent.Token) builder.append(event.text)
         }
         val summary = builder.toString().trim()
-        if (summary.isNotBlank()) chatDao.updateSummary(id, summary)
+        if (summary.isNotBlank()) store.updateSummary(id, summary)
     }
 
     private companion object {

@@ -6,9 +6,6 @@ import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.NativeToolEngine
 import com.example.aiagent.engine.core.ToolRunner
 import com.example.aiagenttestapp.data.ChatLoadPlan
-import com.example.aiagenttestapp.data.ChatLoadPlanner
-import com.example.aiagenttestapp.data.ModelResidency
-import com.example.aiagenttestapp.data.chat.ChatDao
 import com.example.aiagenttestapp.data.chat.StoredMessage
 import com.example.aiagenttestapp.data.chat.toHistoryTurn
 import com.example.aiagenttestapp.functions.ToolCallingStrategy
@@ -29,9 +26,9 @@ import kotlinx.coroutines.launch
  * that happens is reported through [Listener] and stays the view model's decision.
  */
 class ChatSession(
-    private val planner: ChatLoadPlanner,
-    private val chatDao: ChatDao,
-    private val residency: ModelResidency,
+    private val planner: ChatModelPlanner,
+    private val store: ChatStore,
+    private val residency: ChatResidency,
     private val scope: CoroutineScope,
     private val listener: Listener,
 ) {
@@ -104,7 +101,7 @@ class ChatSession(
         }
 
         engine = plan.engine
-        transcript = ChatTranscriptStore(chatDao, modelId)
+        transcript = ChatTranscriptStore(store, modelId)
 
         // Tell residency a chat is using the engine, so the resident model is not released under
         // memory pressure while this chat is on screen. Balanced by close().
@@ -120,7 +117,7 @@ class ChatSession(
         // The whole transcript is restored to the display; only a fitted tail is fed to the model,
         // with the summary of the older turns folded into the system prompt ahead of it.
         val restored = resumeConversationId
-            ?.let { id -> runCatching { chatDao.conversationById(id) }.getOrNull() }
+            ?.let { id -> runCatching { store.conversation(id) }.getOrNull() }
         val past = restored?.messages.orEmpty().sortedBy { it.id }
         restored?.conversation?.id?.let { transcript?.resume(it) }
         if (past.isNotEmpty()) listener.onRestored(past)
@@ -176,7 +173,7 @@ class ChatSession(
 
     /** Forgets the conversation without touching the loaded model. */
     fun resetConversation(modelId: String) {
-        transcript = ChatTranscriptStore(chatDao, modelId)
+        transcript = ChatTranscriptStore(store, modelId)
     }
 
     /**

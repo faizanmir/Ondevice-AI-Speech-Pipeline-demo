@@ -177,10 +177,10 @@ class ChatViewModel @Inject constructor(
     private val audioRecorder: AudioRecorder,
     private val appFunctionDeps: AppFunctionDeps,
     private val appFunctions: AppFunctionRegistry,
-    private val chatDao: ChatDao,
-    private val chatLoadPlanner: ChatLoadPlanner,
+    private val chatStore: ChatStore,
+    private val chatModelPlanner: ChatModelPlanner,
     private val fileTextExtractor: FileTextExtractor,
-    private val modelResidency: ModelResidency,
+    private val chatResidency: ChatResidency,
     private val settingsStore: SettingsStore,
     private val speechModels: SpeechModelRepository,
     private val speechRecognizer: SpeechRecognizer,
@@ -269,9 +269,9 @@ class ChatViewModel @Inject constructor(
     /** Everything this chat writes down. Created when the model is known, so it can be named. */
     /** This chat's model, from opening it to handing it back. */
     private val session = ChatSession(
-        planner = chatLoadPlanner,
-        chatDao = chatDao,
-        residency = modelResidency,
+        planner = chatModelPlanner,
+        store = chatStore,
+        residency = chatResidency,
         scope = viewModelScope,
         listener = this,
     )

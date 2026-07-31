@@ -16,6 +16,12 @@ import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.WebSearchClient
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
 import com.example.aiagenttestapp.functions.AppFunctionDeps
+import com.example.aiagenttestapp.ui.chat.ChatModelPlanner
+import com.example.aiagenttestapp.ui.chat.ChatResidency
+import com.example.aiagenttestapp.ui.chat.ChatStore
+import com.example.aiagenttestapp.ui.chat.RealChatModelPlanner
+import com.example.aiagenttestapp.ui.chat.RealChatResidency
+import com.example.aiagenttestapp.ui.chat.RealChatStore
 import com.example.aiagenttestapp.functions.AppFunctionRegistry
 import com.example.aiagenttestapp.functions.RealAppFunctionDeps
 import com.example.aiagenttestapp.data.notes.SpeakerDao
@@ -78,6 +84,16 @@ object AppModule {
     @Provides
     @Singleton
     fun appFunctionDeps(real: RealAppFunctionDeps): AppFunctionDeps = real
+
+    /** What a chat's ChatSession may reach, behind the interfaces it is written against. */
+    @Provides
+    fun chatModelPlanner(real: RealChatModelPlanner): ChatModelPlanner = real
+
+    @Provides
+    fun chatStore(real: RealChatStore): ChatStore = real
+
+    @Provides
+    fun chatResidency(real: RealChatResidency): ChatResidency = real
 
     /** Read once: RAM and ABI do not change while the process is alive. */
     @Provides
