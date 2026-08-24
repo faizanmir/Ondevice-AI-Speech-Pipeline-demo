@@ -51,7 +51,7 @@ startup = "1.2.0"
 # project's Kotlin 2.2 compiler cannot read. 0.35.0 requires only stdlib 2.1.21.
 markdownRenderer = "0.35.0"
 # Speech-to-text. Resolved from GitHub releases via the ivy repo in settings.gradle.kts.
-sherpaOnnx = "1.13.4"
+sherpaOnnx = "1.13.5"
 # bzip2 + tar, for one job: sherpa-onnx publishes its keyword-spotting models only as .tar.bz2 on
 # GitHub releases, with no per-file mirror, and the Android runtime has neither codec.
 commonsCompress = "1.27.1"
@@ -62,6 +62,8 @@ litertlm = "0.14.0"
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+# The real org.json, for unit tests only: the mockable android.jar ships it as throwing stubs.
+json = { group = "org.json", name = "json", version = "20240303" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
@@ -77,6 +79,11 @@ androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-
 androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+# Versionless: the Compose BOM governs these the same way it governs material3, so the two can never
+# drift into an incompatible pair.
+androidx-compose-material3-adaptive = { group = "androidx.compose.material3.adaptive", name = "adaptive" }
+androidx-compose-material3-adaptive-layout = { group = "androidx.compose.material3.adaptive", name = "adaptive-layout" }
+androidx-compose-material3-adaptive-navigation = { group = "androidx.compose.material3.adaptive", name = "adaptive-navigation" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }

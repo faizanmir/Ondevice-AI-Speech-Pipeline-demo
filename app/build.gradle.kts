@@ -96,6 +96,13 @@ android {
     // Registering it duplicates an entry that the Java-resources path already packages, and the
     // duplicate is a hard packaging failure rather than a warning.
 
+    androidResources {
+        // The bundled Silero VAD model is read straight out of the APK by sherpa-onnx's native
+        // loader. Quantised ONNX weights barely compress anyway, so storing it uncompressed costs
+        // almost nothing and removes any question of how the native side handles a deflated asset.
+        noCompress += "onnx"
+    }
+
     packaging {
         // Both engines ship their own libc++_shared.so. Without this, merging them into one APK
         // fails with a duplicate-file error.
@@ -124,6 +131,12 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
+    // Two-pane Settings. Brought in exactly where ui/components/Adaptive.kt said it should be: the
+    // constraint-based helpers there cover sizing, and a real list-detail layout is the one thing
+    // they cannot express -- it needs to know whether both panes fit, not just how wide one is.
+    implementation(libs.androidx.compose.material3.adaptive)
+    implementation(libs.androidx.compose.material3.adaptive.layout)
+    implementation(libs.androidx.compose.material3.adaptive.navigation)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
@@ -180,6 +193,9 @@ dependencies {
     testImplementation(libs.junit)
     // Drives the MVI base class's coroutines deterministically -- see MviViewModelTest.
     testImplementation(libs.kotlinx.coroutines.test)
+    // The android.jar used by unit tests stubs org.json to throw; the real library shadows it so
+    // TranscriptionCheckpoint's sidecar JSON is testable on the JVM -- see TranscriptionCheckpointTest.
+    testImplementation(libs.json)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
