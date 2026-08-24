@@ -1,0 +1,613 @@
+<title>Three Transcription Runs</title>
+<style>
+  /* ---- Light palette (complete, on bare :root) ---------------------------- */
+  :root {
+    --paper:      #F3F5F2;
+    --surface:    #FBFCFA;
+    --ink:        #181C1A;
+    --ink-2:      #3D4542;
+    --muted:      #646C68;
+    --rule:       #DCE1DB;
+    --rule-soft:  #E8ECE6;
+
+    --series-a:   #1F4F9E;  /* raw WER            — validated light  */
+    --series-b:   #B0761E;  /* number-normalised  — validated light  */
+    --good:       #2E6B4A;
+    --bad:        #9E3A2C;
+
+    --shadow: 0 1px 2px rgba(24,28,26,.06), 0 8px 24px rgba(24,28,26,.05);
+
+    --display: ui-serif, Georgia, "Iowan Old Style", "Times New Roman", serif;
+    --body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:     #131614;
+      --surface:   #1A1E1C;
+      --ink:       #E7EAE6;
+      --ink-2:     #C2C9C4;
+      --muted:     #939C97;
+      --rule:      #2B312E;
+      --rule-soft: #232825;
+
+      --series-a:  #5A8DDA;  /* validated dark */
+      --series-b:  #C08637;  /* validated dark */
+      --good:      #6FBF92;
+      --bad:       #E08072;
+
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:     #131614;
+    --surface:   #1A1E1C;
+    --ink:       #E7EAE6;
+    --ink-2:     #C2C9C4;
+    --muted:     #939C97;
+    --rule:      #2B312E;
+    --rule-soft: #232825;
+
+    --series-a:  #5A8DDA;
+    --series-b:  #C08637;
+    --good:      #6FBF92;
+    --bad:       #E08072;
+
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 16px;
+    line-height: 1.6;
+    margin: 0;
+    padding: 56px 24px 96px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 940px; margin: 0 auto; display: flex; flex-direction: column; gap: 44px; }
+  .prose { max-width: 68ch; }
+
+  /* ---- Type ------------------------------------------------------------- */
+  h1 {
+    font-family: var(--display);
+    font-size: clamp(30px, 4.4vw, 44px);
+    line-height: 1.12;
+    letter-spacing: -.015em;
+    font-weight: 600;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h2 {
+    font-family: var(--display);
+    font-size: 25px;
+    line-height: 1.25;
+    font-weight: 600;
+    margin: 0 0 4px;
+    text-wrap: balance;
+  }
+  h3 {
+    font-size: 15px;
+    font-weight: 650;
+    margin: 0 0 6px;
+    letter-spacing: -.005em;
+  }
+  p { margin: 0 0 14px; }
+  p:last-child { margin-bottom: 0; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 12px;
+  }
+  .lede { font-size: 18px; line-height: 1.55; color: var(--ink-2); }
+  .note { font-size: 14px; color: var(--muted); }
+  code, .m { font-family: var(--mono); font-size: .89em; }
+  code {
+    background: var(--rule-soft);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  strong { font-weight: 650; }
+
+  section { display: flex; flex-direction: column; gap: 16px; }
+
+  hr.rule { border: 0; border-top: 1px solid var(--rule); margin: 0; }
+
+  /* ---- Condition cards --------------------------------------------------- */
+  .conds { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .cond {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 18px 18px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: var(--shadow);
+  }
+  .cond .lang {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .cond .engine { font-family: var(--display); font-size: 19px; line-height: 1.2; font-weight: 600; }
+  .cond .figure {
+    font-family: var(--mono);
+    font-size: 34px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.02em;
+  }
+  .cond .figure small { font-size: 15px; color: var(--muted); margin-left: 2px; }
+  .cond .sub { font-size: 13px; color: var(--muted); line-height: 1.45; }
+  .cond.win { border-color: var(--series-a); }
+  .cond.win .figure { color: var(--series-a); }
+
+  /* ---- Chart ------------------------------------------------------------- */
+  .chart-card {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 20px 20px 12px;
+    overflow-x: auto;
+  }
+  .legend { display: flex; gap: 18px; align-items: center; margin: 0 0 6px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-2); }
+  .swatch { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+  svg { display: block; min-width: 600px; }
+  .g-line { stroke: var(--rule-soft); stroke-width: 1; }
+  .g-base { stroke: var(--rule); stroke-width: 1; }
+  .ax { font-family: var(--mono); font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+  .cat { font-size: 13px; fill: var(--ink); font-weight: 600; }
+  .cat-sub { font-family: var(--mono); font-size: 10.5px; fill: var(--muted); letter-spacing: .06em; }
+  .val { font-family: var(--mono); font-size: 12px; fill: var(--ink); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .val-na { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
+
+  /* ---- Tables ------------------------------------------------------------ */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  thead th {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num, th.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.rowlab { color: var(--muted); white-space: nowrap; }
+  .best { color: var(--series-a); font-weight: 650; }
+
+  /* ---- Error pair list --------------------------------------------------- */
+  .pairs { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; background: var(--surface); }
+  .pair {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 12px;
+    align-items: baseline;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--rule-soft);
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  .pair:last-child { border-bottom: 0; }
+  .pair .said { color: var(--ink); }
+  .pair .got { color: var(--bad); }
+  .pair .arrow { color: var(--muted); }
+  .pair .why { grid-column: 1 / -1; font-family: var(--body); font-size: 12.5px; color: var(--muted); }
+
+  /* ---- Status chips ------------------------------------------------------ */
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--mono); font-size: 11px; letter-spacing: .04em;
+    white-space: nowrap;
+  }
+  .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .chip.fixed { color: var(--good); }
+  .chip.open { color: var(--bad); }
+
+  .callout {
+    border-left: 3px solid var(--series-a);
+    padding: 2px 0 2px 16px;
+    color: var(--ink-2);
+  }
+
+  a { color: var(--series-a); }
+  :focus-visible { outline: 2px solid var(--series-a); outline-offset: 2px; border-radius: 3px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header class="prose">
+    <p class="eyebrow">On-device speech recognition · Lenovo TB336FU · Xiaomi SM8735P</p>
+    <h1>Six transcription runs, two devices</h1>
+    <p class="lede">A food-safety audit narration, read aloud into a tablet microphone and transcribed on-device. Measured as word error rate against the script that was read. The first three runs compare engines on one device; the last three add a longer English script and a much faster phone.</p>
+  </header>
+
+  <section>
+    <div class="conds">
+      <div class="cond">
+        <span class="lang">English · 11:19</span>
+        <span class="engine">Gemma 4 E2B</span>
+        <span class="figure">17.8<small>% WER</small></span>
+        <span class="sub">LiteRT-LM on CPU. 34 slices. Four model refusals leaked into the saved transcript.</span>
+      </div>
+      <div class="cond">
+        <span class="lang">German · 20:21</span>
+        <span class="engine">Gemma 4 E2B</span>
+        <span class="figure">19.3<small>% WER</small></span>
+        <span class="sub">LiteRT-LM on GPU. 58 slices. No language detected; 1 of 3 marker spans tagged.</span>
+      </div>
+      <div class="cond win">
+        <span class="lang">German · 20:07</span>
+        <span class="engine">Whisper Small</span>
+        <span class="figure">15.0<small>% WER</small></span>
+        <span class="sub">sherpa-onnx int8 on CPU. Detected <span class="m">de</span>. All 3 marker spans tagged.</span>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <h2>Word error rate</h2>
+    <p class="prose note">Two measures. <strong>Raw</strong> compares words literally. <strong>Number-normalised</strong> first rewrites spoken German numerals into the digit forms a correct transcript should produce — otherwise <span class="m">neunzehn Komma vier</span> → <span class="m">19,4</span> is scored as an error when the model did exactly the right thing. Both strip punctuation, as standard WER does.</p>
+
+    <div class="chart-card">
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--series-a)"></i> Raw WER</span>
+        <span><i class="swatch" style="background:var(--series-b)"></i> Number-normalised WER</span>
+      </div>
+
+      <svg viewBox="0 0 780 300" role="img" aria-label="Word error rate by run. English Gemma 17.8 percent raw. German Gemma 19.3 percent raw, 15.2 percent normalised. German Whisper Small 15.0 percent raw, 9.4 percent normalised.">
+        <!-- gridlines: 0,5,10,15,20,25 % over 520px -->
+        <line class="g-base" x1="162" y1="40" x2="162" y2="252"></line>
+        <line class="g-line" x1="266" y1="40" x2="266" y2="252"></line>
+        <line class="g-line" x1="370" y1="40" x2="370" y2="252"></line>
+        <line class="g-line" x1="474" y1="40" x2="474" y2="252"></line>
+        <line class="g-line" x1="578" y1="40" x2="578" y2="252"></line>
+        <line class="g-line" x1="682" y1="40" x2="682" y2="252"></line>
+
+        <text class="ax" x="162" y="30" text-anchor="middle">0</text>
+        <text class="ax" x="266" y="30" text-anchor="middle">5</text>
+        <text class="ax" x="370" y="30" text-anchor="middle">10</text>
+        <text class="ax" x="474" y="30" text-anchor="middle">15</text>
+        <text class="ax" x="578" y="30" text-anchor="middle">20</text>
+        <text class="ax" x="682" y="30" text-anchor="middle">25%</text>
+
+        <!-- Group 1 — English / Gemma -->
+        <text class="cat" x="148" y="66" text-anchor="end">Gemma</text>
+        <text class="cat-sub" x="148" y="82" text-anchor="end">ENGLISH · CPU</text>
+        <path fill="var(--series-a)" d="M162,52 H524 a4,4 0 0 1 4,4 V68 a4,4 0 0 1 -4,4 H162 Z"></path>
+        <text class="val" x="536" y="66">17.8%</text>
+        <text class="val-na" x="162" y="92">n/a — normaliser covers German numerals only</text>
+
+        <!-- Group 2 — German / Gemma -->
+        <text class="cat" x="148" y="140" text-anchor="end">Gemma</text>
+        <text class="cat-sub" x="148" y="156" text-anchor="end">GERMAN · GPU</text>
+        <path fill="var(--series-a)" d="M162,126 H555 a4,4 0 0 1 4,4 V142 a4,4 0 0 1 -4,4 H162 Z"></path>
+        <text class="val" x="567" y="140">19.3%</text>
+        <path fill="var(--series-b)" d="M162,148 H470 a4,4 0 0 1 4,4 V164 a4,4 0 0 1 -4,4 H162 Z"></path>
+        <text class="val" x="482" y="162">15.2%</text>
+
+        <!-- Group 3 — German / Whisper -->
+        <text class="cat" x="148" y="214" text-anchor="end">Whisper Small</text>
+        <text class="cat-sub" x="148" y="230" text-anchor="end">GERMAN · CPU</text>
+        <path fill="var(--series-a)" d="M162,200 H466 a4,4 0 0 1 4,4 V216 a4,4 0 0 1 -4,4 H162 Z"></path>
+        <text class="val" x="482" y="214">15.0%</text>
+        <path fill="var(--series-b)" d="M162,222 H349 a4,4 0 0 1 4,4 V238 a4,4 0 0 1 -4,4 H162 Z"></path>
+        <text class="val" x="365" y="236">9.4%</text>
+
+        <line class="g-base" x1="162" y1="252" x2="682" y2="252"></line>
+        <text class="ax" x="422" y="276" text-anchor="middle">lower is better</text>
+      </svg>
+    </div>
+
+    <p class="prose callout">On German, with identical audio, <strong>Whisper Small makes about 40% fewer errors than Gemma</strong> on the normalised measure — and it also returns a detected language and three times as many correctly tagged marker spans.</p>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <h2>Run conditions and results</h2>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th class="num">English · Gemma</th>
+            <th class="num">German · Gemma</th>
+            <th class="num">German · Whisper Small</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="rowlab">Recording length</td><td class="num">11:19</td><td class="num">20:21</td><td class="num">20:07</td></tr>
+          <tr><td class="rowlab">Engine</td><td class="num">LiteRT-LM</td><td class="num">LiteRT-LM</td><td class="num">sherpa-onnx</td></tr>
+          <tr><td class="rowlab">Model</td><td class="num">gemma-4-E2B-it</td><td class="num">gemma-4-E2B-it</td><td class="num">whisper-small int8</td></tr>
+          <tr><td class="rowlab">Accelerator</td><td class="num">CPU</td><td class="num">GPU</td><td class="num">CPU</td></tr>
+          <tr><td class="rowlab">Slice cap applied</td><td class="num">24 s</td><td class="num">24 s</td><td class="num">28 s</td></tr>
+          <tr><td class="rowlab">Slices decoded</td><td class="num">34</td><td class="num">58</td><td class="num">~50</td></tr>
+          <tr><td class="rowlab">Reference words</td><td class="num">1457</td><td class="num">1996</td><td class="num">1996</td></tr>
+          <tr><td class="rowlab">Transcribed words</td><td class="num">1319</td><td class="num">1943</td><td class="num">1938</td></tr>
+          <tr><td class="rowlab">Raw WER</td><td class="num">17.8%</td><td class="num">19.3%</td><td class="num best">15.0%</td></tr>
+          <tr><td class="rowlab">Number-normalised WER</td><td class="num">n/a</td><td class="num">15.2%</td><td class="num best">9.4%</td></tr>
+          <tr><td class="rowlab">Substitutions</td><td class="num">226</td><td class="num">373</td><td class="num best">284</td></tr>
+          <tr><td class="rowlab">Deletions</td><td class="num">34</td><td class="num">12</td><td class="num">16</td></tr>
+          <tr><td class="rowlab">Insertions</td><td class="num">0</td><td class="num">1</td><td class="num best">0</td></tr>
+          <tr><td class="rowlab">Language detected</td><td class="num">none</td><td class="num">none</td><td class="num best">de</td></tr>
+          <tr><td class="rowlab">Marker spans tagged</td><td class="num">5, misplaced</td><td class="num">1 of 3</td><td class="num best">3 of 3</td></tr>
+          <tr><td class="rowlab">Model refusals leaked</td><td class="num">4</td><td class="num best">0</td><td class="num best">0</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="prose note">Substitution counts are not comparable across languages — the German script is longer and its reference tokenises differently. Compare the rates, not the raw counts. The two German runs <em>are</em> directly comparable: byte-identical audio, only the recogniser changed.</p>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <h2>What both engines get wrong</h2>
+    <p class="prose">The failure modes cluster, and the dangerous ones are not the obvious ones. A garbled word is visible; a dropped unit leaves a fluent sentence that means something else.</p>
+
+    <h3>Dropped units and signs — shared by both, and the worst class</h3>
+    <div class="pairs">
+      <div class="pair"><span class="said">minus achtzehn Komma sechs Grad</span><span class="arrow">→</span><span class="got">achtzehn Komma sechs</span>
+        <span class="why">Both engines. The sign and the unit vanish; the number survives. In an audit record this inverts a compliance result.</span></div>
+      <div class="pair"><span class="said">neunundneunzig Komma zwei Prozent</span><span class="arrow">→</span><span class="got">99,2</span>
+        <span class="why">“Prozent” dropped three times across the German runs.</span></div>
+    </div>
+
+    <h3>Alphanumeric identifiers — degrade everywhere</h3>
+    <div class="pairs">
+      <div class="pair"><span class="said">Charge B74-229</span><span class="arrow">→</span><span class="got">Schatz 74-299 · b74 229</span>
+        <span class="why">Gemma, then Whisper. Whisper keeps the letter; Gemma loses it and mishears “Charge”.</span></div>
+      <div class="pair"><span class="said">Charge K11-087</span><span class="arrow">→</span><span class="got">0780 · k11 0780</span>
+        <span class="why">Neither reproduces the code correctly.</span></div>
+      <div class="pair"><span class="said">Anlagenkennzeichen FE331</span><span class="arrow">→</span><span class="got">F331</span>
+        <span class="why">A single dropped letter, invisible in fluent prose.</span></div>
+    </div>
+
+    <h3>Plausible-but-wrong words — the hardest to catch by eye</h3>
+    <div class="pairs">
+      <div class="pair"><span class="said">Abweichung</span><span class="arrow">→</span><span class="got">Abweisung</span>
+        <span class="why">Gemma, 3×. “Deviation” becomes “rejection” — the exact word the non-conformity feature keys on.</span></div>
+      <div class="pair"><span class="said">Wareneingang</span><span class="arrow">→</span><span class="got">wahren Eingang</span>
+        <span class="why">Whisper. “Goods receiving” becomes “true entrance”: real German words, wrong meaning.</span></div>
+      <div class="pair"><span class="said">hand wash station is stocked</span><span class="arrow">→</span><span class="got">is stopped</span>
+        <span class="why">Gemma, English run. One phoneme flips a passing observation into a failing one.</span></div>
+      <div class="pair"><span class="said">Kammer vier</span><span class="arrow">→</span><span class="got">Kamera · kamafir</span>
+        <span class="why">Gemma, then Whisper. Both lose the chamber number the whole finding refers to.</span></div>
+    </div>
+
+    <h3>Handled well by both</h3>
+    <p class="prose">Spoken numerals normalise reliably — <span class="m">ISO 22000</span>, <span class="m">8.5.1</span>, <span class="m">19,4 Grad</span> with the correct German decimal comma, <span class="m">21. August</span>. Umlauts and <span class="m">ß</span> are never the failure point. Long compounds survive: <span class="m">Rückverfolgbarkeitsaufzeichnung</span>, <span class="m">Überwachungsaudit</span>. Whisper splits compounds more often than Gemma (<span class="m">sodass</span> → <span class="m">so dass</span>, 4×), which is cosmetic.</p>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <h2>Bugs these runs surfaced</h2>
+    <p class="prose">The first English run failed outright, and finding out why took the rest of the day. Four defects, three now fixed.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Defect</th><th>Consequence</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Slice cut window unbounded in <span class="m">splitLong</span></td>
+            <td>Slices ran to 150 s against a 24 s cap; transcription died with <span class="m">5018 &gt;= 4096</span> and an empty transcript</td>
+            <td><span class="chip fixed">fixed</span></td>
+          </tr>
+          <tr>
+            <td>Capture buffer grew without limit</td>
+            <td>OOM at 38 min 55 s, losing the entire recording — nothing was written until stop</td>
+            <td><span class="chip fixed">fixed</span></td>
+          </tr>
+          <tr>
+            <td><span class="m">failTranscription</span> cleared <span class="m">audioPath</span></td>
+            <td>A failed note could never be retried; its WAV was orphaned in the cache</td>
+            <td><span class="chip fixed">fixed</span></td>
+          </tr>
+          <tr>
+            <td>Marker tagging misfires</td>
+            <td><span class="m">Action|Start</span> fired 0.32 s into the English run; the all-or-nothing text fallback never runs when any marker is detected acoustically</td>
+            <td><span class="chip open">open</span></td>
+          </tr>
+          <tr>
+            <td><span class="m">GemmaTranscriptGuard</span> misses a refusal family</td>
+            <td>“Please provide the audio you would like me to transcribe” saved verbatim into the English transcript</td>
+            <td><span class="chip open">open</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="prose note">The slicing bug survived because <span class="m">SpokenMarkersTest</span> stubbed the cut function as <span class="m">{ from, _ -&gt; from + cap }</span> — discarding the argument that mattered, and hard-coding the behaviour the real code failed to produce. Every “no slice may exceed the cap” assertion passed against a stub that could not fail.</p>
+  </section>
+
+  <hr class="rule">
+
+  <section class="prose">
+    <h2>Why slicing is required at all</h2>
+    <p>Not a tuning choice. sherpa-onnx truncates, in <span class="m">offline-recognizer-whisper-impl.h</span>:</p>
+    <p class="callout m">if (num_frames &gt;= max_num_frames - 50) { … "Only waves less than 30 seconds are supported. We process only the first 30 seconds and discard the remaining data" }</p>
+    <p>That string is present in the shipped <span class="m">libsherpa-onnx-jni.so</span>. The real ceiling is <strong>2950 mel frames = 29.5 s</strong>, so the app's 28 s cap holds 1.5 s of margin. Without slicing, a 20-minute note returns its first 30 seconds and logs a line nobody reads.</p>
+    <p>SenseVoice, by contrast, has <em>no</em> length limit in its implementation — the codebase's claim that it “degrades into repetition” is plausible but unverified, and unlike Whisper nothing enforces it.</p>
+  </section>
+
+  <hr class="rule">
+
+  <section class="prose">
+    <h2>Cost, and what it implies</h2>
+    <p>Both German runs decoded at roughly <strong>45 seconds per slice</strong>, giving about <strong>two times realtime</strong>: a 20-minute recording takes some 40 minutes to transcribe after the user stops. Gemma reached that on GPU; Whisper reached it on CPU, so Whisper's accuracy win costs nothing in wall-clock here.</p>
+    <p>That number is the argument for changing the architecture rather than the model. The current pipeline cannot start until recording ends, because every boundary it needs — VAD regions, speaker turns, and marker spans, where an unclosed non-conformity runs to the end of the recording — is computed over the complete audio.</p>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <p class="eyebrow">16–17 August · longer script · second device</p>
+    <h2>A faster device, and a run that nearly lied</h2>
+    <p class="prose">Three later runs, all Whisper Small int8 with the XNNPACK execution provider, all reading a longer English script — 3086 reference words against the original English run's 1457. Two of them ran on a Xiaomi 25097RP43I: Snapdragon 8s Gen 4 (<span class="m">SM8735P</span>), one Cortex-X4 plus seven A720, 12 GB, Android 16.</p>
+
+    <div class="conds">
+      <div class="cond">
+        <span class="lang">English · 22:14 · Lenovo</span>
+        <span class="engine">Whisper Small</span>
+        <span class="figure">8.4<small>% WER</small></span>
+        <span class="sub">XNNPACK. VAD kept 99% in 1 region. 1.55× realtime.</span>
+      </div>
+      <div class="cond">
+        <span class="lang">English · 22:21 · Xiaomi</span>
+        <span class="engine">Whisper Small</span>
+        <span class="figure">27.8<small>% WER</small></span>
+        <span class="sub">Voided — the display timed out mid-recording and the microphone went dead. Not a recognition result.</span>
+      </div>
+      <div class="cond win">
+        <span class="lang">English · 22:42 · Xiaomi</span>
+        <span class="engine">Whisper Small</span>
+        <span class="figure">7.8<small>% WER</small></span>
+        <span class="sub">Screen pinned awake. VAD kept the recording in 1 region. <strong>0.35× realtime.</strong></span>
+      </div>
+    </div>
+
+    <p class="prose note">Figures are number-normalised, as elsewhere on this page. Excluding marker phrases from both sides: 7.5% for the Lenovo run, <strong>6.9%</strong> for the final Xiaomi run — the best the pipeline has produced.</p>
+  </section>
+
+  <section>
+    <h3>Same audio file, two devices</h3>
+    <p class="prose note">The rendered <span class="m">.aiff</span> was reused byte-for-byte across both devices rather than re-synthesised, so narration variance is eliminated and only the device differs. Before scoring anything new, the 16 August transcript was re-run through the scorer and reproduced 17.9% / 8.4% exactly — the comparison below is like-for-like, not approximately so.</p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th class="num">Lenovo TB336FU</th>
+            <th class="num">Xiaomi SM8735P</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="rowlab">Recording length</td><td class="num">22:14</td><td class="num">22:42</td></tr>
+          <tr><td class="rowlab">Raw WER</td><td class="num">17.9%</td><td class="num best">17.4%</td></tr>
+          <tr><td class="rowlab">Number-normalised WER</td><td class="num">8.4%</td><td class="num best">7.8%</td></tr>
+          <tr><td class="rowlab">…markers excluded both sides</td><td class="num">7.5%</td><td class="num best">6.9%</td></tr>
+          <tr><td class="rowlab">Reference words</td><td class="num">3090</td><td class="num">3090</td></tr>
+          <tr><td class="rowlab">Transcribed words</td><td class="num">2814</td><td class="num">2816</td></tr>
+          <tr><td class="rowlab">VAD + whole-file read</td><td class="num">100 s</td><td class="num best">22 s</td></tr>
+          <tr><td class="rowlab">Decode after stop</td><td class="num">1963 s</td><td class="num best">473 s</td></tr>
+          <tr><td class="rowlab">Stop → transcript ready</td><td class="num">2063 s</td><td class="num best">473 s</td></tr>
+          <tr><td class="rowlab">Rate</td><td class="num">1.55× realtime</td><td class="num best">0.35× realtime</td></tr>
+          <tr><td class="rowlab">Language detected</td><td class="num best">en</td><td class="num">nn — wrong</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="prose">That is <strong>4.4× faster end to end</strong>, and the first device to transcribe comfortably faster than realtime: a 22-minute note is ready about eight minutes after the user stops, against thirty-four. The preceding section argued the 2× figure was a reason to change the architecture rather than the model. On this class of hardware the architecture is no longer the binding constraint — but nothing about the pipeline changed, so the argument still holds for the devices that are not this fast.</p>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <h2>The voided run, and how it was caught</h2>
+    <p class="prose">The middle run scored 27.8%. That number is not a measure of Whisper; it is a measure of four minutes of missing audio, and the first diagnosis of it was wrong.</p>
+
+    <p class="prose">The transcript was missing <strong>one contiguous run of 634 words</strong> starting 21.5% in — not scattered errors, a single hole, with the opening and the closing sentence both intact. The VAD had reported keeping <span class="m">77% of the recording in 2 regions</span>: it had split the recording in two and discarded the block between. The obvious reading was that the VAD threw away good audio. The obvious reading was wrong. <strong>The display had timed out and the microphone went dead with it</strong>, so the VAD was correctly reporting silence that was really there.</p>
+
+    <h3>Two ways to prove it after the fact</h3>
+    <p class="prose">Neither needs the WAV, which matters because the WAV is deleted once transcription succeeds — a degraded run cannot be re-decoded afterwards.</p>
+
+    <div class="pairs">
+      <div class="pair"><span class="said">dumpsys batterystats --history</span><span class="arrow">→</span><span class="got">-screen … reason=DEFAULT_POLICY</span>
+        <span class="why">Offsets are relative to the <span class="m">RESET:TIME</span> line at the top of the output. Screen off at 12:30:35, back on at 12:34:50 — an ordinary screen timeout, not the lid.</span></div>
+      <div class="pair"><span class="said">pre-decode slice lengths</span><span class="arrow">→</span><span class="got">12 × 320240 samples, identical</span>
+        <span class="why">Independently dates the dead window to 12:31:28–12:35:28 from the app's own log, with no system tooling at all.</span></div>
+    </div>
+
+    <p class="prose">The second tell is the useful one, and it falls out of how cuts are chosen. <span class="m">AudioSegmenter.ONNX</span> prefers a cut at 20 s and permits up to 28 s, letting the quiet-point search find a real pause inside that window. Over speech the slice lengths therefore vary; over a flat signal every cut lands on the target because no frame is quieter than any other:</p>
+
+    <p class="callout m">…446000 · <strong>320240 · 320240 · 320240 · 320240 · 320240 · 320240</strong> · 400400…</p>
+
+    <p class="prose">A run of byte-identical slice lengths means the microphone delivered nothing. The successful re-run produced 38 slices ranging 19.9–31.7 s with no identical run anywhere — the signature of cuts landing at genuine pauses.</p>
+
+    <p class="prose"><span class="m">svc power stayon usb</span> is not sufficient on MIUI; it was set and did not hold. Setting <span class="m">screen_off_timeout</span> beyond the recording length does hold, and <span class="m">mWakefulness</span> should be polled during the run rather than checked once at the start.</p>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <h2>Defects these runs surfaced</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Defect</th><th>Consequence</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>VAD coverage log overflows <span class="m">Int</span></td>
+            <td><span class="m">kept * 100</span> exceeds <span class="m">Int.MAX_VALUE</span> above 21,474,836 samples — <strong>22 min 22 s</strong> at 16 kHz. The 22:42 run logged <span class="m">VAD kept -97%</span>. Log-only, but it disables the one diagnostic that reveals dropped audio, on exactly the long recordings where dropping matters</td>
+            <td><span class="chip open">open</span></td>
+          </tr>
+          <tr>
+            <td>Note language taken from the first slice alone</td>
+            <td>First-non-null wins, so the whole note inherits the least reliable slice — leading silence or a part-utterance. An English run with 46 s of lead silence was stored as <span class="m">nn</span>, and the summariser's language directive would then ask for the summary in Norwegian Nynorsk</td>
+            <td><span class="chip open">open</span></td>
+          </tr>
+          <tr>
+            <td>First spoken marker trusts the model's timestamps</td>
+            <td>Only the first detection of a recording uses them, and it is the one that is wrong. Its tag opens at or near char 0 and swallows the note's opening</td>
+            <td><span class="chip open">open</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="prose">The marker defect resolved itself into a clean A/B, because both code paths ran inside a single recording:</p>
+    <div class="pairs">
+      <div class="pair"><span class="said">ACTION_END · timestamped=true</span><span class="arrow">→</span><span class="got">claims 0:32, spoken at ~4:45</span>
+        <span class="why">The model's own timestamps. Wrong by four minutes.</span></div>
+      <div class="pair"><span class="said">ACTION_START · timestamped=false</span><span class="arrow">→</span><span class="got">claims 11:48, spoken at 11:46</span>
+        <span class="why">The feed position fallback. Accurate to about two seconds.</span></div>
+      <div class="pair"><span class="said">ACTION_END · timestamped=false</span><span class="arrow">→</span><span class="got">claims 12:08, spoken at 12:06</span>
+        <span class="why">Same fallback, same accuracy.</span></div>
+    </div>
+    <p class="prose note">Reproduced on a second device with a different copy of the model files, so it is neither device- nor file-specific. That settles the fix: delete the timestamped path rather than tighten its plausibility checks, since the fallback it would defer to is correct every time it runs.</p>
+  </section>
+
+  <hr class="rule">
+
+  <section>
+    <h2>What the best run still gets wrong</h2>
+    <p class="prose note">Markers excluded from both sides. Residual normalised errors are almost entirely proper nouns, orthography, and one recurring dropped unit — the same shape as the German runs above.</p>
+    <div class="pairs">
+      <div class="pair"><span class="said">percent</span><span class="arrow">→</span><span class="got">&lt;dropped&gt;</span>
+        <span class="why">3×. The same dropped-unit class that was the worst category on the German runs, and still the most dangerous: the number survives without its unit.</span></div>
+      <div class="pair"><span class="said">site</span><span class="arrow">→</span><span class="got">side</span>
+        <span class="why">4×. A homophone that turns “site representative” into something meaningless but fluent.</span></div>
+      <div class="pair"><span class="said">swab</span><span class="arrow">→</span><span class="got">swap</span>
+        <span class="why">3×. Domain vocabulary the model has no reason to prefer.</span></div>
+      <div class="pair"><span class="said">Blomqvist · Achterberg</span><span class="arrow">→</span><span class="got">Blumkvist · Ackterberg</span>
+        <span class="why">Proper nouns, 3× and 2×. Consistently misspelled rather than randomly, so they are correctable by dictionary.</span></div>
+      <div class="pair"><span class="said">programme</span><span class="arrow">→</span><span class="got">program</span>
+        <span class="why">3×. British/US orthography — scored as an error, arguably not one.</span></div>
+    </div>
+  </section>
+
+  <footer class="prose note">
+    <hr class="rule" style="margin-bottom:20px">
+    <p>Audio generated with macOS <span class="m">say</span> (Samantha, en; Anna, de) at 150 wpm, played through laptop speakers into the device microphone at 90% volume. WER computed with a Ratcliff–Obershelp alignment over punctuation-stripped, lowercased tokens, via <span class="m">docs/wer.py</span>. Marker phrases are excised into tags rather than transcribed, so they register as deletions and understate the first three scores slightly; the later runs are also reported with markers excluded from both sides, which is the cleaner comparison.</p>
+    <p>Number normalisation is language-specific: German is the default, and <span class="m">--lang=en</span> selects an English numeral grammar that composes numbers rather than looking them up, and collapses spoken batch codes (<span class="m">“T four two dash seven one six”</span> → <span class="m">t42-716</span>). It was added after the German runs, which is why the first English run's normalised figure was originally reported as unavailable. Every previously published German figure was re-checked against it and reproduces byte-identically.</p>
+    <p>A narration script for these runs must never contain the phrases <span class="m">stop recording</span>, <span class="m">discard recording</span>, <span class="m">open settings</span> or <span class="m">open models</span>: the keyword spotter listens for them live, and the narration will otherwise halt or discard its own recording.</p>
+  </footer>
+
+</div>

@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Verified research findings on running speaker diarization offline on Android arm64, and which of the two shipped models is licensed for commercial use.">
+<title>Diarization on arm64</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap">
+<style>
+:root{
+  --paper:#F3F5F4; --surface:#FFFFFF; --surface-2:#E9EDEB;
+  --ink:#151A1A; --ink-2:#414B4A; --ink-3:#6B7776;
+  --rule:#D3DAD8; --rule-strong:#B9C3C1;
+  --accent:#17646A; --accent-soft:#DDEAEA;
+  --ok:#2C6E4E; --warn:#8C6210; --crit:#9C3A34; --dead:#7A8382;
+  --measure:68ch;
+  --sans:"IBM Plex Sans Condensed","Helvetica Neue",Arial,sans-serif;
+  --serif:"IBM Plex Serif",Georgia,"Times New Roman",serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0F1414; --surface:#161C1C; --surface-2:#1E2726;
+    --ink:#E6ECEA; --ink-2:#B2BEBC; --ink-3:#808C8B;
+    --rule:#2A3434; --rule-strong:#3A4746;
+    --accent:#5FB8BC; --accent-soft:#15302F;
+    --ok:#6FBF92; --warn:#D6A945; --crit:#E08079; --dead:#6D7877;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0F1414; --surface:#161C1C; --surface-2:#1E2726;
+  --ink:#E6ECEA; --ink-2:#B2BEBC; --ink-3:#808C8B;
+  --rule:#2A3434; --rule-strong:#3A4746;
+  --accent:#5FB8BC; --accent-soft:#15302F;
+  --ok:#6FBF92; --warn:#D6A945; --crit:#E08079; --dead:#6D7877;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--serif); font-size:17px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:var(--measure); margin:0 auto; padding:0 24px}
+.bleed{max-width:1000px; margin:0 auto; padding:0 24px}
+h1,h2,h3,.label{font-family:var(--sans); text-wrap:balance}
+h1{font-size:clamp(2.3rem,6vw,3.4rem); font-weight:700; line-height:1.04; letter-spacing:-.015em; margin:0}
+h2{font-size:1.5rem; font-weight:700; letter-spacing:-.005em; margin:0}
+h3{font-size:1.09rem; font-weight:600; line-height:1.34; margin:0}
+p{margin:0}
+a{color:var(--accent); text-underline-offset:3px; text-decoration-thickness:1px}
+a:focus-visible,summary:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:2px}
+code,.mono{font-family:var(--mono); font-size:.86em}
+code{background:var(--surface-2); padding:.1em .34em; border-radius:3px; word-break:break-word}
+.label{
+  font-size:.7rem; font-weight:600; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--ink-3); font-family:var(--sans);
+}
+.stack{display:flex; flex-direction:column}
+.g8{gap:8px}.g12{gap:12px}.g16{gap:16px}.g24{gap:24px}.g32{gap:32px}.g44{gap:44px}
+
+header.top{
+  border-bottom:1px solid var(--rule); background:var(--surface);
+  padding:64px 0 34px;
+}
+.eyebrow{display:flex; flex-wrap:wrap; gap:10px; align-items:baseline}
+.dot{width:5px;height:5px;border-radius:50%;background:var(--accent);display:inline-block;margin-bottom:3px}
+.deck{font-size:1.12rem; color:var(--ink-2); max-width:60ch}
+.runbar{
+  display:flex; flex-wrap:wrap; gap:0; border:1px solid var(--rule);
+  background:var(--paper); border-radius:4px; overflow:hidden; margin-top:6px;
+}
+.runbar div{
+  flex:1 1 108px; padding:11px 14px; border-right:1px solid var(--rule);
+  display:flex; flex-direction:column; gap:2px;
+}
+.runbar div:last-child{border-right:0}
+.runbar b{font-family:var(--mono); font-size:1.16rem; font-weight:500; font-variant-numeric:tabular-nums; color:var(--ink)}
+.runbar span{font-family:var(--sans); font-size:.68rem; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3)}
+
+main{padding:52px 0 40px}
+section{scroll-margin-top:20px}
+
+.verdict{border-left:3px solid var(--accent); padding:2px 0 2px 20px}
+.vrow{display:flex; gap:14px; align-items:flex-start}
+.vnum{
+  font-family:var(--mono); font-size:.76rem; color:var(--accent);
+  padding-top:.34em; flex:0 0 auto; font-variant-numeric:tabular-nums;
+}
+
+.tablewrap{overflow-x:auto; border:1px solid var(--rule); border-radius:4px; background:var(--surface)}
+table{border-collapse:collapse; width:100%; min-width:660px; font-size:.9rem}
+th{
+  font-family:var(--sans); font-size:.69rem; font-weight:600; letter-spacing:.11em;
+  text-transform:uppercase; color:var(--ink-3); text-align:left;
+  padding:11px 14px; border-bottom:1px solid var(--rule-strong); white-space:nowrap;
+}
+td{padding:12px 14px; border-bottom:1px solid var(--rule); vertical-align:top; color:var(--ink-2)}
+tr:last-child td{border-bottom:0}
+td.name{font-family:var(--mono); font-size:.8rem; color:var(--ink); word-break:break-word; min-width:170px}
+td.num{font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap}
+.pill{
+  display:inline-block; font-family:var(--sans); font-size:.68rem; font-weight:600;
+  letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:3px;
+  border:1px solid currentColor; white-space:nowrap;
+}
+.p-ok{color:var(--ok)} .p-warn{color:var(--warn)} .p-crit{color:var(--crit)} .p-dead{color:var(--dead)}
+.dim{color:var(--ink-3)}
+.note{max-width:64ch; color:var(--ink-2); font-size:.92rem}
+.note b{font-family:var(--sans); font-weight:600; color:var(--ink)}
+
+.finding{
+  background:var(--surface); border:1px solid var(--rule); border-left-width:3px;
+  border-radius:4px; padding:18px 20px; display:flex; flex-direction:column; gap:10px;
+}
+.f-high{border-left-color:var(--accent)}
+.f-med{border-left-color:var(--warn)}
+.f-low{border-left-color:var(--dead)}
+.fmeta{display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center}
+.vote{font-family:var(--mono); font-size:.72rem; color:var(--ink-3); font-variant-numeric:tabular-nums}
+.finding p{font-size:.95rem; color:var(--ink-2)}
+.finding .why{border-top:1px dashed var(--rule); padding-top:10px; font-size:.89rem}
+.why b{font-family:var(--sans); font-weight:600; color:var(--ink); font-size:.82rem; letter-spacing:.02em}
+
+figure{margin:0; display:flex; flex-direction:column; gap:12px}
+.diagram{
+  background:var(--surface); border:1px solid var(--rule); border-radius:4px;
+  padding:22px 20px; overflow-x:auto;
+}
+.diagram svg{display:block; min-width:600px; width:100%; height:auto}
+figcaption{font-size:.87rem; color:var(--ink-3); max-width:62ch}
+
+.killed{
+  border:1px solid var(--rule); border-radius:4px; background:var(--surface);
+  padding:15px 18px; display:flex; flex-direction:column; gap:7px;
+}
+.killed p.dead{font-size:.9rem; color:var(--ink-3); text-decoration:line-through; text-decoration-color:var(--rule-strong)}
+.killed p.verdictline{font-size:.82rem; color:var(--ink-2); font-family:var(--sans)}
+
+ol.next{margin:0; padding:0; list-style:none; counter-reset:n; display:flex; flex-direction:column; gap:18px}
+ol.next li{counter-increment:n; display:flex; gap:15px; align-items:flex-start}
+ol.next li::before{
+  content:counter(n); font-family:var(--mono); font-size:.75rem; color:var(--accent);
+  border:1px solid var(--rule-strong); border-radius:50%; width:24px; height:24px;
+  display:flex; align-items:center; justify-content:center; flex:0 0 24px; margin-top:2px;
+}
+ol.next p{font-size:.95rem; color:var(--ink-2)}
+ol.next h3{margin-bottom:4px}
+
+details{border-top:1px solid var(--rule); padding-top:14px}
+summary{cursor:pointer; font-family:var(--sans); font-weight:600; font-size:.95rem; color:var(--ink)}
+ul.src{margin:14px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:9px}
+ul.src li{font-size:.84rem; color:var(--ink-3); word-break:break-word}
+ul.src a{font-family:var(--mono); font-size:.8rem}
+
+footer{border-top:1px solid var(--rule); margin-top:52px; padding:26px 0 60px; color:var(--ink-3); font-size:.84rem}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<!-- Generated 2026-08-21 by a deep-research run: 20 sources, 100 claims extracted,
+     25 adversarially verified, 4 killed. Live copy:
+     https://claude.ai/code/artifact/eeb00392-e82c-408c-805e-f25c4d46cc32 -->
+
+
+<header class="top">
+  <div class="wrap stack g16">
+    <div class="eyebrow">
+      <span class="label">Deep research</span><span class="dot"></span>
+      <span class="label">21 Aug 2026</span><span class="dot"></span>
+      <span class="label">AIAgentTestApp</span>
+    </div>
+    <h1>Diarization on arm64</h1>
+    <p class="deck">Whether speaker attribution can join the voice-note pipeline, which of the two
+    models already shipping is actually licensed for it, and why the streaming version of this
+    question has no answer.</p>
+    <div class="runbar">
+      <div><b>20</b><span>Sources</span></div>
+      <div><b>100</b><span>Claims</span></div>
+      <div><b>25</b><span>Verified</span></div>
+      <div><b>4</b><span>Killed</span></div>
+      <div><b>12</b><span>Findings</span></div>
+    </div>
+  </div>
+</header>
+
+<main class="stack g44">
+
+  <section class="wrap stack g24">
+    <h2>The short answer</h2>
+    <div class="verdict stack g16">
+      <div class="vrow"><span class="vnum">01</span><p><b>You are already on the only shippable
+      path.</b> The offline sherpa-onnx cascade in <code>SpeakerDiarizer.kt</code> is not one option
+      among several — for an ONNX-Runtime Android app under a commercial licence, it is the option.
+      Nothing found in this sweep beats it.</p></div>
+      <div class="vrow"><span class="vnum">02</span><p><b>Streaming diarization does not exist in
+      sherpa-onnx.</b> Not undocumented, not experimental — a recursive tree of <code>master</code>
+      returns 256 diarization paths and every one is <code>Offline*</code> or literally
+      <code>non-streaming-*</code>. Live speaker labels would mean building an incremental scheme
+      yourself.</p></div>
+      <div class="vrow"><span class="vnum">03</span><p><b>The integration is already paid for.</b>
+      All seven JNI entry points are compiled into the arm64-v8a <code>.so</code> in the AAR you
+      resolve today. No rebuild, no binding, no NDK work.</p></div>
+      <div class="vrow"><span class="vnum">04</span><p><b>One licence needs your attention,</b> and
+      it is not the one the brief worried about. The pyannote half is clean MIT. The WeSpeaker half
+      is <em>CC&nbsp;BY&nbsp;4.0</em> — commercially usable, but attribution-bearing, and not the
+      Apache/MIT/BSD you asked for.</p></div>
+      <div class="vrow"><span class="vnum">05</span><p><b>Your bottleneck is upstream of anything
+      this sweep can fix.</b> You have already measured 88.4% best case, 74.6% on backchannel-heavy
+      dialogue and 49.8% naming — the wall is cluster purity on short turns. The one lever the
+      research offers on that: the embedding half is swappable, the segmentation half is not.</p></div>
+    </div>
+  </section>
+
+  <section class="wrap stack g16">
+    <h2>Against what you already know</h2>
+    <p class="note">This sweep searched the public record, which knows less about this pipeline than
+    your own device measurements do. Three of its conclusions land differently once your results are
+    on the table, and saying so is the difference between a useful report and a confident one.</p>
+    <div class="stack g12">
+      <div class="killed">
+        <p class="verdictline" style="color:var(--ink)"><b>Superseded — "go measure the RTF."</b></p>
+        <p style="font-size:.9rem;color:var(--ink-2)">The research's headline gap was that no public
+        DER or ARM RTF exists for this cascade, and proposed the prebuilt evaluation APK as the cheap
+        way to get one. You are years past that: 88.4% time-weighted attribution on a 5:25 two-voice
+        recording, 74.6% on backchannel-heavy dialogue, 55.7% over the air, plus a durable scoring rig.
+        The gap is real for the public record and closed for you.</p>
+      </div>
+      <div class="killed">
+        <p class="verdictline" style="color:var(--ink)"><b>Confirmed independently — the
+        <code>cutree_k</code> trap.</b></p>
+        <p style="font-size:.9rem;color:var(--ink-2)">Upstream source reading found exactly what your
+        measurements found the hard way: <code>k</code> is a hard budget, not a hint. Your fix — pass
+        the count only when <code>enrolledCount == 0</code>, and let enrolment merge over-segmentation
+        — is the right shape, and the source confirms why. Over-segmentation is recoverable;
+        under-segmentation is not.</p>
+      </div>
+      <div class="killed">
+        <p class="verdictline" style="color:var(--ink)"><b>Reframed — alignment is not the
+        problem.</b></p>
+        <p style="font-size:.9rem;color:var(--ink-2)">Diarization genuinely does re-derive its own
+        boundaries and cannot take your VAD regions, which would be the central design question on a
+        greenfield build. On yours, <code>SpeakerAlignment</code> already handles it and your own note
+        concludes the remaining error is the segmentation or embedding model. Treat the boundary
+        finding as background, not as a task.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="bleed stack g16">
+    <h2>What each model costs you</h2>
+    <p class="note">The two rows marked <em>shipping</em> are what <code>AudioModels.kt</code>
+    downloads today. Sizes are the projects' own figures; the licence column is the finding that
+    changed most under verification.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>Model</th><th>Role</th><th>Size</th><th>Licence</th><th>Verdict</th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td class="name">pyannote-segmentation-3.0<br><span class="dim">via csukuangfj mirror</span></td>
+            <td>Segmentation<br><span class="dim">shipping</span></td>
+            <td class="num">5.99 MB<br><span class="dim">int8: 1.5 MB</span></td>
+            <td>MIT, <b>ungated</b><br><span class="dim">© 2022 CNRS</span></td>
+            <td><span class="pill p-ok">Clear</span></td>
+          </tr>
+          <tr>
+            <td class="name">wespeaker_en_voxceleb_CAM++</td>
+            <td>Embedding<br><span class="dim">shipping</span></td>
+            <td class="num">29.29 MB</td>
+            <td>CC BY 4.0<br><span class="dim">follows VoxCeleb</span></td>
+            <td><span class="pill p-warn">Attribution</span></td>
+          </tr>
+          <tr>
+            <td class="name">3D-Speaker ERes2Net</td>
+            <td>Embedding<br><span class="dim">alternative</span></td>
+            <td class="num">71 MB</td>
+            <td>Not verified</td>
+            <td><span class="pill p-warn">Unchecked</span></td>
+          </tr>
+          <tr>
+            <td class="name">reverb-diarization-v1 / v2</td>
+            <td>Segmentation<br><span class="dim">offered in sherpa docs</span></td>
+            <td class="num">—</td>
+            <td>Rev <b>Non-Production</b><br><span class="dim">§3.2 bars commercial use</span></td>
+            <td><span class="pill p-crit">Disqualified</span></td>
+          </tr>
+          <tr>
+            <td class="name">NVIDIA Sortformer</td>
+            <td>End-to-end<br><span class="dim">streaming + offline</span></td>
+            <td class="num">—</td>
+            <td>NeMo / Riva only</td>
+            <td><span class="pill p-dead">No ONNX</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note"><b>The Reverb trap.</b> sherpa-onnx's own docs list Reverb beside pyannote with
+    no licence warning, and ship a <code>revai_v1</code> variant in the prebuilt APK matrix. Rev's
+    terms bind <em>"regardless of the source from which You obtained a copy"</em> (§1.1) and define a
+    derivative to include a re-export of the same weights — so the ONNX conversion does not launder
+    it. Anyone copying the demo defaults would inherit a non-commercial licence silently.</p>
+  </section>
+
+  <section class="bleed stack g24">
+    <h2>Why the boundaries will not line up</h2>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 720 232" role="img" aria-label="Two timelines over the same recording. The app's pipeline cuts slices at quiet frames; the diarizer independently derives its own speaker turns, and the two sets of boundaries fall in different places.">
+          <g font-family="IBM Plex Sans Condensed, sans-serif" font-size="11" font-weight="600" fill="var(--ink-3)" letter-spacing="1.1">
+            <text x="0" y="12">YOUR PIPELINE</text>
+            <text x="0" y="128">DIARIZER, SEPARATE PASS</text>
+          </g>
+          <rect x="0" y="24" width="720" height="34" rx="2" fill="var(--surface-2)"/>
+          <g fill="var(--accent)" opacity="0.82">
+            <rect x="6" y="24" width="150" height="34" rx="2"/>
+            <rect x="176" y="24" width="212" height="34" rx="2"/>
+            <rect x="408" y="24" width="118" height="34" rx="2"/>
+            <rect x="546" y="24" width="168" height="34" rx="2"/>
+          </g>
+          <g font-family="IBM Plex Mono, monospace" font-size="9.5" fill="var(--paper)">
+            <text x="16" y="45">slice 1</text><text x="186" y="45">slice 2</text>
+            <text x="418" y="45">slice 3</text><text x="556" y="45">slice 4</text>
+          </g>
+          <g stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="2 3">
+            <line x1="166" y1="58" x2="166" y2="76"/><line x1="398" y1="58" x2="398" y2="76"/>
+            <line x1="536" y1="58" x2="536" y2="76"/>
+          </g>
+          <text x="0" y="88" font-family="IBM Plex Serif, serif" font-size="11.5" fill="var(--ink-3)">cut at the quietest nearby frame — and the key every transcription checkpoint is stored under</text>
+          <rect x="0" y="140" width="720" height="34" rx="2" fill="var(--surface-2)"/>
+          <g opacity="0.82">
+            <rect x="0" y="140" width="96" height="34" rx="2" fill="var(--ok)"/>
+            <rect x="112" y="140" width="196" height="34" rx="2" fill="var(--warn)"/>
+            <rect x="322" y="140" width="88" height="34" rx="2" fill="var(--ok)"/>
+            <rect x="424" y="140" width="142" height="34" rx="2" fill="var(--warn)"/>
+            <rect x="580" y="140" width="140" height="34" rx="2" fill="var(--ok)"/>
+          </g>
+          <g font-family="IBM Plex Mono, monospace" font-size="9.5" fill="var(--paper)">
+            <text x="10" y="161">spk 0</text><text x="122" y="161">spk 1</text>
+            <text x="332" y="161">spk 0</text><text x="434" y="161">spk 1</text><text x="590" y="161">spk 0</text>
+          </g>
+          <g stroke="var(--crit)" stroke-width="1.4" stroke-dasharray="3 3" opacity="0.85">
+            <line x1="104" y1="128" x2="104" y2="182"/><line x1="315" y1="128" x2="315" y2="182"/>
+            <line x1="417" y1="128" x2="417" y2="182"/><line x1="573" y1="128" x2="573" y2="182"/>
+          </g>
+          <text x="0" y="204" font-family="IBM Plex Serif, serif" font-size="11.5" fill="var(--ink-3)">pyannote derives these itself — there is no parameter for handing it your VAD regions</text>
+          <text x="0" y="224" font-family="IBM Plex Serif, serif" font-size="11.5" fill="var(--crit)">red marks a speaker change falling mid-slice, where per-slice attribution is simply wrong</text>
+        </svg>
+      </div>
+      <figcaption>Both tracks describe the same recording. Because the two stages derive boundaries
+      independently, a speaker change can land in the middle of a transcript slice — and re-cutting
+      slices to match would invalidate every transcription checkpoint, which this repo's own notes
+      warn against explicitly.</figcaption>
+    </figure>
+  </section>
+
+  <section class="wrap stack g32">
+    <div class="stack g8">
+      <h2>Findings</h2>
+      <p class="dim" style="font-size:.9rem">Each survived adversarial verification — three
+      independent agents prompted to refute it, needing two refusals to kill. The stripe encodes
+      confidence; the vote is the raw tally.</p>
+    </div>
+
+    <div class="stack g12">
+      <span class="label">Capability &amp; integration</span>
+
+      <article class="finding f-high">
+        <h3>Offline only — there is no streaming path to tune</h3>
+        <div class="fmeta"><span class="pill p-ok">High</span><span class="vote">3–0 · four levels: file tree, C API, C++, Kotlin</span></div>
+        <p>256 diarization paths in <code>master</code>, all <code>Offline*</code> or
+        <code>non-streaming-*</code>; <code>OnlineSpeakerDiarization</code> returns zero symbols. The
+        header says it outright: <code>// For offline speaker diarization (i.e., non-streaming)</code>.</p>
+        <p class="why"><b>Why this is a real gap, not a naming quirk —</b> the same directory carries
+        <code>online-recognizer</code>, <code>online-punctuation</code> and
+        <code>online-speech-denoiser</code>, so "online" is the project's own word for streaming. The
+        likely misreading: sherpa <em>does</em> ship streaming speaker <em>identification</em>
+        (<code>SpeakerEmbeddingManager</code>), but that needs voices enrolled in advance and does no
+        clustering. It is not diarization.</p>
+      </article>
+
+      <article class="finding f-high">
+        <h3>The JNI symbols are already in the AAR on your disk</h3>
+        <div class="fmeta"><span class="pill p-ok">High</span><span class="vote">3–0 · confirmed by binary inspection, not docs</span></div>
+        <p><code>nm -D jni/arm64-v8a/libsherpa-onnx-jni.so</code> exports all seven entry points —
+        <code>newFromFile</code>, <code>setConfig</code>, <code>process</code>,
+        <code>processWithCallback</code>, <code>getSampleRate</code>, <code>delete</code>,
+        <code>newFromAsset</code> — inside the <code>1.13.5</code> artifact pinned at
+        <code>libs.versions.toml:54</code>. Segments expose <code>getStart()</code> /
+        <code>getEnd()</code> in seconds and <code>getSpeaker()</code> from zero.</p>
+        <p class="why"><b>The free measurement —</b> the binary carries its own log format string,
+        <code>"OfflineSpeakerDiarization: total %.3f s, audio %.3f s, RTF %.3f"</code>. The library
+        will print the on-device RTF that nobody has published. A prebuilt arm64-v8a evaluation APK
+        with a WAV picker also exists, so the capability can be tried before any code is written.</p>
+      </article>
+
+      <article class="finding f-high">
+        <h3>Speaker count cannot be inferred — and the threshold runs backwards from intuition</h3>
+        <div class="fmeta"><span class="pill p-ok">High</span><span class="vote">3–0 · verified at tag v1.13.5, matching the AAR</span></div>
+        <p><code>Validate()</code> hard-fails unless the caller gives either <code>numClusters</code>
+        or <code>threshold</code> — there is no third auto-inference mode. The Kotlin default is an
+        untuned <code>0.5f</code>; sherpa's own worked example overrides it to <code>0.90</code> and
+        concedes the value was picked "for this specific wave file".</p>
+        <p class="why"><b>The correction worth carrying —</b> that number is a <em>distance</em>
+        threshold on cosine dissimilarity (1 − cos sim) under complete linkage. Larger means
+        <em>fewer</em> speakers. Anyone tuning it as a similarity score moves it the wrong way.</p>
+      </article>
+
+      <span class="label" style="margin-top:12px">Licensing</span>
+
+      <article class="finding f-high">
+        <h3>The HuggingFace gate does not bite on the path you actually use</h3>
+        <div class="fmeta"><span class="pill p-ok">High</span><span class="vote">3–0 clean/laundering · 2–1 on a Reverb sub-detail</span></div>
+        <p>Upstream <code>pyannote/segmentation-3.0</code> reports <code>"gated": "auto"</code> with
+        contact-info fields. The artifact your app fetches is sherpa's re-export, which reports
+        <code>"gated": false</code> and ships real MIT licence text. The brief's
+        disqualify-if-gated rule therefore does not apply here.</p>
+      </article>
+
+      <article class="finding f-med">
+        <h3>The embedding model is CC BY 4.0, not Apache — and it was the unchecked half</h3>
+        <div class="fmeta"><span class="pill p-warn">Verified separately</span><span class="vote">closed after the run flagged it as an open gate</span></div>
+        <p>The research cleared segmentation but left every embedding extractor unverified, calling
+        it "a hard gate on the whole approach". WeSpeaker's own pretrained-model docs settle it:
+        <em>"The pretrained model in WeNet follows the license of it's corresponding dataset. For
+        example, the pretrained model on VoxCeleb follows Creative Commons Attribution 4.0
+        International License."</em></p>
+        <p class="why"><b>What that means for you —</b> CC BY 4.0 permits commercial use, so
+        <code>wespeaker_en_voxceleb_CAM++</code> is not disqualified. But it is not Apache/MIT/BSD
+        either: it carries an attribution obligation the app does not currently discharge anywhere.
+        Two wrinkles worth a second look if this ships commercially — Oxford lists VoxCeleb metadata
+        as CC BY-<em>SA</em> 4.0 rather than plain BY, and there is precedent (VoxBlink2) for
+        YouTube-derived speaker models being released CC BY-NC-SA.</p>
+      </article>
+
+      <article class="finding f-high">
+        <h3>The framework is Apache-2.0, but the binary's composition is a separate question</h3>
+        <div class="fmeta"><span class="pill p-ok">High</span><span class="vote">3–0</span></div>
+        <p>sherpa-onnx's own code is unmodified Apache-2.0. Upstream, however, carries an open issue
+        stating that GPL-licensed espeak-ng, pulled in via piper-phonemize, is incompatible with that
+        licence — a question about what is linked into the shipped <code>.so</code>, not about
+        diarization, but one that rides along with it.</p>
+      </article>
+
+      <span class="label" style="margin-top:12px">Pipeline fit</span>
+
+      <article class="finding f-high">
+        <h3>Your VAD work cannot be handed to the diarizer</h3>
+        <div class="fmeta"><span class="pill p-ok">High</span><span class="vote">3–0 · absence confirmed at Kotlin and C-API level</span></div>
+        <p>The entire public surface is <code>setConfig</code>, <code>sampleRate</code>,
+        <code>process</code>, <code>processWithCallback</code>, <code>release</code>. No parameter at
+        any level accepts externally computed speech regions, so pyannote re-derives its own and
+        <code>SpeechActivityDetector</code>'s output is spent twice.</p>
+        <p class="why"><b>Don't mistake these for an opening —</b> <code>minDurationOn</code> and
+        <code>minDurationOff</code> only smooth the model's own frame-level output after the fact.
+        The boundaries are the model's, and your regions can serve only for alignment afterwards.</p>
+      </article>
+
+      <article class="finding f-med">
+        <h3>Batch-only processing collides with never reading a WAV whole</h3>
+        <div class="fmeta"><span class="pill p-warn">Medium</span><span class="vote">3–0 on API shape; the conflict framing is this report's inference</span></div>
+        <p><code>process()</code> takes the recording as one float32 array — roughly 3.84 MB per
+        minute at 16 kHz mono. A long note is a single large allocation, against a pipeline built
+        specifically so that transcription reads through <code>WavFile.Reader</code> a window at a
+        time.</p>
+        <p class="why"><b>And windowing has its own trap —</b> each <code>process()</code> call
+        clusters from scratch, so cluster ids carry no meaning across calls. Splitting the recording
+        to bound memory means solving id stitching, which upstream neither documents nor supports.</p>
+      </article>
+
+      <span class="label" style="margin-top:12px">Accuracy evidence</span>
+
+      <article class="finding f-high">
+        <h3>Streaming's accuracy cost lands hardest exactly where voice notes live</h3>
+        <div class="fmeta"><span class="pill p-ok">High</span><span class="vote">2–1 · the dissent corrected the claim's own last line</span></div>
+        <p>The common summary — "streaming is nearly free, sometimes better" — is drawn from DIHARD
+        III, where offline Sortformer scores 15.47% DER against 14.63% streaming at 0.32 s latency.
+        CALLHOME, broken out by speaker count, inverts it: at 2 speakers 6.70% offline degrades to
+        6.80 / 7.35 / 8.60 streaming, and at 3 speakers 10.36% degrades to 11.27 / 11.57 / 13.23.
+        Streaming only wins from 4 speakers up.</p>
+        <p class="why"><b>Two things this reframes —</b> a voice-note app is a 1–3 speaker app, which
+        is the regime where streaming costs the most, not the least. And the paper attributes its own
+        DIHARD advantage to an artifact: the offline baseline "underperform[s] on long recordings due
+        to a mismatch with 90-second training samples". Part of the streaming win is the offline
+        model being handicapped.</p>
+      </article>
+
+      <article class="finding f-high">
+        <h3>Nothing in the Sortformer literature establishes Android feasibility</h3>
+        <div class="fmeta"><span class="pill p-ok">High</span><span class="vote">3–0</span></div>
+        <p>Every RTF in the paper (0.005 / 0.093 / 0.180) is batch-size-1 on an RTX 6000 Ada discrete
+        GPU. There is no CPU, ARM, edge or on-device measurement anywhere in it, and NVIDIA ships the
+        model through NeMo and Riva rather than as an ONNX export.</p>
+      </article>
+
+      <article class="finding f-med">
+        <h3>No public number exists for this cascade — yours are the better evidence</h3>
+        <div class="fmeta"><span class="pill p-warn">Medium</span><span class="vote">absence-of-evidence, derived from the verified set</span></div>
+        <p>No published DER and no ARM-measured RTF or peak-RAM figure exists anywhere for
+        pyannote-segmentation-3.0 plus a permissively-licensed embedding extractor. Every DER that
+        survived verification belongs to Sortformer, which is not on this path, and those numbers must
+        not migrate across.</p>
+        <p class="why"><b>Which makes your own rig the authority here —</b> 88.4% / 74.6% / 55.7%
+        across import and over-the-air, with per-turn-length breakdown (34% under 2 s rising to 79%
+        over 15 s), is more than the literature offers for this combination. Nothing found in this
+        sweep should be allowed to overrule a measurement you took on the target device.</p>
+      </article>
+
+      <article class="finding f-high">
+        <h3>The embedding half is swappable; the segmentation half is not</h3>
+        <div class="fmeta"><span class="pill p-ok">High</span><span class="vote">3–0 · verified against C++ impl, C API header and Kotlin API</span></div>
+        <p>The cascade takes exactly two ONNX files as independent flags. The embedding extractor is
+        genuinely interchangeable — WeSpeaker, 3D-Speaker and NeMo TitaNet are auto-detected from ONNX
+        metadata, no code change. The segmentation stage is hard-wired to the pyannote format and
+        cannot be swapped for a different architecture.</p>
+        <p class="why"><b>Why this is the finding that matters most to you —</b> your own conclusion
+        is that improving attribution means the segmentation or embedding model rather than
+        <code>SpeakerAlignment</code>. This says only one of those two doors opens. Embedding swaps are
+        a config change made safe by <code>EMBEDDING_MODEL_ID</code>; segmentation improvements mean a
+        better pyannote-format model, not a different family.</p>
+      </article>
+
+      <article class="finding f-low">
+        <h3>Execution providers: CPU today, XNNPACK the one cheap experiment</h3>
+        <div class="fmeta"><span class="pill p-dead">Low</span><span class="vote">prior project investigation, not part of the verified set</span></div>
+        <p>Carried over from earlier work in this repo rather than this sweep: CPU is the working
+        answer, XNNPACK is an untried one-line change, NNAPI is callable but expected to lose, QNN is
+        a project rather than a flag, and Mali GPU is not reachable through ONNX Runtime.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="wrap stack g16">
+    <div class="stack g8">
+      <h2>What the verification killed</h2>
+      <p class="dim" style="font-size:.9rem">Four claims reached verification and were rejected
+      unanimously. They are listed because three of them are the numbers most likely to be quoted
+      back at you from a summary of the same literature.</p>
+    </div>
+    <div class="stack g12">
+      <div class="killed">
+        <p class="dead">Streaming diarization latency of ~57 ms per chunk (DIART, pyannote
+        segmentation + embedding) — establishing tens-of-milliseconds streaming for the pyannote
+        family.</p>
+        <p class="verdictline">Rejected 0–3. No streaming-latency figure for the pyannote family
+        should appear anywhere.</p>
+      </div>
+      <div class="killed">
+        <p class="dead">FS-EEND holds latency constant at 58 ms regardless of stream length, bounding
+        worst-case latency on arbitrarily long recordings.</p>
+        <p class="verdictline">Rejected 0–3.</p>
+      </div>
+      <div class="killed">
+        <p class="dead">UIS-RNN-SML online clustering degrades O(t²), reaching 9–10 s per chunk after
+        ~20 minutes — disqualifying for long notes.</p>
+        <p class="verdictline">Rejected 0–3. All three came from the same source paper.</p>
+      </div>
+      <div class="killed">
+        <p class="dead">A hard architectural ceiling of four speakers and fixed 80 ms output
+        resolution.</p>
+        <p class="verdictline">Rejected 0–3.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap stack g24">
+    <h2>What to do next</h2>
+    <ol class="next">
+      <li><div><h3>Discharge the CC BY 4.0 attribution</h3><p>The one item here that is unambiguously
+      outstanding. <code>wespeaker_en_voxceleb_CAM++</code> permits commercial use but requires
+      credit, and the app gives it nowhere. A licences screen or a <code>NOTICE</code> asset closes it
+      cheaply — and it is far easier to do now than after someone asks.</p></div></li>
+      <li><div><h3>Spend the next experiment on the embedding model</h3><p>It is the only one of the
+      two stages that opens. Your measurements put the wall at cluster purity on short turns, and a
+      different extractor is a config change already made safe by <code>EMBEDDING_MODEL_ID</code>.
+      Check its licence first, though — 3D-Speaker ERes2Net was never verified in this sweep, and the
+      embedding half is precisely where the licensing surprises have been.</p></div></li>
+      <li><div><h3>Close the streaming question for good</h3><p>Two independent reasons to stop
+      considering it. There is no streaming diarization in sherpa-onnx to adopt, and the best
+      streaming evidence anywhere shows the accuracy cost concentrating at two and three speakers —
+      exactly where your recordings sit. Live speaker labels would mean building an incremental
+      scheme and paying DER for it in your worst regime.</p></div></li>
+      <li><div><h3>Leave a note about Reverb before someone finds it</h3><p>sherpa's own docs list
+      reverb-diarization beside pyannote with no licence warning, and ship a <code>revai_v1</code>
+      variant in their APK matrix. It scores well, which is what makes it dangerous. Anyone improving
+      segmentation later will meet it as an obvious upgrade and will not be told it is
+      non-commercial.</p></div></li>
+    </ol>
+  </section>
+
+  <section class="wrap">
+    <details>
+      <summary>Primary sources</summary>
+      <ul class="src">
+        <li><a href="https://github.com/k2-fsa/sherpa-onnx">k2-fsa/sherpa-onnx</a> — source at <code>master</code> and tag <code>v1.13.5</code>, C API header, GitHub trees API</li>
+        <li><a href="https://github.com/k2-fsa/sherpa-onnx/blob/master/sherpa-onnx/kotlin-api/OfflineSpeakerDiarization.kt">OfflineSpeakerDiarization.kt</a> — the Kotlin surface, verified against the AAR by <code>javap</code></li>
+        <li><a href="https://k2-fsa.github.io/sherpa/onnx/speaker-diarization/index.html">sherpa-onnx speaker diarization docs</a> — model list, worked threshold example, prebuilt APK matrix</li>
+        <li><a href="https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0">csukuangfj/sherpa-onnx-pyannote-segmentation-3-0</a> — the ungated MIT re-export</li>
+        <li><a href="https://huggingface.co/Revai/reverb-diarization-v1">Revai/reverb-diarization-v1</a> — gated; terms recovered from the sherpa mirror</li>
+        <li><a href="https://arxiv.org/abs/2410.03930">arXiv:2410.03930</a> — Rev / Reverb</li>
+        <li><a href="https://github.com/wenet-e2e/wespeaker/blob/master/docs/pretrained.md">WeSpeaker pretrained models</a> — the model-licence statement, checked after the run flagged it</li>
+        <li><a href="https://www.robots.ox.ac.uk/~vgg/data/voxceleb/">VoxCeleb, Oxford VGG</a> — dataset terms</li>
+        <li>NVIDIA Streaming Sortformer, Interspeech 2025 — Table 1, extracted from the PDF</li>
+        <li><a href="https://arxiv.org/abs/2509.26177">arXiv:2509.26177</a> — third-party Sortformer benchmarking</li>
+        <li><a href="https://arxiv.org/abs/2407.04293">arXiv:2407.04293</a> — source of all four refuted latency claims</li>
+      </ul>
+    </details>
+  </section>
+
+</main>
+
+<footer><div class="wrap">5 search angles · 20 sources fetched · 100 claims extracted · 25 verified ·
+21 confirmed · 4 killed · 12 after synthesis. Findings are as strong as their votes say and no
+stronger; the two medium-confidence and one low-confidence entries are labelled as such.</div></footer>
+
+</body>
+</html>

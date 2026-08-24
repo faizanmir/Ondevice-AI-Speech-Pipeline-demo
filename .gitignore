@@ -27,3 +27,6 @@ graphify-out/
 
 # Per-developer Claude Code permission state.
 /.claude/settings.local.json
+
+__pycache__/
+*.pyc

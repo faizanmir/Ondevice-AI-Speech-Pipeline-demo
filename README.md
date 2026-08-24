@@ -20,9 +20,10 @@ anything.
   uses a prompt protocol. Either way the calls are rendered as function chips in the
   transcript.
 - **Voice notes with on-device speech-to-text.** Record, correct the transcript, and have your
-  chosen model summarise it. Two speech models to pick from in Settings: SenseVoice (fast;
-  English, Chinese, Japanese, Korean, Cantonese) or Whisper Small (slower; ~100 languages,
-  auto-detected).
+  chosen model summarise it. Four speech models to pick from in Settings: SenseVoice (fast;
+  English, Chinese, Japanese, Korean, Cantonese), Whisper Small (slower; ~100 languages,
+  auto-detected), Parakeet v3 (most accurate; English, German and 23 more European languages;
+  670 MB) or a streaming Zipformer that transcribes live as you speak (English only).
 - **System assistant integration.** App capabilities are exported via AndroidX AppFunctions, so
   the system assistant can drive the app too.
 - **Phone and tablet layouts.** Adaptive grids and readable-width columns from the same code —
@@ -91,6 +92,7 @@ Speech models likewise download on demand, the first time you record.
 - **Chat model** — the model new chats (and note summaries) use.
 - **Inference engine / accelerator** — preferences, with graceful fallback when unavailable.
 - **App functions** — lets the model drive the app; off if you just want to chat.
-- **Speech recognition** — SenseVoice for speed, Whisper Small for languages beyond its five.
+- **Speech recognition** — SenseVoice for speed, Parakeet v3 for accuracy in English and the
+  European languages, Whisper Small for everything further afield, streaming for a live transcript.
 - **Tavily API key** — enables the `web_search` tool; without it the app is fully offline once
   models are downloaded.
