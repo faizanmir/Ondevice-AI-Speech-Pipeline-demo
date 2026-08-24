@@ -32,9 +32,6 @@ object ParamBudget {
     /** Tokenizer, execution graph, JNI buffers, framework. Roughly independent of model size. */
     const val RUNTIME_OVERHEAD_BYTES: Long = 250 * MB
 
-    /** What an AICore-backed model costs *this* process: the ML Kit client and binder buffers. */
-    const val AICORE_CLIENT_OVERHEAD_BYTES: Long = 64 * MB
-
     /** Transient prefill/decode scratch, as a multiple of resident weights. */
     const val ACTIVATION_FACTOR: Double = 1.15
 
@@ -70,13 +67,6 @@ object ParamBudget {
             Accelerator.GPU -> 0.60
             else -> 1.00
         }
-        // MNN heap-loads its quantized weights (no mmap by default) and runs CPU-only in this
-        // build, so like llama.cpp-on-CPU it bills at full file size.
-        EngineId.MNN -> 1.00
-
-        // Inference runs in the AICore system service's process, not ours. None of the weights --
-        // or the KV cache -- are ever billed to the app. See estimatePeakRamBytes.
-        EngineId.AICORE -> 0.0
     }
 
     /**
@@ -99,11 +89,6 @@ object ParamBudget {
         engine: EngineId,
         accelerator: Accelerator,
     ): Long {
-        // Out-of-process inference: AICore hosts the model, the KV cache and the runtime in its own
-        // process, and the OS accounts them there. All the app pays for is the client SDK and its
-        // binder buffers -- the linear model above simply does not describe this engine.
-        if (engine == EngineId.AICORE) return AICORE_CLIENT_OVERHEAD_BYTES
-
         val residency = weightResidency(engine, accelerator)
         val residentWeights = weightsBytes * residency
         val kvCache = contextTokens * KV_BYTES_PER_TOKEN_PER_BILLION * paramsBillions
@@ -156,4 +141,30 @@ object ParamBudget {
         engine = engine,
         accelerator = accelerator,
     )
+
+    /**
+     * The mirror of [maxRunnableParams], solved for context instead of params: the largest KV-cache
+     * length, in tokens, a model of this exact size can be given before its peak RAM would exceed
+     * [budgetBytes]. Solves the same `peak = residentWeights*activation + ctx*kvPerToken + overhead`
+     * for `ctx`.
+     *
+     * This is what lets the app size a model's context window to the device -- honouring the length
+     * a GGUF advertises when the KV cache fits, trimming it when it does not -- instead of clamping
+     * every model to one flat constant.
+     */
+    fun maxRunnableContext(
+        budgetBytes: Long,
+        weightsBytes: Long,
+        paramsBillions: Double,
+        engine: EngineId,
+        accelerator: Accelerator,
+    ): Int {
+        val residentWeights = weightsBytes * weightResidency(engine, accelerator)
+        // Everything except the KV cache is paid out of the budget first; the remainder buys context.
+        val kvBudget = budgetBytes - RUNTIME_OVERHEAD_BYTES -
+            (residentWeights * ACTIVATION_FACTOR).roundToLong()
+        val bytesPerToken = KV_BYTES_PER_TOKEN_PER_BILLION * paramsBillions
+        if (kvBudget <= 0 || bytesPerToken <= 0) return 0
+        return (kvBudget / bytesPerToken).toInt()
+    }
 }

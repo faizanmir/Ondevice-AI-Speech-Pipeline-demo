@@ -27,38 +27,6 @@ object ModelCatalog {
 
     val builtIn: List<ModelSpec> = listOf(
 
-        // ---- AICore -- the model Android itself carries ---------------------------------------
-
-        /**
-         * The exception to everything this file says above: not downloadable, not on HuggingFace,
-         * not even a file. Gemini Nano is delivered and run by the AICore system service, so
-         * `downloadUrl` is empty, `sizeBytes` is zero (nothing lands on *our* disk) and the
-         * catalogue treats it as permanently downloaded. Whether the device actually supports it
-         * is only knowable by asking AICore, which the engine does at load time.
-         *
-         * `paramsBillions` is the publicly documented Nano-2 figure; what actually runs varies by
-         * device generation (Pixel 10 ships a newer build) and Google does not publish those sizes.
-         */
-        ModelSpec(
-            id = "gemini-nano-aicore",
-            name = "Gemini Nano",
-            vendor = "Google",
-            paramsBillions = 3.25,
-            quantization = Quantization.MIXED,
-            format = ModelFormat.AICORE,
-            downloadUrl = "",
-            fileName = "gemini-nano.aicore",
-            sizeBytes = 0L,
-            contextTokens = 4096,
-            minDeviceMemoryGb = 0,
-            accelerators = setOf(Accelerator.NPU),
-            license = "Proprietary (Google)",
-            description = "The Gemini built into Android itself. Runs inside the AICore system " +
-                "service on the NPU -- nothing to download, and nearly no memory taken from the " +
-                "app. Needs a recent flagship: Pixel 9 or newer, Galaxy S25 or newer.",
-            supportsToolCalling = false,
-        ),
-
         // ---- LiteRT-LM (.litertlm) -- GPU accelerated, memory-mapped weights -----------------
 
         ModelSpec(
@@ -75,6 +43,7 @@ object ModelCatalog {
             minDeviceMemoryGb = 8,
             accelerators = setOf(Accelerator.GPU, Accelerator.CPU),
             multimodal = true,
+            audioInput = true,
             license = "Apache-2.0",
             description = "Google's newest on-device model. Understands images and audio as well " +
                 "as text. Memory-maps its embeddings, so it runs in far less RAM than its file " +
@@ -95,6 +64,7 @@ object ModelCatalog {
             minDeviceMemoryGb = 12,
             accelerators = setOf(Accelerator.GPU, Accelerator.CPU),
             multimodal = true,
+            audioInput = true,
             license = "Apache-2.0",
             description = "The larger Gemma 4. Noticeably stronger reasoning than E2B, and still " +
                 "multimodal, but it wants a flagship phone.",
@@ -298,71 +268,6 @@ object ModelCatalog {
                 "Clearly sharper than the 1.5B models.",
         ),
 
-        // ---- MNN -- Alibaba's engine, CPU-tuned; one model is a *directory* of files ------------
-        //
-        // These are Alibaba's own exports (the `taobao-mnn` org on HuggingFace), all ungated.
-        // Unlike the formats above, an MNN model is several files sharing a directory; `fileName`
-        // is the config.json entry point the engine loads, and `files` lists everything that must
-        // be downloaded. Sizes are the Hub's authoritative per-file sizes.
-
-        ModelSpec(
-            id = "qwen3-0.6b-mnn",
-            name = "Qwen 3 0.6B",
-            vendor = "Alibaba",
-            paramsBillions = 0.6,
-            quantization = Quantization.Q4,
-            format = ModelFormat.MNN,
-            downloadUrl = "$HF/taobao-mnn/Qwen3-0.6B-MNN/resolve/main/config.json?download=true",
-            fileName = "qwen3-0.6b-mnn/config.json",
-            sizeBytes = 454_470_710L,
-            contextTokens = 4096,
-            minDeviceMemoryGb = 4,
-            accelerators = setOf(Accelerator.CPU),
-            license = "Apache-2.0",
-            description = "The newest small Qwen, on Alibaba's own runtime. Can think step by " +
-                "step before answering. Small enough for almost any phone, and quick on the " +
-                "CPU thanks to MNN's phone-first kernels.",
-            files = listOf(
-                mnnFile("Qwen3-0.6B-MNN", "qwen3-0.6b-mnn", "config.json", 403L),
-                mnnFile("Qwen3-0.6B-MNN", "qwen3-0.6b-mnn", "llm.mnn", 461_520L),
-                mnnFile("Qwen3-0.6B-MNN", "qwen3-0.6b-mnn", "llm.mnn.weight", 450_810_338L),
-                mnnFile("Qwen3-0.6B-MNN", "qwen3-0.6b-mnn", "llm_config.json", 4_880L),
-                mnnFile("Qwen3-0.6B-MNN", "qwen3-0.6b-mnn", "tokenizer.txt", 3_193_569L),
-            ),
-        ),
-
-        ModelSpec(
-            id = "qwen2.5-1.5b-instruct-mnn",
-            name = "Qwen 2.5 1.5B (MNN)",
-            vendor = "Alibaba",
-            paramsBillions = 1.5,
-            quantization = Quantization.Q4,
-            format = ModelFormat.MNN,
-            downloadUrl = "$HF/taobao-mnn/Qwen2.5-1.5B-Instruct-MNN/resolve/main/config.json?download=true",
-            fileName = "qwen2.5-1.5b-instruct-mnn/config.json",
-            sizeBytes = 879_481_306L,
-            contextTokens = 4096,
-            minDeviceMemoryGb = 6,
-            accelerators = setOf(Accelerator.CPU),
-            license = "Apache-2.0",
-            description = "The same strong all-rounder as the LiteRT-LM build above, exported by " +
-                "Alibaba for its own MNN runtime -- at 4-bit it is roughly half the download.",
-            files = listOf(
-                mnnFile("Qwen2.5-1.5B-Instruct-MNN", "qwen2.5-1.5b-instruct-mnn", "config.json", 159L),
-                mnnFile("Qwen2.5-1.5B-Instruct-MNN", "qwen2.5-1.5b-instruct-mnn", "llm.mnn", 1_145_128L),
-                mnnFile("Qwen2.5-1.5B-Instruct-MNN", "qwen2.5-1.5b-instruct-mnn", "llm.mnn.json", 6_650_652L),
-                mnnFile("Qwen2.5-1.5B-Instruct-MNN", "qwen2.5-1.5b-instruct-mnn", "llm.mnn.weight", 868_491_506L),
-                mnnFile("Qwen2.5-1.5B-Instruct-MNN", "qwen2.5-1.5b-instruct-mnn", "llm_config.json", 384L),
-                mnnFile("Qwen2.5-1.5B-Instruct-MNN", "qwen2.5-1.5b-instruct-mnn", "tokenizer.txt", 3_193_477L),
-            ),
-        ),
-    )
-
-    /** One file of an MNN model: `taobao-mnn/[repo]` on the Hub, `models/[dir]/[name]` on disk. */
-    private fun mnnFile(repo: String, dir: String, name: String, sizeBytes: Long) = ModelFile(
-        url = "$HF/taobao-mnn/$repo/resolve/main/$name?download=true",
-        relativePath = "$dir/$name",
-        sizeBytes = sizeBytes,
     )
 
     fun byId(id: String): ModelSpec? = builtIn.firstOrNull { it.id == id }

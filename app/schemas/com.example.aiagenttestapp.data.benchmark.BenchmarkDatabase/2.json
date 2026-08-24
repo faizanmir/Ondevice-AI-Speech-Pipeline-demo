@@ -1,0 +1,212 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 2,
+    "identityHash": "69706255963771635aa26162accb2948",
+    "entities": [
+      {
+        "tableName": "clips",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `audioPath` TEXT NOT NULL, `referenceText` TEXT NOT NULL, `language` TEXT NOT NULL, `durationMillis` INTEGER NOT NULL, `createdAtMillis` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "audioPath",
+            "columnName": "audioPath",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "referenceText",
+            "columnName": "referenceText",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "language",
+            "columnName": "language",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationMillis",
+            "columnName": "durationMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMillis",
+            "columnName": "createdAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "runs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `clipId` INTEGER NOT NULL, `startedAtMillis` INTEGER NOT NULL, `status` TEXT NOT NULL, `settingsSummary` TEXT NOT NULL, `backend` TEXT NOT NULL, `sttModelId` TEXT, `progress` REAL NOT NULL, `transcript` TEXT NOT NULL, `rawWerPercent` REAL, `normalisedWerPercent` REAL, `substitutions` INTEGER, `deletions` INTEGER, `insertions` INTEGER, `referenceWords` INTEGER, `coveragePercent` REAL, `cerPercent` REAL, `topPairs` TEXT NOT NULL, `wallMillis` INTEGER, `error` TEXT, FOREIGN KEY(`clipId`) REFERENCES `clips`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "clipId",
+            "columnName": "clipId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAtMillis",
+            "columnName": "startedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "settingsSummary",
+            "columnName": "settingsSummary",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "backend",
+            "columnName": "backend",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sttModelId",
+            "columnName": "sttModelId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "progress",
+            "columnName": "progress",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "transcript",
+            "columnName": "transcript",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rawWerPercent",
+            "columnName": "rawWerPercent",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "normalisedWerPercent",
+            "columnName": "normalisedWerPercent",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "substitutions",
+            "columnName": "substitutions",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "deletions",
+            "columnName": "deletions",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "insertions",
+            "columnName": "insertions",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "referenceWords",
+            "columnName": "referenceWords",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "coveragePercent",
+            "columnName": "coveragePercent",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "cerPercent",
+            "columnName": "cerPercent",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "topPairs",
+            "columnName": "topPairs",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "wallMillis",
+            "columnName": "wallMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "error",
+            "columnName": "error",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_runs_clipId",
+            "unique": false,
+            "columnNames": [
+              "clipId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_runs_clipId` ON `${TABLE_NAME}` (`clipId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "clips",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "clipId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '69706255963771635aa26162accb2948')"
+    ]
+  }
+}

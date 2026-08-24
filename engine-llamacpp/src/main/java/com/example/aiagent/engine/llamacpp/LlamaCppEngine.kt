@@ -11,6 +11,7 @@ import com.example.aiagent.engine.core.GenerationStats
 import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.LoadRequest
 import com.example.aiagent.engine.core.ModelFormat
+import com.example.aiagent.engine.core.OutputGuard
 import com.example.aiagent.engine.core.SamplingParams
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -66,6 +67,45 @@ class LlamaCppEngine : InferenceEngine {
     private val transcript = mutableListOf<ChatTurn>()
     private var systemPrompt: String? = null
 
+    /**
+     * What the resident native session was created from, or null when nothing is loaded.
+     *
+     * Only what `nativeCreateSession` bakes in. The system prompt, the restored transcript and the
+     * output bounds are plain fields on this class, so changing them does not need a new session --
+     * and a new session means reading the whole GGUF again.
+     */
+    private var residentKey: SessionKey? = null
+
+    /** The part of a [LoadRequest] that decides whether the loaded model can be kept. */
+    private data class SessionKey(
+        val modelPath: String,
+        val contextTokens: Int,
+        val threadCount: Int,
+        val accelerator: Accelerator,
+        val sampling: SamplingParams,
+    ) {
+        constructor(request: LoadRequest) : this(
+            modelPath = request.modelPath,
+            contextTokens = request.contextTokens,
+            threadCount = request.threadCount,
+            // What was ASKED FOR, not what the ladder settled on. Both readings serve a GPU request
+            // that fell back to the CPU -- the next GPU request builds the same key and reuses the
+            // resident CPU session -- but only this one still notices the user changing the setting.
+            // Keying on the accelerator in use made the field self-comparing: it was read off the
+            // resident session on both sides, so it always matched, and switching GPU to CPU
+            // silently kept the GPU session.
+            accelerator = request.accelerator,
+            // Sampling is baked into the session here, unlike LiteRT-LM where it is per
+            // conversation -- so a changed temperature really does need a new one.
+            sampling = request.sampling.copy(maxOutputTokens = 0, stopSequences = emptyList()),
+        )
+    }
+
+    // Caller-facing generation bounds, applied by an OutputGuard in generate(). Captured at load
+    // because generate() gets only the prompt, not the request.
+    private var maxOutputTokens: Int = 0
+    private var stopSequences: List<String> = emptyList()
+
     @Volatile
     override var loadedModelPath: String? = null
         private set
@@ -85,12 +125,42 @@ class LlamaCppEngine : InferenceEngine {
         }
     }
 
+    /**
+     * Keeps the loaded model when only conversation-level things changed.
+     *
+     * Opening a second chat on the resident model changes nothing the native session cares about;
+     * resuming one changes the system prompt and the transcript. Neither is a reason to read a
+     * multi-gigabyte GGUF again, which is what a full load costs.
+     *
+     * A [SamplingParams.SEED_RANDOM] session is not re-seeded here -- the existing RNG stream simply
+     * carries on, which serves the same purpose the redraw does: two chats on one model do not
+     * replay the same tokens.
+     *
+     * Caller must hold [lifecycleLock].
+     */
+    private fun reuseResidentSession(request: LoadRequest): Boolean {
+        if (handle == 0L) return false
+        if (activeAccelerator == null) return false
+        if (residentKey != SessionKey(request)) return false
+
+        systemPrompt = request.systemPrompt
+        maxOutputTokens = request.sampling.maxOutputTokens
+        stopSequences = request.sampling.stopSequences
+        transcript.clear()
+        request.initialHistory.forEach { transcript += ChatTurn(it.role, it.content) }
+        LlamaNative.nativeResetContext(handle)
+
+        Log.i(TAG, "reused the resident session; only the transcript changed")
+        return true
+    }
+
     override suspend fun load(request: LoadRequest) = withContext(Dispatchers.IO) {
         (availability() as? EngineAvailability.Unavailable)?.let {
             throw EngineException.NotAvailable(it.reason)
         }
 
         lifecycleLock.withLock {
+            if (reuseResidentSession(request)) return@withLock
             unloadLocked()
 
             // Only try the GPU if one was actually enumerated. NPU falls to GPU, GPU falls to CPU:
@@ -108,7 +178,8 @@ class LlamaCppEngine : InferenceEngine {
                 val newHandle = LlamaNative.nativeCreateSession(
                     modelPath = request.modelPath,
                     nCtx = request.contextTokens,
-                    nThreads = recommendedThreadCount(),
+                    nThreads = request.threadCount.takeIf { it > 0 }?.coerceIn(1, MAX_THREADS)
+                        ?: recommendedThreadCount(),
                     // -1 offloads every layer. Partial offload is possible but a poor deal on a
                     // phone: the layers left on the CPU become the bottleneck for every token, so a
                     // half-offloaded model is often slower than an all-CPU one.
@@ -126,6 +197,8 @@ class LlamaCppEngine : InferenceEngine {
                 if (newHandle != 0L) {
                     handle = newHandle
                     systemPrompt = request.systemPrompt
+                    maxOutputTokens = request.sampling.maxOutputTokens
+                    stopSequences = request.sampling.stopSequences
                     // Seed the transcript with any restored history. llama.cpp re-renders the whole
                     // transcript through the chat template each turn, so prior turns become context
                     // for free -- the first generate() prefills them, and the KV cache carries them.
@@ -133,6 +206,7 @@ class LlamaCppEngine : InferenceEngine {
                     request.initialHistory.forEach { transcript += ChatTurn(it.role, it.content) }
                     loadedModelPath = request.modelPath
                     activeAccelerator = accelerator
+                    residentKey = SessionKey(request)
                     if (accelerator == Accelerator.CPU && wantsGpu) {
                         Log.w(TAG, "GPU offload failed for this model, fell back to CPU")
                     }
@@ -173,6 +247,7 @@ class LlamaCppEngine : InferenceEngine {
         var firstTokenMs = 0L
         var generated = 0
         val reply = StringBuilder()
+        val guard = OutputGuard(maxOutputTokens, stopSequences)
 
         while (true) {
             // Honour coroutine cancellation, not just an explicit cancel() call: if the collector
@@ -186,8 +261,21 @@ class LlamaCppEngine : InferenceEngine {
 
             if (firstTokenMs == 0L) firstTokenMs = System.currentTimeMillis() - startMs
             generated++
-            reply.append(piece)
-            emit(GenerationEvent.Token(piece))
+
+            val out = guard.push(piece)
+            if (out.isNotEmpty()) {
+                reply.append(out)
+                emit(GenerationEvent.Token(out))
+            }
+            // Hitting the token cap or a stop string ends the turn; not calling nextToken again is
+            // all it takes to stop the native decode -- this is a pull loop.
+            if (guard.isDone) break
+        }
+
+        // Release any tail the stop-string guard was holding back, if we reached a natural stop.
+        guard.drain().takeIf { it.isNotEmpty() }?.let {
+            reply.append(it)
+            emit(GenerationEvent.Token(it))
         }
 
         transcript += ChatTurn(role = ROLE_ASSISTANT, content = reply.toString())
@@ -212,11 +300,55 @@ class LlamaCppEngine : InferenceEngine {
         if (session != 0L) LlamaNative.nativeCancel(session)
     }
 
+    /**
+     * Safe here: nativeCancel only sets a flag, nativeNextToken then returns null, and the decode
+     * loop ends the turn the same way an end-of-sequence token would. Nothing throws.
+     */
+    override val supportsMidTurnCancel: Boolean get() = true
+
+    override val supportsGrammar: Boolean get() = true
+
+    /**
+     * Rebuilds the sampler chain with (or without) the grammar at its head.
+     *
+     * Under [lifecycleLock] like every other native call that mutates the session: the chain is
+     * swapped out from under whatever might be decoding, and a decode loop holding a freed sampler
+     * is a crash rather than a wrong answer.
+     */
+    override suspend fun setGrammar(grammar: String?, triggerPattern: String?): Boolean =
+        withContext(Dispatchers.IO) {
+            lifecycleLock.withLock {
+                val session = handle
+                if (session == 0L) return@withLock false
+                LlamaNative.nativeSetGrammar(session, grammar, triggerPattern).also { applied ->
+                    if (grammar != null && !applied) {
+                        Log.w(TAG, "grammar rejected; this turn decodes unconstrained")
+                    }
+                }
+            }
+        }
+
     override suspend fun resetConversation() = withContext(Dispatchers.IO) {
         lifecycleLock.withLock {
             val session = handle
             if (session == 0L) throw EngineException.NotLoaded()
             LlamaNative.nativeResetContext(session)
+            transcript.clear()
+        }
+    }
+
+    /**
+     * The transcript is dropped exactly as in [resetConversation], so the next prompt is rendered on
+     * its own with no prior turns -- but the KV cache is left standing. nativeIngestPrompt already
+     * diffs each prompt against the tokens it last decoded and evicts everything past the shared
+     * prefix, so isolation comes from that diff rather than from a wholesale clear, and a repeated
+     * preamble is not decoded twice.
+     */
+    override suspend fun resetKeepingPrefixCache() = withContext(Dispatchers.IO) {
+        lifecycleLock.withLock {
+            val session = handle
+            if (session == 0L) throw EngineException.NotLoaded()
+            LlamaNative.nativeResetTurnKeepCache(session)
             transcript.clear()
         }
     }
@@ -235,6 +367,7 @@ class LlamaCppEngine : InferenceEngine {
         if (session != 0L) LlamaNative.nativeFreeSession(session)
         handle = 0L
         transcript.clear()
+        residentKey = null
         loadedModelPath = null
         activeAccelerator = null
     }
@@ -273,6 +406,9 @@ class LlamaCppEngine : InferenceEngine {
 
     private companion object {
         const val TAG = "LlamaCppEngine"
+
+        /** Ceiling for a user-set thread override; a phone gains nothing past this. */
+        const val MAX_THREADS = 16
 
         /** llama.cpp treats a negative n_gpu_layers as "offload all of them". */
         const val ALL_LAYERS = -1

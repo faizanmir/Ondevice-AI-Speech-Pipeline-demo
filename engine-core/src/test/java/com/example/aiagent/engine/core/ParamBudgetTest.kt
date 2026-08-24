@@ -193,4 +193,62 @@ class ParamBudgetTest {
         // "-0.3B parameters".
         assertEquals(0.0, maxParams, 0.0001)
     }
+
+    @Test
+    fun `the context inverse round-trips to the budget`() {
+        // maxRunnableContext solves peak == budget for ctx, so putting that ctx back through
+        // estimatePeakRamBytes must land on the budget without going over it -- the same
+        // consistency the params direction guarantees, since this is what sizes the real KV cache.
+        val budget = eightGbPhone.modelRamBudgetBytes
+        val params = 1.5
+        val weights = ParamBudget.estimateWeightsBytes(params, Quantization.Q4)
+
+        val maxCtx = ParamBudget.maxRunnableContext(
+            budgetBytes = budget,
+            weightsBytes = weights,
+            paramsBillions = params,
+            engine = EngineId.LLAMA_CPP,
+            accelerator = Accelerator.CPU,
+        )
+
+        val peakAtMax = ParamBudget.estimatePeakRamBytes(
+            weightsBytes = weights,
+            paramsBillions = params,
+            contextTokens = maxCtx,
+            engine = EngineId.LLAMA_CPP,
+            accelerator = Accelerator.CPU,
+        )
+
+        assertTrue("peak $peakAtMax must not exceed budget $budget", peakAtMax <= budget)
+        assertEquals(budget.toDouble(), peakAtMax.toDouble(), gb(0.01).toDouble())
+    }
+
+    @Test
+    fun `a roomier device affords a longer context for the same model`() {
+        val params = 1.5
+        val weights = ParamBudget.estimateWeightsBytes(params, Quantization.Q4)
+
+        fun ctxOn(dev: DeviceMemoryProfile) = ParamBudget.maxRunnableContext(
+            budgetBytes = dev.modelRamBudgetBytes,
+            weightsBytes = weights,
+            paramsBillions = params,
+            engine = EngineId.LLAMA_CPP,
+            accelerator = Accelerator.CPU,
+        )
+
+        // More RAM left over after the weights is more room for KV, which is the whole point.
+        assertTrue(ctxOn(device(totalGb = 11.1, advertisedGb = 12)) > ctxOn(eightGbPhone))
+    }
+
+    @Test
+    fun `weights that already blow the budget yield no context rather than a negative one`() {
+        val ctx = ParamBudget.maxRunnableContext(
+            budgetBytes = gb(0.5),
+            weightsBytes = gb(4.0), // the weights alone exceed the budget
+            paramsBillions = 7.0,
+            engine = EngineId.LLAMA_CPP,
+            accelerator = Accelerator.CPU,
+        )
+        assertEquals(0, ctx)
+    }
 }

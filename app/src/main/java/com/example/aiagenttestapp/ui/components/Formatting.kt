@@ -29,6 +29,23 @@ fun formatEta(secondsRemaining: Long?): String {
     }
 }
 
+/**
+ * "1h 4m", "3m 20s", "45s", "8.4s" -- how long something took. Sub-10s keeps one decimal, because
+ * at that scale the difference between 2s and 8s is the whole story; above it, tenths are noise.
+ * Null or non-positive means we never recorded it, so say nothing rather than claim "0s".
+ */
+fun formatDuration(millis: Long?): String {
+    if (millis == null || millis <= 0) return ""
+    val seconds = millis / 1000
+    val minutes = seconds / 60
+    return when {
+        minutes >= 60 -> "${minutes / 60}h ${minutes % 60}m"
+        minutes > 0 -> "${minutes}m ${seconds % 60}s"
+        seconds >= 10 -> "${seconds}s"
+        else -> String.format("%.1fs", millis / 1000.0)
+    }
+}
+
 /** "3.9B", "820M" -- the headline parameter budget. */
 fun formatParams(billions: Double): String = when {
     billions <= 0 -> "—"

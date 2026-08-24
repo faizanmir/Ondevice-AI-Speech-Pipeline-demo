@@ -6,8 +6,6 @@ import kotlinx.coroutines.flow.Flow
 enum class EngineId(val slug: String) {
     LITE_RT_LM("litertlm"),
     LLAMA_CPP("llamacpp"),
-    MNN("mnn"),
-    AICORE("aicore"),
 }
 
 /** Static description of what an engine can do. Safe to read without the engine being loaded. */
@@ -18,6 +16,23 @@ data class EngineDescriptor(
     val supportedFormats: Set<ModelFormat>,
     val supportedAccelerators: Set<Accelerator>,
     val supportsVision: Boolean,
+    /**
+     * The runtime has a real tool-calling API: tools are declared to it as schemas and it emits and
+     * executes calls itself.
+     *
+     * False means tool calling has to be arranged in the prompt instead -- see llama.cpp's
+     * `ToolCallingProtocol`. The chat layer branches on this to decide which of the two to set up;
+     * it must not do both, or the model is told about its tools twice in two different languages.
+     */
+    val supportsNativeTools: Boolean = false,
+    /**
+     * The runtime can be handed audio as well as text, through [AudioInputEngine].
+     *
+     * Distinct from [supportsVision]: they are separate encoders in the model and separate call
+     * paths in the runtime, and a build can have one without the other. Whether a *model* can hear
+     * is a separate question again -- see `ModelSpec.audioInput`. Both have to be true.
+     */
+    val supportsAudioInput: Boolean = false,
     val blurb: String,
 ) {
     fun canLoad(format: ModelFormat): Boolean = format in supportedFormats
@@ -44,10 +59,41 @@ data class SamplingParams(
      * makes generation reproducible, which is what tests and evaluations want.
      */
     val seed: Int = SEED_RANDOM,
+    /**
+     * Hard cap on the tokens generated in one reply. [UNLIMITED] (the default) lets the model run to
+     * its own end-of-sequence or until the context fills. Enforced uniformly across engines by
+     * [OutputGuard], because no two native runtimes expose the same control.
+     */
+    val maxOutputTokens: Int = UNLIMITED,
+    /**
+     * Strings that end a reply the instant the model emits one -- the text up to the match is kept,
+     * the match and everything after are dropped. Also enforced by [OutputGuard], matched across
+     * streamed chunk boundaries. Empty = no stop strings.
+     */
+    val stopSequences: List<String> = emptyList(),
 ) {
+    /**
+     * Argmax decoding, which is the only setting that makes output genuinely repeatable.
+     *
+     * A fixed [seed] alone is not enough: it makes the *draws* repeatable, but the sampler still
+     * draws, so the run only matches if every logit before it matched bit-for-bit too. Any numeric
+     * drift -- a GPU kernel reducing in a different order, a fallback to a different accelerator --
+     * flips one token, and from there the two runs diverge completely.
+     *
+     * [topK] = 1 removes the draw itself: one candidate means the highest-probability token wins by
+     * construction, with no RNG consulted at all. [temperature] and [topP] then cannot change the
+     * outcome -- scaling logits does not reorder them, and a nucleus over a one-element set is that
+     * element -- so they are pinned to neutral values rather than 0, which some native samplers
+     * divide by. The seed is fixed as well, so engines that draw for other reasons stay put.
+     */
+    fun greedy(seed: Int) = copy(temperature = 1f, topK = 1, topP = 1f, seed = seed)
+
     companion object {
         /** Sentinel: the engine picks a random seed instead of a reproducible one. */
         const val SEED_RANDOM = 0
+
+        /** Sentinel for [maxOutputTokens]: no cap. */
+        const val UNLIMITED = 0
     }
 }
 
@@ -67,7 +113,41 @@ data class LoadRequest(
      * Empty for a fresh chat.
      */
     val initialHistory: List<HistoryTurn> = emptyList(),
-)
+    /**
+     * CPU decode threads for the engines that run on the CPU (llama.cpp). [AUTO] (the default)
+     * lets the engine choose from the core count. Ignored by GPU/NPU engines.
+     */
+    val threadCount: Int = AUTO,
+    /**
+     * Tools to declare to a runtime with native tool support ([EngineDescriptor.supportsNativeTools]);
+     * ignored by the others, which are told about tools through the system prompt instead.
+     *
+     * Part of the request rather than something set afterwards because these are fixed for the life
+     * of a loaded model -- the runtime bakes them into the conversation it creates. That also keeps
+     * the equality check honest: a model loaded with tools really is not interchangeable with the
+     * same model loaded without them, and the warm-handoff comparison should say so.
+     */
+    val tools: List<ToolDefinition> = emptyList(),
+    /**
+     * Load the model's audio encoder as well as its text decoder.
+     *
+     * Off by default because it is not free: it is a second executor with its own weights, and a
+     * chat that will only ever send text should not pay for it. But it has to be decided *here*,
+     * at load time -- LiteRT-LM builds its audio executor from the engine config, and a model
+     * loaded without one rejects audio at generation time with "Audio executor should not be null"
+     * rather than loading it on demand.
+     *
+     * Part of the request, so it takes part in request equality: a model resident for chat is
+     * genuinely not interchangeable with the same model resident for transcription, and the warm
+     * handoff has to reload rather than hand back an engine that cannot hear.
+     */
+    val audioInput: Boolean = false,
+) {
+    companion object {
+        /** Sentinel for [threadCount]: let the engine decide. */
+        const val AUTO = 0
+    }
+}
 
 sealed interface GenerationEvent {
     /** One incremental chunk of the response. Not necessarily a whole token. */
@@ -88,6 +168,11 @@ data class GenerationStats(
      * wall-clock timing wrongly attributes to the model.
      */
     val reportedTokensPerSecond: Double? = null,
+    /**
+     * Prefill speed as measured by the runtime itself, on the same terms as
+     * [reportedTokensPerSecond]: LiteRT-LM reports it, llama.cpp does not.
+     */
+    val reportedPrefillTokensPerSecond: Double? = null,
 ) {
     /** Decode speed, excluding prefill -- the number users actually compare between models. */
     val tokensPerSecond: Double
@@ -95,6 +180,23 @@ data class GenerationStats(
             val decodeMs = totalMs - timeToFirstTokenMs
             if (decodeMs <= 0 || generatedTokens <= 0) 0.0
             else generatedTokens * 1000.0 / decodeMs
+        }
+
+    /**
+     * Prefill speed: how fast the prompt was read before the first token came back. The other half
+     * of [tokensPerSecond], and the half that decides what a long fixed preamble costs -- decode
+     * scales with what the model says, prefill with what it is handed.
+     *
+     * The wall-clock fallback divides the WHOLE prompt by time to first token, which is the true
+     * rate on an engine that decodes every prompt from scratch and a flattering one on an engine
+     * that reuses a shared prefix (llama.cpp reports the prompt's full length, not the suffix it
+     * actually ingested). That is deliberate: read as an effective rate, a jump between the first
+     * turn and the rest is exactly the signal that prefix reuse is live.
+     */
+    val prefillTokensPerSecond: Double
+        get() = reportedPrefillTokensPerSecond ?: run {
+            if (timeToFirstTokenMs <= 0 || promptTokens <= 0) 0.0
+            else promptTokens * 1000.0 / timeToFirstTokenMs
         }
 }
 
@@ -151,12 +253,135 @@ interface InferenceEngine {
     /** Interrupts an in-flight [generate]. No-op when idle. */
     fun cancel()
 
+    /**
+     * Whether [cancel] may be called *from inside* a [generate] collector.
+     *
+     * llama.cpp can: cancelling sets a flag its pull loop checks, the loop ends, and the flow
+     * completes normally. LiteRT-LM cannot: its cancel surfaces a CANCELLED error through the
+     * runtime's own callback, which cancels the collecting coroutine -- and a caller collecting
+     * inside a WorkManager job loses the whole job, not just the turn. Its engine says as much in
+     * its own comments, and enforces its output limits by ignoring the rest of the stream instead.
+     *
+     * So a caller that wants to stop a turn early must ask first. False by default, because "this
+     * runtime has no safe interruptible cancel" is the assumption that cannot break anything.
+     */
+    val supportsMidTurnCancel: Boolean get() = false
+
+    /**
+     * Whether [setGrammar] does anything on this engine.
+     *
+     * llama.cpp can: a GBNF grammar is a sampler in its decode chain.
+     *
+     * LiteRT-LM answers false, and the reason is narrower than "it cannot constrain output" -- it
+     * very much can. The runtime embeds LLGuidance, which takes a Lark grammar, a JSON Schema or a
+     * regex, and `ExperimentalFlags.enableConversationConstrainedDecoding` switches it on. What 0.14
+     * does not expose is a way to hand it a grammar *directly*: the only public route is a tool
+     * description, so the constraint arrives as a JSON Schema on a declared tool rather than as a
+     * grammar over free text. That is a different shape of answer, not a different amount of
+     * enforcement, so it belongs behind its own call and not behind this one. See
+     * AuditRecordGrammar for what a GBNF path buys and what it does not.
+     */
+    val supportsGrammar: Boolean get() = false
+
+    /**
+     * Constrains decoding to [grammar] (GBNF), or lifts the constraint when it is null. Returns
+     * false when the engine cannot do it or the grammar does not parse; the caller's prompt has to
+     * stand on its own either way.
+     *
+     * A grammar costs nothing in the prompt -- it is a decoder constraint, not text -- so it is the
+     * one way to make output *shape* free. It says nothing about content: a constrained model can
+     * still report no findings, so the instructions that decide what gets found stay where they are.
+     *
+     * [triggerPattern] leaves generation unconstrained until the regex matches, then applies the
+     * grammar from its first capture group. Without one the very first token is constrained, which
+     * forbids a reasoning block and any plain-text working the prompt asked for.
+     *
+     * Outlives a turn: it stays in force until changed, so a caller that sets one is responsible for
+     * clearing it before asking the same engine for prose.
+     */
+    suspend fun setGrammar(grammar: String?, triggerPattern: String? = null): Boolean = false
+
+    /**
+     * Whether [setResponseSchema] does anything. LiteRT-LM only: see [supportsGrammar] for why the
+     * two capabilities are separate rather than one.
+     */
+    val supportsResponseSchema: Boolean get() = false
+
+    /**
+     * Constrains the next replies to a JSON Schema, or lifts the constraint when [schema] is null.
+     * Returns false when the engine cannot do it.
+     *
+     * The reply arrives as ordinary text: whatever shape the runtime uses to carry a schema-bound
+     * answer, the engine renders its arguments back into the JSON object the schema describes, so a
+     * caller collects a JSON document exactly as it would collect prose.
+     *
+     * Unlike [setGrammar] this changes the *shape* of the answer, not just its guarantees -- a
+     * caller must ask for JSON in its prompt to match. The two are therefore never both in force,
+     * and a caller picks whichever its engine supports.
+     *
+     * Not free, unlike a grammar: the schema is prefilled with the prompt, so it is charged against
+     * the context window of every turn it applies to.
+     */
+    suspend fun setResponseSchema(schema: String?): Boolean = false
+
+    /**
+     * Whether the LAST reply actually came back through the schema machinery, rather than as
+     * ordinary text a model happened to write.
+     *
+     * [setResponseSchema] can only report that the schema was *declared*. Whether it then binds is
+     * decided inside the runtime and can fail silently -- LiteRT-LM supports constrained decoding
+     * for SentencePiece tokenizers only, and on a BPE model it accepts the schema and enforces
+     * nothing. A caller that trusted the declaration would be asking for the format with the least
+     * tolerance for a mistake while getting none of the enforcement that justified it.
+     *
+     * So this reports what was observed, not what was requested, and is only meaningful after a turn
+     * has completed.
+     */
+    val lastReplyWasSchemaBound: Boolean get() = false
+
     /** Drops conversation history but keeps the model resident. */
     suspend fun resetConversation()
+
+    /**
+     * Same guarantee as [resetConversation] -- the next prompt is independent of everything before
+     * it -- but the engine may keep prefill state the next prompt would recompute identically.
+     *
+     * For a batch of self-contained prompts sharing a long fixed preamble (the audit pipeline), that
+     * is the difference between paying for the preamble once and paying for it on every chunk. Only
+     * meaningful where the engine diffs an incoming prompt against what it already decoded; the
+     * default is a full reset, so an engine without that machinery is simply unaffected.
+     */
+    suspend fun resetKeepingPrefixCache() = resetConversation()
 
     /** Number of tokens currently held in the KV cache. Used to warn before context overflow. */
     fun contextTokensUsed(): Int
 
     /** Releases the model and all native memory. Idempotent. */
     suspend fun unload()
+}
+
+/**
+ * An engine whose runtime executes tool calls itself, and therefore needs somewhere to send them.
+ *
+ * Separate from [InferenceEngine] rather than a property on it with a do-nothing default. That
+ * default was a trap: an engine could declare [EngineDescriptor.supportsNativeTools], have its
+ * tools declared to the runtime, be handed a runner -- and silently drop it, because the setter it
+ * inherited did nothing. Every tool call then failed at run time with a generic message, with
+ * nothing at compile time or load time to say why.
+ *
+ * Now the two halves cannot come apart: an engine that claims native tool support and does not
+ * implement this is rejected by [EngineRegistry] when the app starts, and a caller that wants to
+ * set a runner has to say which interface it is talking to.
+ *
+ * The runner is set *after* [InferenceEngine.load] and deliberately kept out of [LoadRequest].
+ * Models are loaded before anyone knows who will use them -- the residency layer warms one in the
+ * background and a chat screen adopts it later -- so the tools a model is loaded *with* (data,
+ * fixed when the conversation is created) and the object that *runs* them (owned by whichever
+ * screen is driving) have genuinely different lifetimes. Folding the runner into the request would
+ * also break request equality, which is what the warm handoff uses to recognise a resident model.
+ */
+interface NativeToolEngine {
+
+    /** Null while nobody is driving: calls then come back to the model as "not available". */
+    var toolRunner: ToolRunner?
 }

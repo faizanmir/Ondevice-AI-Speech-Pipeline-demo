@@ -41,6 +41,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.AIAgentTestApp"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -57,6 +58,36 @@
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
+
+        <!-- WorkManager must NOT auto-initialize: the startup initializer would configure it with
+             the default worker factory before AIAgentApplication's Configuration.Provider is ever
+             consulted, and every @HiltWorker then fails reflection instantiation
+             (NoSuchMethodException: <init>(Context, WorkerParameters)). Removing only this entry
+             defers initialization to first use, which picks up the HiltWorkerFactory; the other
+             startup initializers (emoji2, lifecycle) keep running as before. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
+        <!-- Hands a rendered report to another app. A file:// URI cannot cross an app boundary on
+             Android 7+, so sharing a PDF needs a content URI and this is what mints it. Not
+             exported: access is granted per-share, for one URI, by the flag on the intent. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

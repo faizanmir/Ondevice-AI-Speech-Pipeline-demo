@@ -7,32 +7,12 @@ import kotlinx.serialization.Serializable
 enum class ModelFormat(
     val extension: String,
     val label: String,
-    /**
-     * The model is owned and stored by the operating system, not by this app. There is no file to
-     * download, nothing on our disk to delete, and "is it downloaded" is a question for the OS
-     * service at load time rather than for [java.io.File.exists].
-     */
-    val systemManaged: Boolean = false,
 ) {
     /** Google's current on-device format, loaded by LiteRT-LM. */
     LITERTLM(".litertlm", "LiteRT-LM"),
 
     /** llama.cpp's format. Huge community catalogue. */
     GGUF(".gguf", "GGUF"),
-
-    /**
-     * Alibaba MNN's exported-LLM format. Unlike the single-file formats above, an MNN model is a
-     * *directory* of files (config.json, llm.mnn, llm.mnn.weight, tokenizer.txt, ...) whose entry
-     * point is config.json -- see [ModelSpec.files].
-     */
-    MNN(".mnn", "MNN"),
-
-    /**
-     * Not a file at all: Gemini Nano lives inside Android's AICore system service, which
-     * downloads, updates and runs it on the OS's behalf. The extension exists only so this enum
-     * stays uniform; it never matches anything on disk.
-     */
-    AICORE(".aicore", "AICore", systemManaged = true),
 }
 
 /**
@@ -103,7 +83,7 @@ enum class Accelerator(val label: String) {
 
 /**
  * One file of a multi-file model. [relativePath] is where it lives under the app's models
- * directory, and deliberately includes the model's own subdirectory ("qwen3-0.6b-mnn/llm.mnn") so
+ * directory, and deliberately includes the model's own subdirectory ("my-model/weights.bin") so
  * two models never collide on generic names like config.json.
  */
 @Serializable
@@ -141,6 +121,20 @@ data class ModelSpec(
     val minDeviceMemoryGb: Int,
     val accelerators: Set<Accelerator>,
     val multimodal: Boolean = false,
+    /**
+     * The model has an audio encoder, so it can be handed a recording and asked about it.
+     *
+     * Narrower than [multimodal], which in this catalogue has always meant "sees images" and is
+     * rendered as a Vision tag. The two are separate encoders and a model can ship one without the
+     * other, so transcription asks this question rather than reading across from that one.
+     *
+     * Null means "work it out from the name" ([AudioSupport]), exactly as [supportsToolCalling]
+     * does, and for the same reason: it is the only option for a model the user added from
+     * HuggingFace. This was a plain `false` default at first, which quietly made every
+     * user-added model text-only forever -- including the audio-capable Gemma build that a device
+     * already had on disk while the record screen insisted nothing could listen.
+     */
+    val audioInput: Boolean? = null,
     val license: String,
     val description: String,
     /** True for models the user added themselves, as opposed to the built-in catalogue. */
@@ -165,22 +159,33 @@ data class ModelSpec(
      */
     val requiresAuth: Boolean = false,
     /**
-     * Every file of a *multi-file* model (MNN models are a directory, not a file). Empty for the
-     * single-file formats, whose one file is already described by [downloadUrl]/[fileName]/
-     * [sizeBytes]. When set, [fileName] must be the entry-point file the engine loads (MNN's
-     * config.json), [sizeBytes] the total across all files, and every [ModelFile.relativePath]
-     * must live under one directory named after the model.
+     * Every file of a model that ships as more than one (a sharded export, say). Empty for the
+     * ordinary case, whose one file is already described by [downloadUrl]/[fileName]/[sizeBytes].
+     * When set, [fileName] must be the entry-point file the engine loads, [sizeBytes] the total
+     * across all files, and every [ModelFile.relativePath] must live under one directory named
+     * after the model.
      */
     val files: List<ModelFile> = emptyList(),
+    /**
+     * When the user added this model to their catalogue, in epoch millis. 0 for the built-in
+     * catalogue (which has no meaningful "added" date) and for custom models saved before this was
+     * tracked -- the "newest first" sort treats both as oldest. Stamped by the custom-model store
+     * when a model is added.
+     */
+    val addedAtMillis: Long = 0L,
 ) {
 
     /** Can this model actually run app functions? */
     val canCallTools: Boolean
         get() = supportsToolCalling ?: ToolCallingSupport.infer(name, id, paramsBillions)
-    val sizeGb: Double get() = sizeBytes / BYTES_PER_GB
 
-    /** The OS owns this model (AICore); the app's download/delete machinery does not apply. */
-    val systemManaged: Boolean get() = format.systemManaged
+    /**
+     * Can this model be handed a recording? Read this rather than [audioInput], which is only the
+     * curated answer and is null for everything the user added themselves.
+     */
+    val hearsAudio: Boolean
+        get() = audioInput ?: AudioSupport.infer(name, id, repoId)
+    val sizeGb: Double get() = sizeBytes / BYTES_PER_GB
 
     /**
      * Everything that must be on disk for this model to load, single- and multi-file models seen

@@ -35,22 +35,36 @@ object VoiceCommands {
         "discard_recording" to VoiceCommandAction.Discard,
     )
 
+    // German variants sit beside the English ones: whichever language the user dictates in
+    // (German transcription needs Whisper selected in Settings), the same command fires.
     val specs: List<VoiceCommandSpec> = listOf(
         VoiceCommandSpec(
             id = "open_settings",
-            phrases = listOf("open settings", "open the settings", "go to settings"),
+            phrases = listOf(
+                "open settings", "open the settings", "go to settings",
+                "öffne einstellungen", "öffne die einstellungen", "einstellungen öffnen",
+            ),
         ),
         VoiceCommandSpec(
             id = "open_models",
-            phrases = listOf("open models", "open model catalog", "show models"),
+            phrases = listOf(
+                "open models", "open model catalog", "show models",
+                "öffne modelle", "zeige modelle", "modelle öffnen",
+            ),
         ),
         VoiceCommandSpec(
             id = "stop_recording",
-            phrases = listOf("stop recording", "stop the recording", "finish recording"),
+            phrases = listOf(
+                "stop recording", "stop the recording", "finish recording",
+                "aufnahme stoppen", "aufnahme beenden", "stoppe die aufnahme",
+            ),
         ),
         VoiceCommandSpec(
             id = "discard_recording",
-            phrases = listOf("discard recording", "delete this recording", "start over"),
+            phrases = listOf(
+                "discard recording", "delete this recording", "start over",
+                "aufnahme verwerfen", "aufnahme löschen", "von vorne beginnen",
+            ),
         ),
     )
 

@@ -1,0 +1,578 @@
+package com.example.aiagenttestapp.ui.speakers
+
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.Box
+import com.example.aiagenttestapp.ui.components.ListDetailPanes
+import com.example.aiagenttestapp.ui.components.rememberListDetailState
+import com.example.aiagenttestapp.ui.components.ControlsContentPanes
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.aiagenttestapp.data.speakers.DialogTurn
+import com.example.aiagenttestapp.data.speakers.DialogTurns
+import com.example.aiagenttestapp.data.speakers.DiarizedRecording
+import com.example.aiagenttestapp.data.speakers.DiarizedStatus
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PersonOutline
+import com.example.aiagenttestapp.data.speakers.SpeakerStat
+import com.example.aiagenttestapp.data.speakers.SpeakerStats
+import com.example.aiagenttestapp.ui.theme.speakerAccent
+import com.example.aiagenttestapp.stt.AudioRecorder
+
+/**
+ * Who said what: a recording split by speaker, with names where the app recognises the voice.
+ *
+ * Its own screen rather than a mode of the voice-note recorder, because the two want opposite
+ * things from the same audio. A note is one person thinking aloud and is finished when its
+ * transcript is -- the recorder deletes the audio at that point. This is a conversation, its audio
+ * is kept, and the useful action after a run is usually to *re-run it*: with a different expected
+ * speaker count, or after enrolling whoever came back as "Speaker 2".
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DiarizeScreen(
+    viewModel: DiarizeViewModel,
+    onOpenSpeakers: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+
+    // Which transcript is open, by id rather than by the recording: a row updates all the way
+    // through a run, and holding the object would freeze the text on the snapshot it was opened at.
+    var expandedId by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let { viewModel.onIntent(DiarizeIntent.Import(it)) } }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Speaker transcript") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    TextButton(onClick = onOpenSpeakers) { Text("Enrolled voices") }
+                },
+            )
+        },
+    ) { padding ->
+        ControlsContentPanes(
+            modifier = Modifier.padding(padding),
+            controls = {
+                SourceCard(
+                    state = state,
+                    onImport = { picker.launch(arrayOf("audio/*")) },
+                    onStart = { viewModel.onIntent(DiarizeIntent.StartRecording) },
+                    onStop = { viewModel.onIntent(DiarizeIntent.StopRecording) },
+                    onExpected = { viewModel.onIntent(DiarizeIntent.SetExpectedSpeakers(it)) },
+                )
+
+                state.blocker?.let { blocker ->
+                    // Stated, not hidden behind a disabled button. Needing one *particular* speech
+                    // model is the kind of requirement nobody guesses from a greyed-out control --
+                    // and it comes with the way to fix it, because naming a screen and leaving the
+                    // user to find it is most of the way to not saying anything.
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            blocker,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        TextButton(onClick = onOpenSettings, contentPadding = PaddingValues(0.dp)) {
+                            Text("Open Settings")
+                        }
+                    }
+                }
+            },
+        ) {
+            state.error?.let { error ->
+                item {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            error,
+                            Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        TextButton(onClick = { viewModel.onIntent(DiarizeIntent.ClearError) }) {
+                            Text("Dismiss")
+                        }
+                    }
+                }
+            }
+
+            if (state.recordings.isEmpty() && state.importing == null) {
+                item {
+                    Text(
+                        "Import a recording or record one \u2014 it goes through the models straight " +
+                            "away, and comes back split by speaker.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            state.recordings.forEach { recording ->
+                val blocks = state.blocks[recording.id].orEmpty()
+
+                item(key = recording.id) {
+                    RecordingRow(
+                        recording = recording,
+                        speakerCount = blocks.map { it.speakerName }.distinct().size,
+                        selected = recording.id == expandedId,
+                        onOpen = { expandedId = if (expandedId == recording.id) null else recording.id },
+                        onDelete = { viewModel.onIntent(DiarizeIntent.Delete(recording.id)) },
+                    )
+                }
+
+                // The transcript belongs to the content side, under the recording it came from, and
+                // as its own items rather than a nested scroller -- a twenty-minute conversation is
+                // dozens of turns, and a list inside a list is the overlap this layout removes.
+                if (recording.id == expandedId) {
+                    val stats = SpeakerStats.from(blocks, AudioRecorder.SAMPLE_RATE)
+                    val turns = DialogTurns.from(blocks)
+                    // The summary is already ordered by first speech, so a speaker's position in it
+                    // *is* their colour index. One ordering serves both halves of the screen, which
+                    // is what makes the swatch beside a name mean the turns tinted the same below.
+                    val order = stats.map { it.name }
+
+                    item {
+                        TranscriptHeader(
+                            recording = recording,
+                            stats = stats,
+                            onRun = { viewModel.onIntent(DiarizeIntent.Run(recording.id)) },
+                        )
+                    }
+                    items(turns, key = { "turn-" + it.id }) { turn ->
+                        DialogTurnRow(
+                            turn = turn,
+                            accent = speakerAccent(order.indexOf(turn.speakerName)),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SourceCard(
+    state: DiarizeUiState,
+    onImport: () -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onExpected: (Int) -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                "New recording",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+
+            state.importing?.let { importing ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "Converting ${importing.name} — ${(importing.progress * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    LinearProgressIndicator(
+                        progress = { importing.progress },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+
+            if (state.recordingMillis != null) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Recording ${formatClock(state.recordingMillis)}",
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Button(onClick = onStop) {
+                        Icon(Icons.Default.Stop, contentDescription = null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Stop")
+                    }
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onImport, enabled = state.importing == null) {
+                        Icon(Icons.Default.UploadFile, contentDescription = null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Import")
+                    }
+                    OutlinedButton(onClick = onStart, enabled = state.importing == null) {
+                        Icon(Icons.Default.Mic, contentDescription = null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Record")
+                    }
+                }
+            }
+
+            Text(
+                "How many people?",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                // This used to say telling it the number was better than letting it guess. It is
+                // not, once voices are enrolled -- forcing the count made a two-person recording
+                // come back as one person talking for 99% of it, because the count is a hard limit
+                // on how many groups the clustering may form rather than a hint. Enrolled voices are
+                // matched per group, so extra groups cost nothing and missing ones cannot be
+                // recovered. The setting still applies when nobody is enrolled.
+                if (state.enrolledCount > 0) {
+                    "Only used when nobody is enrolled — with enrolled voices it works the count " +
+                        "out and matches each one by voice, which is more reliable."
+                } else {
+                    "Telling it the number helps when nobody is enrolled — left to work it out on " +
+                        "a short or noisy recording, it tends to split one person into two."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                FilterChip(
+                    selected = state.expectedSpeakers == 0,
+                    onClick = { onExpected(0) },
+                    label = { Text("Work it out") },
+                )
+                (2..8).forEach { count ->
+                    FilterChip(
+                        selected = state.expectedSpeakers == count,
+                        onClick = { onExpected(count) },
+                        label = { Text("$count") },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecordingRow(
+    recording: DiarizedRecording,
+    speakerCount: Int,
+    selected: Boolean,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Card(
+        onClick = onOpen,
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) {
+                MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            },
+        ),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        recording.name,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        buildString {
+                            append(formatClock(recording.durationMillis))
+                            append(
+                                if (recording.expectedSpeakers > 0) {
+                                    " · ${recording.expectedSpeakers} expected"
+                                } else {
+                                    " · count worked out"
+                                },
+                            )
+                            if (speakerCount > 0) append(" · $speakerCount found")
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Default.Delete, contentDescription = "Delete")
+                }
+            }
+
+            // Progress and failure belong on the row, not only in the detail: a run takes minutes
+            // and the whole point of the list is to see at a glance which ones are still going.
+            when (recording.status) {
+                // Imported and waiting on whatever the blocker at the top of the list says. A run
+                // starts itself otherwise, so this is only ever seen when something is missing.
+                DiarizedStatus.Idle -> Text(
+                    "Not run yet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                DiarizedStatus.Running ->
+                    if (recording.progress > 0f) {
+                        LinearProgressIndicator(
+                            progress = { recording.progress },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+
+                DiarizedStatus.Failed -> Text(
+                    recording.error ?: "Failed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+
+                DiarizedStatus.Done -> Unit
+            }
+        }
+    }
+}
+
+/**
+ * The heading above an opened transcript: what it is, and how to run it again.
+ *
+ * Separate from the turns rather than wrapping them, because the turns are emitted as their own
+ * items in the content list. Wrapping them in a scroller of their own would put a list inside a
+ * list, which is exactly the overlap this screen's layout was changed to remove.
+ */
+@Composable
+private fun TranscriptHeader(
+    recording: DiarizedRecording,
+    stats: List<SpeakerStat>,
+    onRun: () -> Unit,
+) {
+    val hasBlocks = stats.isNotEmpty()
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Offered even while the row says Running, which looks wrong and is the safety valve: a run
+        // whose worker died leaves the row claiming to be in progress forever, and hiding the only
+        // button that restarts it makes the state unrecoverable without deleting the recording.
+        run {
+            OutlinedButton(onClick = onRun) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                // "Run again" once there is a transcript: re-running at a different speaker count,
+                // or after enrolling whoever came back as "Speaker 2", is the normal thing here.
+                Text(if (hasBlocks) "Run again" else "Run")
+            }
+        }
+        if (!hasBlocks && recording.status == DiarizedStatus.Done) {
+            Text(
+                "No speech was attributed in this recording.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        if (hasBlocks) {
+            Text(
+                if (stats.size == 1) "1 speaker" else "${stats.size} speakers",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            stats.forEachIndexed { index, stat ->
+                SpeakerStatRow(stat, accent = speakerAccent(index))
+            }
+        }
+    }
+}
+
+/**
+ * One line of the summary: who, how much, and whether the app actually knows them.
+ *
+ * The enrolled/unenrolled difference is carried by more than the name, because the name alone is
+ * easy to skim past -- and the two mean very different things to someone acting on the transcript.
+ * A named speaker is a claim about a person; "Unknown Speaker 2" is a claim only that this was a
+ * distinct voice.
+ */
+@Composable
+private fun SpeakerStatRow(stat: SpeakerStat, accent: Color) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // The swatch, not a tint on the icon below it: the icon's colour already carries whether
+        // the app knows this person, and overloading it with identity would cost that distinction
+        // the one channel that makes it visible at a glance.
+        Box(
+            Modifier
+                .size(10.dp)
+                .background(accent, CircleShape),
+        )
+        Icon(
+            if (stat.enrolled) Icons.Default.Person else Icons.Default.PersonOutline,
+            contentDescription = null,
+            Modifier.size(18.dp),
+            tint = if (stat.enrolled) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+        Text(
+            stat.name,
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (stat.enrolled) FontWeight.Medium else FontWeight.Normal,
+            color = if (stat.enrolled) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+        Text(
+            "${(stat.share * 100).toInt()}% · ${formatClock(stat.speakingMillis)} · " +
+                if (stat.turns == 1) "1 turn" else "${stat.turns} turns",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * One turn of the conversation, as a block the eye can take in whole.
+ *
+ * This was a small coloured name over a paragraph, every turn at the same indent in the same column,
+ * and a long conversation read as a wall: nothing marked where one person stopped and the next
+ * started, so following a single speaker meant reading every line to find out whether it was theirs.
+ * The tint and the rail give a turn edges, and the accent repeats down the page, so a speaker can be
+ * followed -- or skipped past -- without reading a word of them.
+ *
+ * The tint is faint deliberately. It is there to bound the turn, and eight saturated bands down a
+ * twenty-minute transcript would be worse to read than the wall they replaced.
+ */
+@Composable
+private fun DialogTurnRow(turn: DialogTurn, accent: Color) {
+    Surface(
+        color = accent.copy(alpha = 0.08f),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.height(IntrinsicSize.Min)) {
+            // Full height rather than a bullet beside the name: the rail is what says where a turn
+            // ends, which the tint alone cannot when the next speaker's tint is a neighbouring hue.
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .width(3.dp)
+                    .background(accent),
+            )
+            Column(
+                Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        turn.speakerName,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = accent,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        formatClock(turn.startSample * 1000L / AudioRecorder.SAMPLE_RATE),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    turn.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    // Looser than the default, which is set for labels and captions. A turn is a
+                    // paragraph of speech and is read as one.
+                    lineHeight = MaterialTheme.typography.bodyMedium.fontSize * 1.45,
+                )
+            }
+        }
+    }
+}
+
+private fun formatClock(millis: Long): String {
+    val seconds = (millis / 1000).coerceAtLeast(0)
+    val hours = seconds / 3600
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(hours, (seconds % 3600) / 60, seconds % 60)
+    } else {
+        "%d:%02d".format(seconds / 60, seconds % 60)
+    }
+}

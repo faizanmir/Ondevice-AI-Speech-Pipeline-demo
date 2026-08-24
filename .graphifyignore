@@ -1,0 +1,3 @@
+# Vendored upstream trees. These are compiled, not maintained here, and sweeping
+# them in adds ~24k nodes of llama.cpp/MNN C++ that drown the app's own graph.
+third_party/

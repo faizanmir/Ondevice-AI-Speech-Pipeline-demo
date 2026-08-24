@@ -4,8 +4,11 @@ import androidx.appfunctions.AppFunctionContext
 import androidx.appfunctions.AppFunctionInvalidArgumentException
 import androidx.appfunctions.AppFunctionSerializable
 import androidx.appfunctions.service.AppFunction
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 import com.example.aiagent.engine.core.ToolCall
-import com.example.aiagenttestapp.AIAgentApplication
 
 /**
  * This app's capabilities, exported to the Android system so agents like Gemini can call them.
@@ -14,16 +17,16 @@ import com.example.aiagenttestapp.AIAgentApplication
  *
  * These two things point in opposite directions and neither can do the other's job.
  *
- * - [AppFunctions] + `ToolCallingProtocol` is how *our own* on-device model drives the app. It has
+ * - [AppFunctionRegistry] + `ToolCallingProtocol` is how *our own* on-device model drives the app. It has
  *   to be a prompt protocol, because the model runs inside this process and there is no platform
- *   API for an app to call its own AppFunctions.
+ *   API for an app to call its own app functions.
  * - This class is how the *system's* agent drives the app. It cannot be reused for the in-app model,
  *   because `EXECUTE_APP_FUNCTIONS` is `protectionLevel="internal|role"` -- the platform grants it
  *   only to preinstalled apps holding the `ASSISTANT` role. A normal app simply cannot be a caller,
  *   no matter what it declares in its manifest.
  *
  * What they *do* share is the logic. Every method here is a thin adapter onto the same
- * [AppFunctions] registry, so a capability is defined once and exposed twice. Adding a function to
+ * [AppFunctionRegistry], so a capability is defined once and exposed twice. Adding a function to
  * that registry and forgetting to export it here costs you the export, not correctness.
  *
  * ## Notes on the API
@@ -39,7 +42,18 @@ import com.example.aiagenttestapp.AIAgentApplication
  */
 class AiAgentAppFunctions {
 
-    private val container get() = AIAgentApplication.instance.container
+    /**
+     * The platform instantiates this class itself, so there is no constructor to inject through --
+     * an entry point is the supported way into the graph from a system-created object.
+     */
+    @EntryPoint
+    @InstallIn(SingletonComponent::class)
+    interface AppFunctionsEntryPoint {
+        fun deps(): AppFunctionDeps
+    }
+
+    private fun deps(context: android.content.Context): AppFunctionDeps =
+        EntryPointAccessors.fromApplication(context, AppFunctionsEntryPoint::class.java).deps()
 
     /** The outcome of running one of this app's functions. */
     @AppFunctionSerializable(isDescribedByKDoc = true)
@@ -58,14 +72,14 @@ class AiAgentAppFunctions {
      */
     @AppFunction(isDescribedByKDoc = true)
     suspend fun getDeviceAiCapability(appFunctionContext: AppFunctionContext): FunctionOutcome =
-        run("get_device_memory")
+        run(appFunctionContext, "get_device_memory")
 
     /**
      * Lists the AI models that are already downloaded onto this phone and can run offline.
      */
     @AppFunction(isDescribedByKDoc = true)
     suspend fun listDownloadedModels(appFunctionContext: AppFunctionContext): FunctionOutcome =
-        run("list_downloaded_models")
+        run(appFunctionContext, "list_downloaded_models")
 
     /**
      * Reports which on-device AI model is currently loaded, and which engine and processor it is
@@ -73,7 +87,7 @@ class AiAgentAppFunctions {
      */
     @AppFunction(isDescribedByKDoc = true)
     suspend fun getCurrentModel(appFunctionContext: AppFunctionContext): FunctionOutcome =
-        run("get_current_model")
+        run(appFunctionContext, "get_current_model")
 
     /**
      * Changes how creative or focused the on-device AI's replies are.
@@ -85,7 +99,7 @@ class AiAgentAppFunctions {
     suspend fun setModelTemperature(
         appFunctionContext: AppFunctionContext,
         temperature: Double,
-    ): FunctionOutcome = run("set_temperature", mapOf("value" to temperature.toString()))
+    ): FunctionOutcome = run(appFunctionContext, "set_temperature", mapOf("value" to temperature.toString()))
 
     /**
      * Runs one of the app's functions and adapts the result to the shape AppFunctions expects.
@@ -96,10 +110,14 @@ class AiAgentAppFunctions {
      * success to the user.
      */
     private suspend fun run(
+        appFunctionContext: AppFunctionContext,
         name: String,
         arguments: Map<String, String> = emptyMap(),
     ): FunctionOutcome {
-        val result = AppFunctions.execute(ToolCall(name, arguments), container)
+        val result = AppFunctionRegistry.Default.execute(
+            ToolCall(name, arguments),
+            deps(appFunctionContext.context),
+        )
 
         if (result.isError) {
             throw AppFunctionInvalidArgumentException(result.output)

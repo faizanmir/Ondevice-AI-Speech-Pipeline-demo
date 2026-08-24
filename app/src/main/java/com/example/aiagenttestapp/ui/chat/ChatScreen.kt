@@ -5,9 +5,11 @@ import android.content.Context
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
@@ -35,14 +37,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
@@ -72,6 +80,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -81,6 +90,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
@@ -90,9 +100,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.aiagent.engine.core.GenerationStats
+import com.example.aiagenttestapp.data.Source
+import com.example.aiagenttestapp.data.audit.AuditMode
 import com.example.aiagenttestapp.stt.SpeechModelState
 import com.example.aiagenttestapp.ui.components.formatBytes
 import com.example.aiagenttestapp.ui.components.readableWidth
+import com.example.aiagenttestapp.util.Reasoning
 import com.mikepenz.markdown.m3.Markdown
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -100,8 +113,9 @@ import com.mikepenz.markdown.m3.Markdown
 fun ChatScreen(
     viewModel: ChatViewModel,
     onBack: () -> Unit,
+    onOpenAudit: (AuditMode) -> Unit,
 ) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val state by viewModel.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
     // Dictation needs RECORD_AUDIO. Launching when already granted returns immediately with no
@@ -109,17 +123,22 @@ fun ChatScreen(
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        if (granted) viewModel.startVoiceInput()
+        if (granted) viewModel.onIntent(ChatIntent.StartVoiceInput)
     }
 
+    // Storage Access Framework: picks any document; the extractor decides what it can actually read.
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let { viewModel.onIntent(ChatIntent.AttachFile(it)) } }
+
     // Shown when the user taps the mic but the shared speech model has not been downloaded yet.
-    var showSpeechSetup by remember { mutableStateOf(false) }
+    var showSpeechSetup by rememberSaveable { mutableStateOf(false) }
 
     if (showSpeechSetup) {
         SpeechSetupDialog(
             state = state.speechModelState,
             sizeBytes = state.speechModelSizeBytes,
-            onDownload = viewModel::downloadSpeechModel,
+            onDownload = { viewModel.onIntent(ChatIntent.DownloadSpeechModel) },
             onDismiss = { showSpeechSetup = false },
         )
     }
@@ -190,8 +209,9 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    AuditMenuButton(onOpenAudit)
                     IconButton(
-                        onClick = viewModel::resetConversation,
+                        onClick = { viewModel.onIntent(ChatIntent.ResetConversation) },
                         enabled = state.messages.isNotEmpty(),
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = "New conversation")
@@ -202,19 +222,25 @@ fun ChatScreen(
         bottomBar = {
             ChatInputBar(
                 draft = state.draft,
-                onDraftChange = viewModel::onDraftChange,
+                onDraftChange = { viewModel.onIntent(ChatIntent.DraftChanged(it)) },
                 replyingTo = state.replyingTo,
-                onCancelReply = viewModel::cancelReply,
+                onCancelReply = { viewModel.onIntent(ChatIntent.CancelReply) },
                 enabled = state.canSend,
                 isGenerating = state.isGenerating,
                 isDictating = state.isDictating,
                 isTranscribing = state.isTranscribing,
                 micLevel = state.micLevel,
-                onSend = viewModel::send,
-                onStop = viewModel::stopGenerating,
+                attachmentName = state.attachmentName,
+                isExtractingFile = state.isExtractingFile,
+                attachmentTruncated = state.attachmentTruncated,
+                attachmentError = state.attachmentError,
+                onAttach = { filePicker.launch(arrayOf("*/*")) },
+                onRemoveAttachment = { viewModel.onIntent(ChatIntent.ClearAttachment) },
+                onSend = { viewModel.onIntent(ChatIntent.Send) },
+                onStop = { viewModel.onIntent(ChatIntent.StopGenerating) },
                 onMic = {
                     when {
-                        state.isDictating -> viewModel.stopVoiceInput()
+                        state.isDictating -> viewModel.onIntent(ChatIntent.StopVoiceInput)
                         state.isSpeechReady ->
                             micPermission.launch(Manifest.permission.RECORD_AUDIO)
                         else -> showSpeechSetup = true
@@ -245,14 +271,29 @@ fun ChatScreen(
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             items(state.messages, key = { it.id }) { message ->
+                                // The long-press menu's state, hoisted out of the bubble. Keyed
+                                // item scope keeps it with this message across list changes.
+                                var menuOpen by remember { mutableStateOf(false) }
                                 Box(Modifier.readableWidth()) {
                                     MessageBubble(
                                         message = message,
                                         isStreaming = state.isGenerating &&
                                             message.id == state.messages.last().id,
-                                        onReply = { viewModel.startReply(message) },
-                                        onDelete = { viewModel.deleteMessage(message.id) },
+                                        showThinking = state.showThinking,
+                                        menuExpanded = menuOpen,
+                                        onMenuExpandedChange = { menuOpen = it },
+                                        onReply = { viewModel.onIntent(ChatIntent.StartReply(message)) },
+                                        onDelete = { viewModel.onIntent(ChatIntent.DeleteMessage(message.id)) },
                                     )
+                                }
+                            }
+
+                            // At the foot of the transcript, where the user is already looking
+                            // while they wait. Not a dialog: nothing is blocked and nothing needs
+                            // dismissing -- the turn carries on by itself once this is done.
+                            if (state.isCompacting) {
+                                item(key = "compacting") {
+                                    Box(Modifier.readableWidth()) { CompactingNotice() }
                                 }
                             }
                         }
@@ -276,11 +317,56 @@ fun ChatScreen(
     }
 }
 
+/**
+ * The audit entry point, with the read to perform chosen on the way in.
+ *
+ * A menu rather than a plain button because the two reads answer different questions -- a full audit
+ * with graded non-conformities, or key points and actions -- and which one you want is known before
+ * you get there, not after. What it carries is only the queue screen's starting mode; the read is
+ * pinned per document when a file is actually attached.
+ */
+@Composable
+private fun AuditMenuButton(onOpenAudit: (AuditMode) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+
+    Box {
+        IconButton(onClick = { open = true }) {
+            Icon(
+                Icons.AutoMirrored.Filled.FactCheck,
+                contentDescription = "Read a document",
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            AuditMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(mode.label)
+                            Text(
+                                mode.blurb,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    onClick = {
+                        open = false
+                        onOpenAudit(mode)
+                    },
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     message: ChatMessage,
     isStreaming: Boolean,
+    showThinking: Boolean,
+    menuExpanded: Boolean,
+    onMenuExpandedChange: (Boolean) -> Unit,
     onReply: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -297,7 +383,6 @@ private fun MessageBubble(
 
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
-    var menuOpen by remember { mutableStateOf(false) }
 
     // Swipe the bubble aside to quote-reply. confirmValueChange returns false so it never actually
     // settles as dismissed -- it fires the reply and springs back.
@@ -354,7 +439,7 @@ private fun MessageBubble(
                         .then(if (isUser) Modifier.widthIn(max = 300.dp) else Modifier.fillMaxWidth())
                         .combinedClickable(
                             onClick = {},
-                            onLongClick = { if (actionable) menuOpen = true },
+                            onLongClick = { if (actionable) onMenuExpandedChange(true) },
                         ),
                 ) {
                     Row(
@@ -368,57 +453,233 @@ private fun MessageBubble(
                                 ThinkingIndicator()
                             }
 
-                            // Rendered Markdown -- links, tables, code, lists -- but only once the
-                            // reply is complete. While it streams it stays plain text (cheap, and no
-                            // re-parsing of half-finished Markdown); it flips to the rendered version
-                            // the moment the turn finishes.
-                            !isUser && !message.isError && !isStreaming && message.text.isNotEmpty() -> {
-                                Markdown(
-                                    content = message.text,
-                                    modifier = Modifier.fillMaxWidth(),
+                            // Assistant reply, streaming or done. A reasoning model's
+                            // <think>...</think> is peeled into its own collapsible section; the
+                            // answer renders as Markdown once complete (links, tables, code) and as
+                            // cheap plain text while it streams -- no re-parsing of half Markdown.
+                            !isUser && !message.isError && message.text.isNotEmpty() -> {
+                                AssistantContent(
+                                    text = message.text,
+                                    isStreaming = isStreaming,
+                                    showThinking = showThinking,
                                 )
                             }
 
                             else -> {
-                                Text(
-                                    text = message.text,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = when {
-                                        message.isError -> MaterialTheme.colorScheme.onErrorContainer
-                                        isUser -> MaterialTheme.colorScheme.onPrimary
-                                        else -> MaterialTheme.colorScheme.onSurface
-                                    },
-                                )
+                                val textColor = when {
+                                    message.isError -> MaterialTheme.colorScheme.onErrorContainer
+                                    isUser -> MaterialTheme.colorScheme.onPrimary
+                                    else -> MaterialTheme.colorScheme.onSurface
+                                }
+                                Column {
+                                    // A user message that carried a file shows a paperclip + name.
+                                    message.attachmentName?.let { name ->
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Default.AttachFile,
+                                                contentDescription = null,
+                                                tint = textColor,
+                                                modifier = Modifier.size(14.dp),
+                                            )
+                                            Text(
+                                                text = name,
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = textColor,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                        Spacer(Modifier.height(4.dp))
+                                    }
+                                    Text(
+                                        text = message.text,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = textColor,
+                                    )
+                                }
                             }
                         }
                     }
                 }
 
                 MessageActionsMenu(
-                    expanded = menuOpen,
-                    onDismiss = { menuOpen = false },
+                    expanded = menuExpanded,
+                    onDismiss = { onMenuExpandedChange(false) },
                     onCopy = {
                         clipboard.setText(AnnotatedString(message.text))
-                        menuOpen = false
+                        onMenuExpandedChange(false)
                     },
                     onReply = {
                         onReply()
-                        menuOpen = false
+                        onMenuExpandedChange(false)
                     },
                     onShare = {
                         context.shareText(message.text)
-                        menuOpen = false
+                        onMenuExpandedChange(false)
                     },
                     onDelete = {
                         onDelete()
-                        menuOpen = false
+                        onMenuExpandedChange(false)
                     },
                 )
+            }
+
+            if (message.sources.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                SourcesSection(message.sources)
             }
 
             message.stats?.let { stats ->
                 Spacer(Modifier.height(4.dp))
                 StatsFooter(stats)
+            }
+        }
+    }
+}
+
+/**
+ * The body of an assistant reply: the reasoning (if any) in its own section, then the answer --
+ * plain text while streaming, rendered Markdown once complete.
+ */
+@Composable
+private fun AssistantContent(text: String, isStreaming: Boolean, showThinking: Boolean) {
+    if (!showThinking) {
+        // Reasoning is off for this chat: strip any residual <think> tags the model still emitted
+        // (Qwen3 can leave a stray closing tag) and show the rest as the answer -- never a card.
+        val answer = remember(text) { Reasoning.stripAllThinking(text) }
+        when {
+            answer.isEmpty() && isStreaming -> ThinkingIndicator()
+            answer.isEmpty() -> Unit
+            isStreaming -> Text(
+                text = answer,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            else -> Markdown(content = answer, modifier = Modifier.fillMaxWidth())
+        }
+        return
+    }
+
+    val split = remember(text) { Reasoning.split(text) }
+
+    // Only the opening <think> is here so far -- no reasoning, no answer yet. Keep the prefill dots.
+    if (split.thinking == null && split.answer.isEmpty()) {
+        ThinkingIndicator()
+        return
+    }
+
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        split.thinking?.let { thinking ->
+            ThinkingSection(text = thinking, streaming = isStreaming && split.answer.isEmpty())
+        }
+        if (split.answer.isNotEmpty()) {
+            if (isStreaming) {
+                Text(
+                    text = split.answer,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            } else {
+                Markdown(content = split.answer, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
+/**
+ * A reasoning model's `<think>` block, in its own collapsible section above the answer. Expanded
+ * while the model is still thinking (so the reasoning streams live), collapsed once the answer
+ * arrives -- the answer is the point, the reasoning unfolds on demand. A tap pins either state.
+ */
+@Composable
+private fun ThinkingSection(text: String, streaming: Boolean) {
+    // null follows the automatic state (open while thinking, closed once answered); a tap pins it.
+    var pinned by remember { mutableStateOf<Boolean?>(null) }
+    val expanded = pinned ?: streaming
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { pinned = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Default.Psychology,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = if (streaming) "Thinking…" else "Thinking",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+/** The web pages the model consulted this turn, as tappable citations that open in the browser. */
+@Composable
+private fun SourcesSection(sources: List<Source>) {
+    val uriHandler = LocalUriHandler.current
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            text = "Sources",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        sources.forEachIndexed { index, source ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { runCatching { uriHandler.openUri(source.url) } }
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    Icons.Default.Link,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = "${index + 1}. ${source.title}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
@@ -567,6 +828,12 @@ private fun ChatInputBar(
     isDictating: Boolean,
     isTranscribing: Boolean,
     micLevel: Float,
+    attachmentName: String?,
+    isExtractingFile: Boolean,
+    attachmentTruncated: Boolean,
+    attachmentError: String?,
+    onAttach: () -> Unit,
+    onRemoveAttachment: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onMic: () -> Unit,
@@ -589,11 +856,26 @@ private fun ChatInputBar(
                 ReplyPreview(message = replyingTo, onCancel = onCancelReply)
             }
 
+            if (attachmentName != null || isExtractingFile || attachmentError != null) {
+                AttachmentBar(
+                    name = attachmentName,
+                    extracting = isExtractingFile,
+                    truncated = attachmentTruncated,
+                    error = attachmentError,
+                    onRemove = onRemoveAttachment,
+                )
+            }
+
             Row(
                 Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+            // Attach a file. Its text is extracted and prepended to the next message's prompt.
+            IconButton(onClick = onAttach, enabled = !isGenerating && !isExtractingFile) {
+                Icon(Icons.Default.AttachFile, contentDescription = "Attach a file")
+            }
+
             OutlinedTextField(
                 value = draft,
                 onValueChange = onDraftChange,
@@ -603,7 +885,8 @@ private fun ChatInputBar(
                 // text does not race the user's own edits. Typeable at every other time, including
                 // while a reply streams in or the model is still loading.
                 enabled = !isTranscribing,
-                maxLines = 5,
+                // Roomy enough to see a pasted paragraph; it scrolls internally beyond that.
+                maxLines = 8,
                 shape = RoundedCornerShape(24.dp),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
             )
@@ -651,6 +934,69 @@ private fun ChatInputBar(
                 )
             }
             }
+            }
+        }
+    }
+}
+
+/** The file staged for the next message: its name (or a spinner while reading), or an error. */
+@Composable
+private fun AttachmentBar(
+    name: String?,
+    extracting: Boolean,
+    truncated: Boolean,
+    error: String?,
+    onRemove: () -> Unit,
+) {
+    if (error != null) {
+        Text(
+            text = error,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
+        )
+        return
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 8.dp, top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (extracting) {
+            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "Reading file…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Icon(
+                Icons.Default.AttachFile,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = name.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (truncated) {
+                    Text(
+                        "Only the start fits the model's context — the rest was left out.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.Close, contentDescription = "Remove file", Modifier.size(18.dp))
             }
         }
     }
@@ -923,3 +1269,32 @@ private const val SCROLL_TO_END_OVERSHOOT = 1_000_000f
 
 /** Warn only in the last 20% of the window, where the next turn could realistically overflow. */
 private const val CONTEXT_WARN_THRESHOLD = 0.8f
+
+/**
+ * Shown while a long conversation is folded into its summary, before the turn that triggered it.
+ *
+ * Says what is happening *and* that nothing was lost, because the visible effect is alarming
+ * otherwise: the model pauses for a whole extra turn before answering, and a user who has just
+ * watched a long chat go quiet will reasonably assume it has broken or forgotten them.
+ */
+@Composable
+private fun CompactingNotice(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(14.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = "Summarising this conversation so it keeps fitting -- nothing is lost.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}

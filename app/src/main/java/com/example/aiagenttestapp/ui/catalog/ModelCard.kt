@@ -34,10 +34,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,9 +49,17 @@ import com.example.aiagenttestapp.ui.components.formatBytesPerSecond
 import com.example.aiagenttestapp.ui.components.formatEta
 import com.example.aiagenttestapp.ui.components.palette
 
+/**
+ * Which destructive action the card is asking the user to confirm. Hoisted state: the caller owns
+ * the current value and the card only requests changes through `onPendingConfirmationChange`.
+ */
+enum class ModelCardConfirmation { DeleteDownload, RemoveCustom }
+
 @Composable
 fun ModelCard(
     entry: CatalogEntry,
+    pendingConfirmation: ModelCardConfirmation?,
+    onPendingConfirmationChange: (ModelCardConfirmation?) -> Unit,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
     onOpenChat: () -> Unit,
@@ -70,35 +74,32 @@ fun ModelCard(
 
     // Deleting a multi-gigabyte download that took twenty minutes over mobile data is not something
     // to do on a mis-tap, so it is confirmed. Re-downloading is possible but not cheap.
-    var confirmingDelete by remember { mutableStateOf(false) }
-    var confirmingRemove by remember { mutableStateOf(false) }
-
-    if (confirmingDelete) {
-        ConfirmDialog(
+    when (pendingConfirmation) {
+        ModelCardConfirmation.DeleteDownload -> ConfirmDialog(
             title = "Delete ${model.name}?",
             body = "This frees ${formatBytes(model.sizeBytes)}. The model stays in the catalogue " +
                 "and you can download it again.",
             confirmLabel = "Delete",
             onConfirm = {
-                confirmingDelete = false
+                onPendingConfirmationChange(null)
                 onDeleteDownload()
             },
-            onDismiss = { confirmingDelete = false },
+            onDismiss = { onPendingConfirmationChange(null) },
         )
-    }
 
-    if (confirmingRemove) {
-        ConfirmDialog(
+        ModelCardConfirmation.RemoveCustom -> ConfirmDialog(
             title = "Remove ${model.name}?",
             body = "This removes it from your catalogue and deletes any downloaded file. You can " +
                 "add it again from HuggingFace.",
             confirmLabel = "Remove",
             onConfirm = {
-                confirmingRemove = false
+                onPendingConfirmationChange(null)
                 onRemoveCustom()
             },
-            onDismiss = { confirmingRemove = false },
+            onDismiss = { onPendingConfirmationChange(null) },
         )
+
+        null -> {}
     }
 
     Card(
@@ -137,10 +138,12 @@ fun ModelCard(
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Tag(model.paramsLabel, emphasised = true)
                 Tag(model.quantization.label)
-                // A system-managed model has no download of ours to weigh; "0 B" would read as a
-                // bug, so say what it actually is instead.
-                if (model.systemManaged) Tag("Built-in") else Tag(formatBytes(model.sizeBytes))
+                Tag(formatBytes(model.sizeBytes))
                 if (model.multimodal) Tag("Vision")
+                // Its own tag rather than folded into "Vision": this is what decides whether the
+                // model can be picked to transcribe a voice note, so a user comparing models needs
+                // to see which ones offer it.
+                if (model.hearsAudio) Tag("Audio")
                 // Says the model can drive the app -- open screens, change settings. Worth its own
                 // badge because it is the difference between a chatbot and something that can act.
                 if (model.canCallTools) Tag("Tools")
@@ -191,9 +194,7 @@ fun ModelCard(
             //  - "Remove from catalogue" un-adds a model entirely, and only makes sense for models
             //    the user added themselves. The built-ins are the app's identity; letting someone
             //    delete "Gemma 4" out of the list with no way back would be a trap.
-            // System-managed models are "downloaded" but hold none of our disk -- offering to
-            // "Free 0 B" of an OS-owned model would be nonsense, so they get neither action.
-            val isDownloaded = entry.downloadState is DownloadState.Downloaded && !model.systemManaged
+            val isDownloaded = entry.downloadState is DownloadState.Downloaded
             if (isDownloaded || model.isCustom) {
                 Row(
                     Modifier.fillMaxWidth(),
@@ -201,7 +202,9 @@ fun ModelCard(
                 ) {
                     if (isDownloaded) {
                         TextButton(
-                            onClick = { confirmingDelete = true },
+                            onClick = {
+                                onPendingConfirmationChange(ModelCardConfirmation.DeleteDownload)
+                            },
                             modifier = Modifier.weight(1f),
                         ) {
                             Icon(
@@ -218,7 +221,9 @@ fun ModelCard(
 
                     if (model.isCustom) {
                         TextButton(
-                            onClick = { confirmingRemove = true },
+                            onClick = {
+                                onPendingConfirmationChange(ModelCardConfirmation.RemoveCustom)
+                            },
                             modifier = Modifier.weight(1f),
                         ) {
                             Icon(

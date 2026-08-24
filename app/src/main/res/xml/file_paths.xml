@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!--
+      Reports are rendered into the cache and shared from there. Cache rather than files: a shared
+      PDF is a copy handed to another app, not something this app needs to keep, and the system can
+      reclaim it whenever it likes. Nothing else in the app's storage is exposed.
+    -->
+    <cache-path name="reports" path="reports/" />
+</paths>

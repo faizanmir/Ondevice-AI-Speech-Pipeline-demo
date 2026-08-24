@@ -2,6 +2,8 @@ package com.example.aiagenttestapp.ui.hub
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,6 +26,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,9 +48,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.LoadState
+import androidx.paging.compose.LazyPagingItems
+import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.paging.compose.itemKey
 import com.example.aiagent.engine.core.ModelFormat
 import com.example.aiagenttestapp.ui.components.FitBadge
 import com.example.aiagenttestapp.ui.components.GridCardMinWidth
@@ -99,16 +108,17 @@ fun HubContent(
     onSignIn: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val repos = viewModel.repos.collectAsLazyPagingItems()
 
     Column(modifier) {
         OutlinedTextField(
                 value = state.query,
-                onValueChange = viewModel::onQueryChange,
+                onValueChange = { viewModel.onIntent(HubIntent.QueryChanged(it)) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
-                placeholder = { Text("Search models") },
+                placeholder = { Text("Search, or paste a HuggingFace link") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 singleLine = true,
                 shape = RoundedCornerShape(24.dp),
@@ -122,61 +132,215 @@ fun HubContent(
             ) {
                 FilterChip(
                     selected = state.format == ModelFormat.GGUF,
-                    onClick = { viewModel.onFormatChange(ModelFormat.GGUF) },
+                    onClick = { viewModel.onIntent(HubIntent.FormatChanged(ModelFormat.GGUF)) },
                     label = { Text("GGUF · llama.cpp") },
                 )
                 FilterChip(
                     selected = state.format == ModelFormat.LITERTLM,
-                    onClick = { viewModel.onFormatChange(ModelFormat.LITERTLM) },
+                    onClick = { viewModel.onIntent(HubIntent.FormatChanged(ModelFormat.LITERTLM)) },
                     label = { Text("LiteRT-LM") },
                 )
-                FilterChip(
-                    selected = state.format == ModelFormat.MNN,
-                    onClick = { viewModel.onFormatChange(ModelFormat.MNN) },
-                    label = { Text("MNN") },
-                )
             }
 
-            state.error?.let { error ->
-                Text(
-                    text = error,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(16.dp),
-                )
-            }
-
-            if (state.isSearching && state.results.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            } else if (state.hasSearched && state.results.isEmpty() && state.error == null) {
-                EmptyResults(state.format)
-            } else {
-                // One column on a phone, two or three on a tablet -- see GridCardMinWidth.
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = GridCardMinWidth),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    items(state.results, key = { it.id }) { repo ->
+            val ref = state.pastedRef
+            if (ref != null) {
+                // A pasted link/id opens that exact repo directly, bypassing the paged search.
+                state.error?.let { ErrorText(it) }
+                val opened = state.pastedRepo
+                if (opened != null && state.openRepo?.id == opened.id) {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(16.dp),
+                    ) {
                         RepoCard(
-                            repo = repo,
-                            isOpen = state.openRepo?.id == repo.id,
-                            isLoading = state.isLoadingRepo && state.openRepo?.id != repo.id,
-                            files = if (state.openRepo?.id == repo.id) state.openRepoFiles
-                            else emptyList(),
-                            onClick = { viewModel.openRepo(repo) },
-                            onAdd = viewModel::add,
-                            onRemove = viewModel::remove,
+                            repo = opened,
+                            isOpen = true,
+                            isLoading = false,
+                            files = state.openRepoFiles,
+                            onClick = { viewModel.onIntent(HubIntent.OpenRepo(opened)) },
+                            onAdd = { viewModel.onIntent(HubIntent.AddFile(it)) },
+                            onRemove = { viewModel.onIntent(HubIntent.RemoveFile(it)) },
                             isSignedIn = state.isSignedIn,
                             onSignIn = onSignIn,
                         )
                     }
+                } else {
+                    PastedRefCard(
+                        repoId = ref.repoId,
+                        isLoading = state.isLoadingRepo,
+                        onOpen = { viewModel.onIntent(HubIntent.OpenPastedRef) },
+                    )
                 }
+            } else {
+                state.error?.let { ErrorText(it) }
+                PagedRepoGrid(
+                    repos = repos,
+                    state = state,
+                    onOpen = { viewModel.onIntent(HubIntent.OpenRepo(it)) },
+                    onAdd = { viewModel.onIntent(HubIntent.AddFile(it)) },
+                    onRemove = { viewModel.onIntent(HubIntent.RemoveFile(it)) },
+                    onSignIn = onSignIn,
+                )
             }
         }
+}
+
+/**
+ * The paged repo grid: results stream in page by page as the user scrolls, with the Hub's cursor
+ * followed under the hood. Shows a centred spinner on first load, an inline spinner while appending,
+ * and a retry on either kind of failure.
+ */
+@Composable
+private fun PagedRepoGrid(
+    repos: LazyPagingItems<com.example.aiagenttestapp.data.HfRepo>,
+    state: HubUiState,
+    onOpen: (com.example.aiagenttestapp.data.HfRepo) -> Unit,
+    onAdd: (HubFile) -> Unit,
+    onRemove: (HubFile) -> Unit,
+    onSignIn: () -> Unit,
+) {
+    val refresh = repos.loadState.refresh
+    when {
+        refresh is LoadState.Loading && repos.itemCount == 0 ->
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+
+        refresh is LoadState.Error && repos.itemCount == 0 ->
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                ErrorRetry(
+                    message = refresh.error.message ?: "Could not reach HuggingFace",
+                    onRetry = { repos.retry() },
+                )
+            }
+
+        repos.itemCount == 0 -> EmptyResults(state.format)
+
+        else -> LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = GridCardMinWidth),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            items(count = repos.itemCount, key = repos.itemKey { it.id }) { index ->
+                repos[index]?.let { repo ->
+                    RepoCard(
+                        repo = repo,
+                        isOpen = state.openRepo?.id == repo.id,
+                        isLoading = state.isLoadingRepo && state.openRepo?.id != repo.id,
+                        files = if (state.openRepo?.id == repo.id) state.openRepoFiles else emptyList(),
+                        onClick = { onOpen(repo) },
+                        onAdd = onAdd,
+                        onRemove = onRemove,
+                        isSignedIn = state.isSignedIn,
+                        onSignIn = onSignIn,
+                    )
+                }
+            }
+
+            when (repos.loadState.append) {
+                is LoadState.Loading -> item(span = { GridItemSpan(maxLineSpan) }) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
+                    }
+                }
+
+                is LoadState.Error -> item(span = { GridItemSpan(maxLineSpan) }) {
+                    ErrorRetry(
+                        message = "Could not load more models",
+                        onRetry = { repos.retry() },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+
+                else -> Unit
+            }
+        }
+    }
+}
+
+/** A one-line error with a retry, for a failed search page. */
+@Composable
+private fun ErrorRetry(
+    message: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier.padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+            textAlign = TextAlign.Center,
+        )
+        OutlinedButton(onClick = onRetry) { Text("Try again") }
+    }
+}
+
+/** A repo-level error (e.g. a failed repo open), shown above the list. */
+@Composable
+private fun ErrorText(error: String) {
+    Text(
+        text = error,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.error,
+        modifier = Modifier.padding(16.dp),
+    )
+}
+
+/** Offers to open a repo the user pasted a link or `owner/repo` id for, straight from the Hub. */
+@Composable
+private fun PastedRefCard(
+    repoId: String,
+    isLoading: Boolean,
+    onOpen: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+        ),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "HuggingFace link",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                Text(
+                    repoId,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            if (isLoading) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            } else {
+                Button(onClick = onOpen) { Text("Open") }
+            }
+        }
+    }
 }
 
 @Composable
@@ -343,14 +507,6 @@ private fun EmptyResults(format: ModelFormat) {
 
                 ModelFormat.LITERTLM -> "No LiteRT-LM models matched. Google publishes these under " +
                     "the litert-community organisation, so the selection is much smaller than GGUF."
-
-                ModelFormat.MNN -> "No MNN models matched. Alibaba publishes these under the " +
-                    "taobao-mnn organisation -- try a Qwen family name."
-
-                // Unreachable -- the format tabs above never offer AICore -- but a composable
-                // should degrade to an explanation rather than crash if that ever changes.
-                ModelFormat.AICORE -> "Gemini Nano is built into Android and managed by the OS. " +
-                    "There is nothing to search for on HuggingFace."
             },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

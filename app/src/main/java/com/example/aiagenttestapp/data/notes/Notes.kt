@@ -3,11 +3,46 @@ package com.example.aiagenttestapp.data.notes
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverter
+import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
+import com.example.aiagenttestapp.functions.MarkerKind
 import kotlinx.coroutines.flow.Flow
+
+/**
+ * Where a note is in its life.
+ *
+ * Only exists because transcription moved into a background worker. Before that, a note appeared in the
+ * database exactly once, fully formed, at the moment the user pressed Save -- there was nothing to
+ * describe. Now a recording is durable the instant it stops, so the row is there while the work is
+ * still happening and the list has to be honest about what the user is looking at.
+ */
+enum class NoteStatus {
+    /** Audio captured, the worker is transcribing it. Nothing to read yet. */
+    Transcribing,
+
+    /** Transcript ready, waiting for the user to check it and summarise. */
+    Draft,
+
+    /** The user reviewed and saved it. */
+    Ready,
+}
+
+/** Whether a finding came from a marker the user spoke, or from the model reading the transcript. */
+enum class FindingSource {
+    /** The user explicitly tagged it. Guaranteed to survive summarisation. */
+    Tagged,
+
+    /** The model found it in untagged text. Worth showing, worth doubting. */
+    Inferred,
+}
 
 /**
  * A saved note: what was said, and what the model made of it.
@@ -24,7 +59,12 @@ data class Note(
 
     val title: String,
 
-    /** The speech-to-text output, as the user finally edited it. */
+    /**
+     * The speech-to-text output, as the user finally edited it.
+     *
+     * Carries speaker prefixes and tag markers in the format [TranscriptMarkup] defines, so a
+     * transcript is self-describing: who said what, and which parts the user flagged.
+     */
     val transcript: String,
 
     /** The model's summary, as the user finally edited it. */
@@ -37,6 +77,73 @@ data class Note(
 
     /** How long the recording was, in milliseconds. */
     val durationMillis: Long,
+
+    /**
+     * ISO 639 code of the language the recogniser heard ("de", "en"), or null for notes saved
+     * before this existed and recordings where no language was reported. The summary was written
+     * in this language.
+     */
+    val language: String? = null,
+
+    val status: NoteStatus = NoteStatus.Ready,
+
+    /**
+     * Where the captured audio sits while the note is being transcribed; null once it is not needed.
+     *
+     * On the row rather than only in the worker's input data because *deleting* has to clean it up. A
+     * note discarded mid-transcription would otherwise leave a hundred megabytes of WAV in the cache
+     * with nothing left pointing at it.
+     */
+    val audioPath: String? = null,
+
+    /**
+     * 0..1 transcription progress.
+     *
+     * Persisted rather than read from WorkManager's in-memory progress, which is lost when the process
+     * dies -- precisely the case a durable worker exists to survive.
+     */
+    val transcribeProgress: Float = 0f,
+
+    /** Why transcription failed, when it did. Null otherwise. */
+    val error: String? = null,
+)
+
+/**
+ * A non-conformity or an action, extracted from a note.
+ *
+ * Stored structurally as well as inside the summary text so the list can count them, and so a tagged
+ * item stays attributable to whoever spoke it. [source] is what lets the UI distinguish "you said
+ * this" from "the model thinks this" -- a distinction worth keeping in an inspection record.
+ */
+@Entity(
+    tableName = "note_findings",
+    foreignKeys = [
+        ForeignKey(
+            entity = Note::class,
+            parentColumns = ["id"],
+            childColumns = ["noteId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("noteId")],
+)
+data class NoteFinding(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+
+    val noteId: Long,
+
+    val kind: MarkerKind,
+
+    val text: String,
+
+    val source: FindingSource,
+
+    /** Who it belongs to -- the speaker whose turn the marker fell in, when known. */
+    val owner: String? = null,
+
+    /** Display order, so a re-read reproduces the order the model reported. */
+    val orderIndex: Int = 0,
 )
 
 @Dao
@@ -49,14 +156,250 @@ interface NoteDao {
     @Query("SELECT * FROM notes WHERE id = :id")
     suspend fun byId(id: Long): Note?
 
+    @Query("SELECT * FROM notes WHERE id = :id")
+    fun observeById(id: Long): Flow<Note?>
+
     @Insert
     suspend fun insert(note: Note): Long
 
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun delete(id: Long)
+
+    @Query(
+        """
+        UPDATE notes SET transcript = :transcript, durationMillis = :durationMillis,
+            language = :language, status = :status, transcribeProgress = 1.0,
+            audioPath = NULL, error = NULL
+        WHERE id = :id
+        """,
+    )
+    suspend fun finishTranscription(
+        id: Long,
+        transcript: String,
+        durationMillis: Long,
+        language: String?,
+        status: NoteStatus = NoteStatus.Draft,
+    )
+
+    @Query("UPDATE notes SET transcribeProgress = :progress WHERE id = :id")
+    suspend fun updateProgress(id: Long, progress: Float)
+
+    /**
+     * Every recording some note still points at.
+     *
+     * The complement of this set is what
+     * [NoteTranscribeWorker.recoverOrphanedAudio][com.example.aiagenttestapp.data.notes.NoteTranscribeWorker.Companion.recoverOrphanedAudio]
+     * adopts: a WAV nothing references is a recording that never reached the row that would have
+     * given it a name.
+     */
+    @Query("SELECT audioPath FROM notes WHERE audioPath IS NOT NULL")
+    suspend fun allAudioPaths(): List<String>
+
+    /**
+     * Records a transcription failure, **keeping** `audioPath`.
+     *
+     * It used to null the path, which quietly made every failure terminal: the WAV and its
+     * checkpoint were both still on disk (`doWork` deletes them only on success) but nothing pointed
+     * at them any more, so the resume machinery could never engage, [retryTranscription] had nothing
+     * to work with, and the file was orphaned until the OS cleared the cache. Keeping the path is
+     * what makes a failure recoverable -- and it also lets `delete` take the audio with the note.
+     */
+    @Query("UPDATE notes SET status = :status, error = :error WHERE id = :id")
+    suspend fun failTranscription(id: Long, error: String, status: NoteStatus = NoteStatus.Draft)
+
+    /**
+     * Puts a failed note back in the queue. No-op unless its audio is still on disk.
+     *
+     * The `audioPath IS NOT NULL` guard is the whole safety story: a note whose recording is gone
+     * would otherwise flip to "Transcribing…" and stick there, which the codebase already treats as
+     * worse than an error the user can see.
+     */
+    @Query(
+        """
+        UPDATE notes SET status = :status, error = NULL, transcribeProgress = 0.0
+        WHERE id = :id AND audioPath IS NOT NULL
+        """,
+    )
+    suspend fun retryTranscription(id: Long, status: NoteStatus = NoteStatus.Transcribing)
+
+    /** Commits the user's reviewed note. */
+    @Query(
+        """
+        UPDATE notes SET title = :title, transcript = :transcript, summary = :summary,
+            summarisedBy = :summarisedBy, status = :status, audioPath = NULL
+        WHERE id = :id
+        """,
+    )
+    suspend fun save(
+        id: Long,
+        title: String,
+        transcript: String,
+        summary: String,
+        summarisedBy: String,
+        status: NoteStatus = NoteStatus.Ready,
+    )
+
+    /**
+     * Notes left mid-transcription by a process that died without a worker to resume them.
+     *
+     * Used at startup to mark them failed rather than leave a row spinning for ever. A note stuck on
+     * "Transcribing…" with nothing running is worse than an honest error, because the user has no way
+     * to tell the difference or to act on it.
+     */
+    @Query("SELECT * FROM notes WHERE status = :status")
+    suspend fun withStatus(status: NoteStatus = NoteStatus.Transcribing): List<Note>
 }
 
-@Database(entities = [Note::class], version = 1, exportSchema = false)
+@Dao
+interface NoteFindingDao {
+
+    @Query("SELECT * FROM note_findings WHERE noteId = :noteId ORDER BY orderIndex ASC")
+    fun observeForNote(noteId: Long): Flow<List<NoteFinding>>
+
+    @Query("SELECT * FROM note_findings WHERE noteId = :noteId ORDER BY orderIndex ASC")
+    suspend fun forNote(noteId: Long): List<NoteFinding>
+
+    @Query("SELECT * FROM note_findings ORDER BY orderIndex ASC")
+    fun observeAll(): Flow<List<NoteFinding>>
+
+    @Insert
+    suspend fun insertAll(findings: List<NoteFinding>)
+
+    @Query("DELETE FROM note_findings WHERE noteId = :noteId")
+    suspend fun deleteForNote(noteId: Long)
+}
+
+/** Stores enums as their name. */
+object NotesConverters {
+
+    @TypeConverter
+    fun statusToString(value: NoteStatus): String = value.name
+
+    @TypeConverter
+    fun stringToStatus(value: String): NoteStatus =
+        NoteStatus.entries.firstOrNull { it.name == value } ?: NoteStatus.Ready
+
+    @TypeConverter
+    fun kindToString(value: MarkerKind): String = value.name
+
+    @TypeConverter
+    fun stringToKind(value: String): MarkerKind =
+        MarkerKind.entries.firstOrNull { it.name == value } ?: MarkerKind.NonConformity
+
+    @TypeConverter
+    fun sourceToString(value: FindingSource): String = value.name
+
+    @TypeConverter
+    fun stringToSource(value: String): FindingSource =
+        FindingSource.entries.firstOrNull { it.name == value } ?: FindingSource.Inferred
+}
+
+@Database(
+    entities = [Note::class, NoteFinding::class],
+    version = 4,
+    exportSchema = true,
+)
+@TypeConverters(NotesConverters::class)
 abstract class NotesDatabase : RoomDatabase() {
     abstract fun noteDao(): NoteDao
+    abstract fun noteFindingDao(): NoteFindingDao
+
+    companion object {
+        /** v1 -> v2: notes gained the detected-language column. Nullable, so old rows read null. */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE notes ADD COLUMN language TEXT")
+            }
+        }
+
+        /**
+         * v2 -> v3: speakers, findings, and the lifecycle columns background transcription needs.
+         *
+         * Left exactly as it shipped, including the two speaker tables that [MIGRATION_3_4] goes on
+         * to drop. A migration describes a step that already happened on real devices; rewriting one
+         * to match the current schema is how a device that is actually on v2 ends up taking a path
+         * nobody ever tested.
+         */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Existing notes are finished notes: Ready, no audio, fully transcribed.
+                db.execSQL(
+                    "ALTER TABLE notes ADD COLUMN status TEXT NOT NULL DEFAULT 'Ready'",
+                )
+                db.execSQL("ALTER TABLE notes ADD COLUMN audioPath TEXT")
+                db.execSQL(
+                    "ALTER TABLE notes ADD COLUMN transcribeProgress REAL NOT NULL DEFAULT 0.0",
+                )
+                db.execSQL("ALTER TABLE notes ADD COLUMN error TEXT")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `note_findings` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `noteId` INTEGER NOT NULL,
+                        `kind` TEXT NOT NULL,
+                        `text` TEXT NOT NULL,
+                        `source` TEXT NOT NULL,
+                        `owner` TEXT,
+                        `orderIndex` INTEGER NOT NULL,
+                        FOREIGN KEY(`noteId`) REFERENCES `notes`(`id`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_note_findings_noteId` " +
+                        "ON `note_findings` (`noteId`)",
+                )
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `speakers` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `createdAtMillis` INTEGER NOT NULL,
+                        `embeddingModelId` TEXT NOT NULL,
+                        `dim` INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_speakers_name` ON `speakers` (`name`)",
+                )
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `speaker_samples` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `speakerId` INTEGER NOT NULL,
+                        `embedding` BLOB NOT NULL,
+                        `durationMillis` INTEGER NOT NULL,
+                        `createdAtMillis` INTEGER NOT NULL,
+                        FOREIGN KEY(`speakerId`) REFERENCES `speakers`(`id`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_speaker_samples_speakerId` " +
+                        "ON `speaker_samples` (`speakerId`)",
+                )
+            }
+        }
+
+        /**
+         * v3 -> v4: drops the speaker tables along with speaker identification itself.
+         *
+         * Enrolled voiceprints go with them, and there is nothing to preserve them into -- nothing
+         * reads an embedding any more. `IF EXISTS` because a device coming from v2 runs
+         * [MIGRATION_2_3] first and one coming from a fresh install never had them.
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Samples first: they carry the foreign key into `speakers`.
+                db.execSQL("DROP TABLE IF EXISTS `speaker_samples`")
+                db.execSQL("DROP TABLE IF EXISTS `speakers`")
+            }
+        }
+    }
 }

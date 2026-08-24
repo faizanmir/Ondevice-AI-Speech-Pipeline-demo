@@ -61,8 +61,22 @@ internal object LlamaNative {
     /** One decode step. Null ends the stream; "" means "partial UTF-8, keep going". */
     external fun nativeNextToken(handle: Long): String?
 
+    /**
+     * Constrains decoding to a GBNF [grammar], or lifts the constraint when it is null. Returns
+     * false if the grammar does not parse, leaving the sampler exactly as it was.
+     *
+     * [triggerPattern] is a regex over the generated text; until it matches, decoding is
+     * unconstrained, and the grammar then takes over from the start of the pattern's first capture
+     * group. Null constrains from the first token, which for this app's prompts is almost always
+     * wrong -- it would forbid a reasoning block before the answer.
+     */
+    external fun nativeSetGrammar(handle: Long, grammar: String?, triggerPattern: String?): Boolean
+
     external fun nativeCancel(handle: Long)
     external fun nativeResetContext(handle: Long)
+
+    /** Ends the turn but keeps the KV cache, so the next prompt can reuse its shared prefix. */
+    external fun nativeResetTurnKeepCache(handle: Long)
     external fun nativeContextUsed(handle: Long): Int
     external fun nativeContextSize(handle: Long): Int
     external fun nativeFreeSession(handle: Long)
