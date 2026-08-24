@@ -33,6 +33,9 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -48,19 +51,26 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.aiagent.engine.core.ModelSpec
+import com.example.aiagenttestapp.ui.audit.shareAuditReport
+import com.example.aiagenttestapp.ui.components.SwipeAction
+import com.example.aiagenttestapp.ui.components.SwipeActionTone
+import com.example.aiagenttestapp.ui.components.SwipeRevealBox
 import com.example.aiagenttestapp.ui.components.formatDuration
 import com.example.aiagenttestapp.ui.components.readableWidth
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,6 +81,8 @@ fun HistoryScreen(
     onGetModels: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenNotes: () -> Unit,
+    onOpenBenchmark: () -> Unit,
+    onOpenSpeakers: () -> Unit,
     onOpenAudit: (AuditMode) -> Unit,
     onOpenAuditReport: (Long) -> Unit,
 ) {
@@ -120,6 +132,18 @@ fun HistoryScreen(
                     }
                     IconButton(onClick = onOpenNotes) {
                         Icon(Icons.Default.Mic, contentDescription = "Voice notes")
+                    }
+                    // Straight to the rig rather than via Voice notes. The benchmark is run in
+                    // sittings of a dozen comparisons, and burying it one screen deep was enough
+                    // friction to keep sending the work back to a laptop.
+                    IconButton(onClick = onOpenBenchmark) {
+                        Icon(Icons.Default.Speed, contentDescription = "STT benchmark")
+                    }
+                    // Enrolment is a thing people do once, ahead of the recording it matters for --
+                    // so it needs to be findable *before* anyone has a transcript to fix, which a
+                    // link from the transcript screen would not be.
+                    IconButton(onClick = onOpenSpeakers) {
+                        Icon(Icons.Default.RecordVoiceOver, contentDescription = "Speakers")
                     }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
@@ -310,9 +334,36 @@ private fun AuditHistoryRow(
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    SwipeRevealBox(
+        modifier = Modifier.readableWidth(),
+        actions = buildList {
+            // Share only once there is a report to render. Offering it on a queued or failed
+            // document would put a button behind the row that can only ever apologise.
+            if (doc.result != null) {
+                add(
+                    SwipeAction(
+                        label = "Share",
+                        icon = Icons.Default.Share,
+                        onClick = { scope.launch { shareAuditReport(context, doc, modelName) } },
+                    ),
+                )
+            }
+            add(
+                SwipeAction(
+                    label = "Delete",
+                    icon = Icons.Default.DeleteOutline,
+                    tone = SwipeActionTone.Destructive,
+                    onClick = onDelete,
+                ),
+            )
+        },
+    ) {
     Card(
         modifier = Modifier
-            .readableWidth()
+            .fillMaxWidth()
             .clickable(enabled = doc.status == AuditStatus.DONE, onClick = onClick),
     ) {
         androidx.compose.foundation.layout.Row(
@@ -353,6 +404,9 @@ private fun AuditHistoryRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            // Kept alongside the swipe tray rather than replaced by it. A swipe is invisible until
+            // someone tries it, so the one action that must never be undiscoverable stays on the
+            // row; the tray is the shortcut, not the only way in.
             IconButton(onClick = onDelete) {
                 Icon(
                     Icons.Default.DeleteOutline,
@@ -363,6 +417,7 @@ private fun AuditHistoryRow(
             }
         }
     }
+    }
 }
 
 private fun auditSubtitle(doc: AuditDocument): String {
@@ -372,15 +427,26 @@ private fun auditSubtitle(doc: AuditDocument): String {
     return when (doc.status) {
         AuditStatus.QUEUED -> "$kind · queued"
         AuditStatus.ANALYSING -> when {
-            doc.summarising -> "$kind · summarising…"
+            // "Summarising" only when one is actually being written. A run with the summary turned
+            // off still passes through the same reduce phase -- merging findings -- and naming it
+            // after a stage that was skipped describes work nobody asked for.
+            doc.summarising && doc.includeSummary -> "$kind · summarising…"
+            doc.summarising -> "$kind · merging findings…"
             doc.chunkCount > 1 -> "$kind · reading ${doc.currentSection}/${doc.chunkCount}"
             else -> "$kind · reading…"
         }
         AuditStatus.DONE -> doc.result?.let { result ->
             buildString {
+                // A quick report states its one conclusion; there is nothing to count, and the key
+                // points this used to count are no longer produced.
                 append(
-                    if (doc.mode == AuditMode.QUICK) "$kind · ${result.keyPoints.size} key points"
-                    else "$kind · ${result.nonConformities.size} non-conformities",
+                    if (doc.mode == AuditMode.QUICK) {
+                        val conclusion = result.protocolElements.firstOrNull()?.result?.label
+                            ?: "no clear result"
+                        "$kind · $conclusion"
+                    } else {
+                        "$kind · ${result.nonConformities.size} non-conformities"
+                    },
                 )
                 append(" · ${result.actions.size} actions")
                 // Incompleteness travels with the summary line: a row that looks like every other
@@ -414,9 +480,20 @@ private fun HistoryRow(
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    SwipeRevealBox(
+        modifier = Modifier.readableWidth(),
+        actions = listOf(
+            SwipeAction(
+                label = "Delete",
+                icon = Icons.Default.DeleteOutline,
+                tone = SwipeActionTone.Destructive,
+                onClick = onDelete,
+            ),
+        ),
+    ) {
     Card(
         modifier = Modifier
-            .readableWidth()
+            .fillMaxWidth()
             .clickable(onClick = onClick),
     ) {
         androidx.compose.foundation.layout.Row(
@@ -448,5 +525,6 @@ private fun HistoryRow(
                 )
             }
         }
+    }
     }
 }

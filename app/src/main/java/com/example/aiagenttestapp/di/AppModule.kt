@@ -24,12 +24,14 @@ import com.example.aiagenttestapp.ui.chat.RealChatResidency
 import com.example.aiagenttestapp.ui.chat.RealChatStore
 import com.example.aiagenttestapp.functions.AppFunctionRegistry
 import com.example.aiagenttestapp.functions.RealAppFunctionDeps
-import com.example.aiagenttestapp.data.notes.SpeakerDao
+import com.example.aiagenttestapp.data.speakers.SpeakerDao
 import com.example.aiagenttestapp.data.speakers.SpeakerRepository
 import com.example.aiagenttestapp.stt.AudioRecorder
 import com.example.aiagenttestapp.stt.KeywordDetector
 import com.example.aiagenttestapp.stt.SpeechModelRepository
 import com.example.aiagenttestapp.stt.SpeechRecognizer
+import com.example.aiagenttestapp.stt.Punctuator
+import com.example.aiagenttestapp.stt.StreamingRecognizer
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -149,7 +151,21 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun speechRecognizer() = SpeechRecognizer()
+    fun speechRecognizer(settings: SettingsStore) = SpeechRecognizer(settings)
+
+    /**
+     * The streaming counterpart. A singleton for the same reason as the offline one: it holds a
+     * native model, and the record screen's live transcript and the transcription worker must share
+     * one copy rather than each loading their own.
+     */
+    @Provides
+    @Singleton
+    fun streamingRecognizer(settings: SettingsStore) = StreamingRecognizer(settings)
+
+    /** Restores capitals and full stops on streaming transcripts. Optional; a no-op without its model. */
+    @Provides
+    @Singleton
+    fun punctuator(settings: SettingsStore) = Punctuator(settings)
 
     /** Spots spoken markers and commands during a recording, far more cheaply than re-running ASR. */
     @Provides
@@ -162,7 +178,7 @@ object AppModule {
     fun speakerRepository(dao: SpeakerDao, audioModels: AudioModelRepository) =
         SpeakerRepository(dao, audioModels)
 
-    /** Optional bundles: the speaker-identification models and the keyword-spotting model. */
+    /** Optional bundles: speaker identification, keyword spotting and punctuation. */
     @Provides
     @Singleton
     fun audioModelRepository(@ApplicationContext context: Context) = AudioModelRepository(context)

@@ -98,10 +98,20 @@ object SpokenKeywords {
 
         KeywordEntry(ACTION_START, "start action item", "▁START ▁A CTION ▁IT E M"),
         KeywordEntry(ACTION_START, "begin action item", "▁BE G IN ▁A CTION ▁IT E M"),
-        KeywordEntry(ACTION_START, "start action", "▁START ▁A CTION", threshold = 0.45f),
 
         KeywordEntry(ACTION_END, "end action item", "▁EN D ▁A CTION ▁IT E M"),
-        KeywordEntry(ACTION_END, "end action", "▁EN D ▁A CTION", threshold = 0.45f),
+
+        // The bare "start action" / "end action" forms are gone, and the reason is measured rather
+        // than theoretical. On device (2026-08-13) a recording containing "start non conformity ...
+        // end non conformity ... start action item ... end action item" produced exactly two hits,
+        // both ACTION_*, and the first landed where a non-conformity phrase was spoken. Two tokens
+        // ("▁START ▁A CTION") are simply not enough acoustic evidence, and a raised per-keyword
+        // threshold did not save them -- so the marker the user actually spoke was never recorded
+        // while one they did not was.
+        //
+        // The four-token "action item" forms stay, and they are what the on-screen hint tells people
+        // to say. A marker phrase that has to be said in full is a far smaller cost than a marker
+        // that fires on the wrong words.
 
         KeywordEntry("CMD_OPEN_SETTINGS", "open settings", "▁O P EN ▁SE T T ING S"),
         KeywordEntry("CMD_OPEN_MODELS", "open models", "▁O P EN ▁MO D EL S"),

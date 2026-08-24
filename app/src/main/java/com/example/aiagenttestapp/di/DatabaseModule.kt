@@ -5,12 +5,17 @@ import androidx.room.Room
 import com.example.aiagenttestapp.data.audit.AuditDao
 import com.example.aiagenttestapp.data.audit.AuditDatabase
 import com.example.aiagenttestapp.data.audit.AuditQueue
+import com.example.aiagenttestapp.data.benchmark.BenchmarkClipDao
+import com.example.aiagenttestapp.data.benchmark.BenchmarkDatabase
+import com.example.aiagenttestapp.data.benchmark.BenchmarkRunDao
 import com.example.aiagenttestapp.data.chat.ChatDao
 import com.example.aiagenttestapp.data.chat.ChatDatabase
 import com.example.aiagenttestapp.data.notes.NoteDao
 import com.example.aiagenttestapp.data.notes.NoteFindingDao
 import com.example.aiagenttestapp.data.notes.NotesDatabase
-import com.example.aiagenttestapp.data.notes.SpeakerDao
+import com.example.aiagenttestapp.data.speakers.DiarizedDao
+import com.example.aiagenttestapp.data.speakers.SpeakerDao
+import com.example.aiagenttestapp.data.speakers.SpeakerDatabase
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -19,8 +24,11 @@ import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
 /**
- * Three separate Room databases, deliberately. Audit, chat and notes each own their schema, so a
- * migration in one never forces a version bump on the others.
+ * Five separate Room databases, deliberately. Audit, chat, notes, benchmark and speakers each own
+ * their schema, so a migration in one never forces a version bump on the others.
+ *
+ * Speakers is the newest and the one that proves the rule: its two tables used to sit in `notes.db`,
+ * and they were deleted along with a rework of the notes schema they had nothing to do with.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -36,6 +44,7 @@ object DatabaseModule {
                 AuditDatabase.MIGRATION_3_4,
                 AuditDatabase.MIGRATION_4_5,
                 AuditDatabase.MIGRATION_5_6,
+                AuditDatabase.MIGRATION_6_7,
             )
             .build()
 
@@ -52,7 +61,11 @@ object DatabaseModule {
     @Singleton
     fun notesDatabase(@ApplicationContext context: Context): NotesDatabase =
         Room.databaseBuilder(context, NotesDatabase::class.java, "notes.db")
-            .addMigrations(NotesDatabase.MIGRATION_1_2, NotesDatabase.MIGRATION_2_3)
+            .addMigrations(
+                NotesDatabase.MIGRATION_1_2,
+                NotesDatabase.MIGRATION_2_3,
+                NotesDatabase.MIGRATION_3_4,
+            )
             .build()
 
     @Provides
@@ -65,7 +78,28 @@ object DatabaseModule {
 
     @Provides
     @Singleton
-    fun speakerDao(database: NotesDatabase): SpeakerDao = database.speakerDao()
+    fun speakerDatabase(@ApplicationContext context: Context): SpeakerDatabase =
+        Room.databaseBuilder(context, SpeakerDatabase::class.java, "speakers.db").build()
+
+    @Provides
+    fun speakerDao(database: SpeakerDatabase): SpeakerDao = database.speakerDao()
+
+    @Provides
+    fun diarizedDao(database: SpeakerDatabase): DiarizedDao = database.diarizedDao()
+
+    @Provides
+    @Singleton
+    fun benchmarkDatabase(@ApplicationContext context: Context): BenchmarkDatabase =
+        Room.databaseBuilder(context, BenchmarkDatabase::class.java, "benchmark.db")
+            .addMigrations(BenchmarkDatabase.MIGRATION_1_2).build()
+
+    @Provides
+    @Singleton
+    fun benchmarkClipDao(database: BenchmarkDatabase): BenchmarkClipDao = database.clipDao()
+
+    @Provides
+    @Singleton
+    fun benchmarkRunDao(database: BenchmarkDatabase): BenchmarkRunDao = database.runDao()
 
     @Provides
     @Singleton

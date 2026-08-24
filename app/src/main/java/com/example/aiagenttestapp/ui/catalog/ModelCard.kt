@@ -140,6 +140,10 @@ fun ModelCard(
                 Tag(model.quantization.label)
                 Tag(formatBytes(model.sizeBytes))
                 if (model.multimodal) Tag("Vision")
+                // Its own tag rather than folded into "Vision": this is what decides whether the
+                // model can be picked to transcribe a voice note, so a user comparing models needs
+                // to see which ones offer it.
+                if (model.hearsAudio) Tag("Audio")
                 // Says the model can drive the app -- open screens, change settings. Worth its own
                 // badge because it is the difference between a chatbot and something that can act.
                 if (model.canCallTools) Tag("Tools")

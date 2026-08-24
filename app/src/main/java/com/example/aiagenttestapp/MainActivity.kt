@@ -32,6 +32,12 @@ import com.example.aiagenttestapp.ui.audit.AuditReportIntent
 import com.example.aiagenttestapp.ui.audit.AuditReportScreen
 import com.example.aiagenttestapp.ui.audit.AuditReportViewModel
 import com.example.aiagenttestapp.ui.audit.AuditScreen
+import com.example.aiagenttestapp.ui.benchmark.BenchmarkScreen
+import com.example.aiagenttestapp.ui.benchmark.BenchmarkViewModel
+import com.example.aiagenttestapp.ui.speakers.DiarizeScreen
+import com.example.aiagenttestapp.ui.speakers.DiarizeViewModel
+import com.example.aiagenttestapp.ui.speakers.SpeakersScreen
+import com.example.aiagenttestapp.ui.speakers.SpeakersViewModel
 import com.example.aiagenttestapp.ui.audit.AuditViewModel
 import com.example.aiagenttestapp.ui.catalog.CatalogScreen
 import com.example.aiagenttestapp.ui.catalog.CatalogViewModel
@@ -51,8 +57,6 @@ import com.example.aiagenttestapp.ui.notes.RecordIntent
 import com.example.aiagenttestapp.ui.notes.RecordScreen
 import com.example.aiagenttestapp.ui.notes.RecordViewModel
 import com.example.aiagenttestapp.ui.settings.SettingsScreen
-import com.example.aiagenttestapp.ui.speakers.SpeakersScreen
-import com.example.aiagenttestapp.ui.speakers.SpeakersViewModel
 import com.example.aiagenttestapp.ui.splash.SplashScreen
 import com.example.aiagenttestapp.ui.splash.SplashViewModel
 import com.example.aiagenttestapp.ui.theme.AIAgentTestAppTheme
@@ -118,7 +122,9 @@ private object Routes {
     const val SETTINGS = "settings"
     const val HUB = "hub"
     const val NOTES = "notes"
+    const val BENCHMARK = "benchmark"
     const val SPEAKERS = "speakers"
+    const val DIARIZE = "diarize"
 
     /**
      * The recorder, optionally resuming a note the background worker already transcribed.
@@ -355,6 +361,39 @@ private fun AppNavHost(
                 // A note whose transcript is ready but unreviewed reopens the recorder at the review
                 // step, rather than duplicating that whole flow somewhere else.
                 onOpenDraft = { noteId -> navController.navigate(Routes.record(noteId)) },
+                onOpenBenchmark = { navController.navigate(Routes.BENCHMARK) },
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(Routes.BENCHMARK) {
+            val benchmarkViewModel: BenchmarkViewModel = hiltViewModel()
+            BenchmarkScreen(
+                viewModel = benchmarkViewModel,
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(Routes.DIARIZE) {
+            val diarizeViewModel: DiarizeViewModel = hiltViewModel()
+            DiarizeScreen(
+                viewModel = diarizeViewModel,
+                // Enrolment is one tap further in rather than the landing screen: you enrol once,
+                // and you come back to attribute recordings many times.
+                onOpenSpeakers = { navController.navigate(Routes.SPEAKERS) },
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(Routes.SPEAKERS) {
+            val speakersViewModel: SpeakersViewModel = hiltViewModel()
+            SpeakersScreen(
+                viewModel = speakersViewModel,
+                // Enrolment cannot start until the speaker models are on the device, and the only
+                // place to fetch them is Settings -- so the screen needs a way there rather than a
+                // dead end telling the user to go and find it.
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 onBack = { navController.popBackStack() },
             )
         }
@@ -398,15 +437,6 @@ private fun AppNavHost(
             )
         }
 
-        composable(Routes.SPEAKERS) {
-            val speakersViewModel: SpeakersViewModel = hiltViewModel()
-            SpeakersScreen(
-                viewModel = speakersViewModel,
-                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
-                onBack = { navController.popBackStack() },
-            )
-        }
-
         composable(Routes.HISTORY) {
             val historyViewModel: HistoryViewModel = hiltViewModel()
             HistoryScreen(
@@ -424,6 +454,8 @@ private fun AppNavHost(
                 onGetModels = { navController.navigate(Routes.CATALOG) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 onOpenNotes = { navController.navigate(Routes.NOTES) },
+                onOpenBenchmark = { navController.navigate(Routes.BENCHMARK) },
+                onOpenSpeakers = { navController.navigate(Routes.DIARIZE) },
                 // Audit runs on the active model (the one new chats use). With none chosen yet, the
                 // catalogue is where you pick and download one.
                 onOpenAudit = { mode ->
@@ -445,7 +477,6 @@ private fun AppNavHost(
                 speechModels = speechModels.available,
                 audioModels = audioModels,
                 onOpenModels = { navController.navigate(Routes.CATALOG) },
-                onOpenSpeakers = { navController.navigate(Routes.SPEAKERS) },
                 onBack = { navController.popBackStack() },
             )
         }

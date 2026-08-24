@@ -34,13 +34,19 @@ import com.example.aiagenttestapp.ui.components.formatBytes
  * intent that should survive a failed or cancelled download, so the toggle is not wired to disk state
  * -- otherwise cancelling a transfer would silently switch the feature back off and the user would be
  * left wondering why their setting did not stick.
+ *
+ * [onEnabledChange] is null for a bundle with no feature toggle behind it, and then no switch is
+ * drawn. Speaker identification is the case: there is no setting to turn it on, because having the
+ * models *is* the enablement -- the speaker screen requires them and says so. Rendering a switch
+ * there would invent a preference the app does not store, and one that could sit "off" over a
+ * downloaded model for no reason the user could act on.
  */
 @Composable
 fun AudioBundleRow(
     repository: AudioModelRepository,
     bundle: AudioModelBundle,
-    enabled: Boolean,
-    onEnabledChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
+    onEnabledChange: ((Boolean) -> Unit)? = null,
 ) {
     val state by repository.state(bundle).collectAsStateWithLifecycle()
 
@@ -51,7 +57,9 @@ fun AudioBundleRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(bundle.label, style = MaterialTheme.typography.bodyMedium)
-            Switch(checked = enabled, onCheckedChange = onEnabledChange)
+            if (onEnabledChange != null) {
+                Switch(checked = enabled, onCheckedChange = onEnabledChange)
+            }
         }
 
         Text(

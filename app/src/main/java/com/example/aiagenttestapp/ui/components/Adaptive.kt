@@ -22,8 +22,12 @@ import androidx.compose.ui.unit.dp
  *    card lists (catalogue, notes, model markets) into grids that resolve to one column on a
  *    phone -- pixel-identical to the old list -- and two or three columns on a tablet.
  *
- * If a real two-pane layout (history beside chat) is ever wanted, that is the point to bring in
- * material3-adaptive; for sizing, constraints age better than breakpoints.
+ * Settings is the one screen that goes further, and it is worth saying why the rule bent there
+ * rather than broke. A list-detail layout is not a sizing question -- it needs to know whether both
+ * panes *fit at once*, which no constraint on a single column can express -- so it uses
+ * material3-adaptive's `ListDetailPaneScaffold`, exactly as this note once said the first real
+ * two-pane layout should. Everything else still sizes itself with the two tools above; reach for the
+ * scaffold only when a screen genuinely has two levels to show side by side, not to make one wider.
  */
 
 /** Wider than this, a line of body text or a full-width card stops being comfortable to scan. */

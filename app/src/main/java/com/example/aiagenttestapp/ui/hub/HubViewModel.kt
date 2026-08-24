@@ -216,7 +216,7 @@ class HubViewModel @Inject constructor(
      * special-casing.
      */
     private fun HfRepoDetail.toHubFile(file: HfModelFile): HubFile {
-        val spec = toModelSpec(file, deviceMemory)
+        val spec = toModelSpec(file)
         val engine: EngineDescriptor? = engines.defaultFor(spec)?.descriptor
             ?: engines.all.map { it.descriptor }
                 .firstOrNull { it.canLoad(spec.format) }
