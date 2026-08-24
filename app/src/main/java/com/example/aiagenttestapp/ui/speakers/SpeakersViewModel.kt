@@ -1,10 +1,12 @@
 package com.example.aiagenttestapp.ui.speakers
 
+import android.net.Uri
 import androidx.lifecycle.viewModelScope
-import com.example.aiagenttestapp.data.notes.SpeakerRecord
+import com.example.aiagenttestapp.data.speakers.SpeakerRecord
 import com.example.aiagenttestapp.data.speakers.EnrollResult
 import com.example.aiagenttestapp.data.speakers.SpeakerRepository
 import com.example.aiagenttestapp.data.speakers.TakeAnalysis
+import com.example.aiagenttestapp.data.speakers.TakeAudioReader
 import com.example.aiagenttestapp.data.speakers.TakeProblem
 import com.example.aiagenttestapp.stt.AudioRecorder
 import com.example.aiagenttestapp.ui.mvi.MviViewModel
@@ -66,6 +68,16 @@ sealed interface SpeakersIntent : UiIntent {
     data class StartTake(val index: Int) : SpeakersIntent
     data object StopTake : SpeakersIntent
 
+    /**
+     * Fills a take from an audio file instead of the microphone.
+     *
+     * The same take, checked the same way -- only the source differs. It exists because a voice that
+     * is already a file should not have to be played into a microphone to be enrolled: that adds the
+     * room and the capture path to the voiceprint, which this app has measured at about four points
+     * of diarisation accuracy.
+     */
+    data class ImportTake(val index: Int, val audio: Uri) : SpeakersIntent
+
     data object Finish : SpeakersIntent
 
     /** "Yes, enrol them anyway" after a voice-collision warning. */
@@ -87,6 +99,7 @@ sealed interface SpeakersIntent : UiIntent {
 class SpeakersViewModel @Inject constructor(
     private val speakers: SpeakerRepository,
     private val audioRecorder: AudioRecorder,
+    private val takeAudio: TakeAudioReader,
 ) : MviViewModel<SpeakersUiState, SpeakersIntent, Nothing>(SpeakersUiState()) {
 
     private var recordingJob: Job? = null
@@ -120,6 +133,7 @@ class SpeakersViewModel @Inject constructor(
         SpeakersIntent.CancelEnroll -> cancelEnroll()
         is SpeakersIntent.NameChanged -> setState { copy(name = intent.name, error = null) }
         is SpeakersIntent.StartTake -> startTake(intent.index)
+        is SpeakersIntent.ImportTake -> importTake(intent.index, intent.audio)
         SpeakersIntent.StopTake -> stopTake()
         SpeakersIntent.Finish -> finish(allowCollision = false)
         SpeakersIntent.ConfirmSoundsLike -> finish(allowCollision = true)
@@ -222,6 +236,43 @@ class SpeakersViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Analyses a picked file into [index]'s slot.
+     *
+     * Ends in exactly the state [stopTake] does, including the same quality verdict: an imported take
+     * is not trusted more than a recorded one, and a file with two voices in it is rejected just the
+     * same.
+     */
+    private fun importTake(index: Int, audio: Uri) {
+        if (currentState.isRecording || currentState.isAnalysing) return
+
+        setState { copy(isAnalysing = true, error = null) }
+
+        viewModelScope.launch {
+            val samples = takeAudio.read(audio)
+            samples.fold(
+                onSuccess = { pcm ->
+                    val analysis = speakers.analyseTake(pcm)
+                    setState {
+                        copy(
+                            isAnalysing = false,
+                            takes = takes.toMutableList().also { it[index] = analysis },
+                            error = analysis.problem?.let(::describe),
+                        )
+                    }
+                },
+                onFailure = { failure ->
+                    setState {
+                        copy(
+                            isAnalysing = false,
+                            error = failure.message ?: "Could not read that audio file",
+                        )
+                    }
+                },
+            )
+        }
+    }
+
     private fun finish(allowCollision: Boolean) {
         val state = currentState
         if (!state.canFinish && !allowCollision) return
@@ -303,7 +354,7 @@ class SpeakersViewModel @Inject constructor(
         captured.clear()
         // The embedder is a ~29 MB native allocation; the repository is a singleton, but nothing else
         // needs it loaded once this screen is gone.
-        speakers.release()
+        speakers.releaseAsync()
     }
 
     companion object {

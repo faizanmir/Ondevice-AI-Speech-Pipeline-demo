@@ -3,17 +3,17 @@ package com.example.aiagenttestapp.data.speakers
 import android.util.Log
 import com.example.aiagenttestapp.data.audiomodels.AudioModelCatalog
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
-import com.example.aiagenttestapp.data.notes.SpeakerDao
-import com.example.aiagenttestapp.data.notes.SpeakerRecord
-import com.example.aiagenttestapp.data.notes.SpeakerSample
-import com.example.aiagenttestapp.data.notes.SpeakerTurn
-import com.example.aiagenttestapp.data.notes.TranscriptMarkup
 import com.example.aiagenttestapp.stt.AudioRecorder
+import com.example.aiagenttestapp.stt.DiarizedSegment
 import com.example.aiagenttestapp.stt.SpeakerDiarizer
 import com.example.aiagenttestapp.stt.SpeakerEmbedder
 import com.example.aiagenttestapp.stt.averageEmbedding
 import com.example.aiagenttestapp.stt.cosineSimilarity
+import com.example.aiagenttestapp.stt.matchSpeaker
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -93,8 +93,14 @@ class SpeakerRepository(
     /** Guards the embedder and its index: enrolment and a background transcription can collide. */
     private val lock = Mutex()
 
+    /** Outlives a screen so its non-suspending lifecycle callback can queue a safe release. */
+    private val releaseScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     /** True once the index reflects what is in Room. */
     private var indexLoaded = false
+
+    /** The same enrolled takes as the native index, retained so naming can inspect score margins. */
+    private var enrolledEmbeddings: Map<String, List<FloatArray>> = emptyMap()
 
     fun observeSpeakers() = dao.observeAll()
 
@@ -128,6 +134,7 @@ class SpeakerRepository(
                 speaker.name to dao.samplesFor(speaker.id).map { it.embedding }
             }
             embedder.setEnrolled(enrolled)
+            enrolledEmbeddings = enrolled
             indexLoaded = true
             Log.i(TAG, "speaker index loaded with ${enrolled.size} people")
         }
@@ -217,7 +224,7 @@ class SpeakerRepository(
             if (cleanName.isBlank()) return@withContext EnrollResult.Failed("Give this person a name.")
 
             // A name that parses as an unrecognised speaker would make transcripts ambiguous.
-            if (cleanName.matches(Regex("(?i)${TranscriptMarkup.UNKNOWN_SPEAKER_PREFIX} \\d+"))) {
+            if (cleanName.matches(Regex("(?i)$UNKNOWN_SPEAKER_PREFIX \\d+"))) {
                 return@withContext EnrollResult.Failed(
                     "\"$cleanName\" is reserved for speakers the app could not identify.",
                 )
@@ -237,6 +244,13 @@ class SpeakerRepository(
             }
 
             val agreement = lowestPairwiseSimilarity(embeddings)
+            // Logged because the gate is otherwise a yes/no with no way to tell "these really are
+            // two people" from "the threshold is wrong". It rejected three takes of one synthetic
+            // voice, recorded seconds apart through the same microphone, and without the number
+            // there was no way to say which of those two it was.
+            Log.i(TAG, "enrolment agreement %.3f from %d takes (threshold %.2f), dims=%s"
+                .format(agreement, embeddings.size, TAKE_AGREEMENT_THRESHOLD,
+                    embeddings.joinToString(",") { it.size.toString() }))
             if (agreement < TAKE_AGREEMENT_THRESHOLD) {
                 return@withContext EnrollResult.TakesDisagree(agreement)
             }
@@ -297,13 +311,15 @@ class SpeakerRepository(
     /**
      * Puts a name to each diarisation cluster, or a "Speaker N" placeholder.
      *
-     * Each cluster is embedded from its own longest turns -- up to [LABEL_SAMPLE_SECONDS] of them -- rather
-     * than from one arbitrary turn. Longest first because a ten-second stretch carries far more speaker
-     * evidence than five two-second ones, and capping the total keeps this cheap on a long recording.
+     * Each cluster is embedded from its own longest turns -- up to [LABEL_SAMPLE_SECONDS] of them --
+     * rather than from one arbitrary turn. The best enrolled match must clear both [MATCH_THRESHOLD]
+     * and [MATCH_MARGIN] over the runner-up. The native search API exposes only the winning name, so
+     * it cannot distinguish a clear result from a near tie; putting a name on the latter produced
+     * confident but false attribution.
      */
     suspend fun labelClusters(
         samples: FloatArray,
-        turns: List<SpeakerTurn>,
+        turns: List<DiarizedSegment>,
     ): Map<Int, String> = lock.withLock {
         withContext(Dispatchers.Default) {
             if (turns.isEmpty()) return@withContext emptyMap()
@@ -313,39 +329,140 @@ class SpeakerRepository(
 
             // Numbered by first appearance, so "Speaker 2" is the second person heard rather than
             // whatever index the clustering happened to assign.
-            val order = turns.sortedBy { it.range.first }.map { it.cluster }.distinct()
+            val order = turns.sortedBy { it.startSample }.map { it.cluster }.distinct()
 
             var placeholder = 0
             for (cluster in order) {
-                val name = if (!ready) {
+                val decision = if (!ready) {
                     null
                 } else {
                     val audio = concatenate(
                         samples,
                         turns.filter { it.cluster == cluster }
-                            .sortedByDescending { it.range.count() }
+                            .sortedByDescending { it.endSample - it.startSample }
                             .fold(mutableListOf<IntRange>()) { taken, turn ->
                                 val total = taken.sumOf { it.count() }
                                 if (total < LABEL_SAMPLE_SECONDS * AudioRecorder.SAMPLE_RATE) {
-                                    taken += turn.range
+                                    taken += turn.startSample until turn.endSample
                                 }
                                 taken
                             }
                             .sortedBy { it.first },
                     )
-                    embedder.embed(audio)?.let { embedder.search(it, MATCH_THRESHOLD) }
+                    embedder.embed(audio)?.let { embedding ->
+                        matchSpeaker(
+                            embedding = embedding,
+                            enrolled = enrolledEmbeddings,
+                            threshold = MATCH_THRESHOLD,
+                            minimumMargin = MATCH_MARGIN,
+                        )
+                    }
                 }
 
-                labels[cluster] = name ?: "${TranscriptMarkup.UNKNOWN_SPEAKER_PREFIX} ${++placeholder}"
+                decision?.let {
+                    Log.i(
+                        TAG,
+                        "cluster %d match: best=%s %.3f, runner-up=%s %s, accepted=%s".format(
+                            cluster,
+                            it.bestName ?: "none",
+                            it.bestScore,
+                            it.runnerUpName ?: "none",
+                            it.runnerUpScore?.let { score -> "%.3f".format(score) } ?: "none",
+                            it.acceptedName ?: "unknown",
+                        ),
+                    )
+                }
+                labels[cluster] = decision?.acceptedName
+                    ?: "$UNKNOWN_SPEAKER_PREFIX ${++placeholder}"
             }
 
             labels
         }
     }
 
-    fun release() {
-        embedder.release()
-        indexLoaded = false
+    /**
+     * Folds clusters too small to be a speaker into the one they sound most like.
+     *
+     * Runs before anything downstream sees the turns, because every later stage inherits the cluster
+     * ids: alignment cuts blocks on them, naming puts one name on each, and a 0.8-second fragment
+     * that survives this step is reported to the user as another person who spoke. See
+     * [smallClusterRemap] for why sherpa leaves this out and pyannote does not.
+     *
+     * Needs no enrolled voices -- it compares clusters against each other, not against people -- so
+     * it improves a recording of complete strangers just as much as one of Bob and Tim.
+     *
+     * A cluster's voiceprint comes from its longest turns, up to [LABEL_SAMPLE_SECONDS] of them, for
+     * the same reason [labelClusters] does it that way: an average over a cluster's best evidence is
+     * steadier than whichever turn happened to come first.
+     */
+    suspend fun mergeSmallClusters(
+        samples: FloatArray,
+        turns: List<DiarizedSegment>,
+        minClusterSeconds: Float = MIN_CLUSTER_SECONDS,
+    ): List<DiarizedSegment> = lock.withLock {
+        withContext(Dispatchers.Default) {
+            if (turns.isEmpty()) return@withContext turns
+            if (!prepareLocked()) return@withContext turns
+
+            val sizes = clusterSizes(turns)
+            val minSamples = (minClusterSeconds * AudioRecorder.SAMPLE_RATE).toInt()
+            // Nothing is small, so nothing has to be embedded. Worth the check: this runs on every
+            // recording and the embedding is the expensive half.
+            if (sizes.none { it.value < minSamples }) return@withContext turns
+
+            val centroids = sizes.keys.mapNotNull { cluster ->
+                val audio = concatenate(samples, longestTurnRanges(turns, cluster))
+                embedder.embed(audio)?.let { cluster to it }
+            }.toMap()
+
+            val remap = smallClusterRemap(sizes, centroids, minSamples)
+            if (remap.isEmpty()) return@withContext turns
+
+            remap.forEach { (from, to) ->
+                Log.i(
+                    TAG,
+                    "cluster %d (%.1fs) folded into cluster %d (%.1fs) -- too small to be a speaker".format(
+                        from,
+                        sizes.getValue(from) / AudioRecorder.SAMPLE_RATE.toFloat(),
+                        to,
+                        sizes.getValue(to) / AudioRecorder.SAMPLE_RATE.toFloat(),
+                    ),
+                )
+            }
+            applyClusterRemap(turns, remap)
+        }
+    }
+
+    /** A cluster's longest turns, capped at [LABEL_SAMPLE_SECONDS], in the order they were spoken. */
+    private fun longestTurnRanges(turns: List<DiarizedSegment>, cluster: Int): List<IntRange> =
+        turns.filter { it.cluster == cluster }
+            .sortedByDescending { it.endSample - it.startSample }
+            .fold(mutableListOf<IntRange>()) { taken, turn ->
+                if (taken.sumOf { it.count() } < LABEL_SAMPLE_SECONDS * AudioRecorder.SAMPLE_RATE) {
+                    taken += turn.startSample until turn.endSample
+                }
+                taken
+            }
+            .sortedBy { it.first }
+
+    /**
+     * Releases native memory after every operation already holding [lock] has finished.
+     *
+     * This repository is a singleton shared by enrolment and background diarisation. Releasing
+     * without the same mutex used by those operations can free the extractor under a native compute,
+     * which aborts the process rather than producing a Kotlin exception.
+     */
+    suspend fun release() = lock.withLock {
+        withContext(Dispatchers.Default) {
+            embedder.release()
+            enrolledEmbeddings = emptyMap()
+            indexLoaded = false
+        }
+    }
+
+    /** Queues [release] for lifecycle callbacks that cannot suspend, while preserving serialization. */
+    fun releaseAsync() {
+        releaseScope.launch { release() }
     }
 
     /** Copies several ranges of [samples] into one contiguous array. */
@@ -383,6 +500,21 @@ class SpeakerRepository(
     companion object {
         private const val TAG = "SpeakerRepository"
 
+        /**
+         * Prefix for a speaker diarisation found but could not put a name to.
+         *
+         * "Unknown Speaker 1", not "Speaker 1", and still numbered. Saying only "Unknown Speaker"
+         * would read better and destroy the thing diarisation just worked out: with three
+         * unrecognised people in the room, one repeated label makes the transcript claim they are
+         * the same person. The number says "a distinct voice the app cannot name", which is exactly
+         * what was found.
+         *
+         * Lives here rather than in the notes transcript markup it was borrowed from: this feature no
+         * longer writes into a note, and a label this code both *produces* and *refuses as a name*
+         * cannot be owned by a module that has no other reason to know about speakers.
+         */
+        const val UNKNOWN_SPEAKER_PREFIX = "Unknown Speaker"
+
         /** Three takes: enough for a disagreement to be visible, few enough that people finish. */
         const val REQUIRED_TAKES = 3
 
@@ -406,7 +538,25 @@ class SpeakerRepository(
          * Biased high on purpose: "Speaker 2" is a mild inconvenience, while attributing words to a
          * named person who did not say them is a defect in a record someone may act on.
          */
+        /**
+         * Below this, a cluster is debris rather than a person.
+         *
+         * pyannote states the same idea as a count of embeddings (`min_cluster_size: 12`); seconds
+         * are the honest unit here because this app only sees merged turns, not the per-window
+         * embeddings that count refers to. Measured on a two-voice recording the real speakers held
+         * 14-71 s each while the debris held 0.8-5.7 s, so the boundary is not delicate.
+         *
+         * The cost of it being wrong is bounded and one-directional: a genuine third speaker who
+         * says less than this is absorbed into whoever they sound most like, rather than being
+         * reported. That is the same trade pyannote makes, and the escape hatch is the same one it
+         * offers -- tell the pipeline how many speakers to expect.
+         */
+        const val MIN_CLUSTER_SECONDS = 6f
+
         const val MATCH_THRESHOLD = 0.6f
+
+        /** Required lead over the second-best enrolled voice before a name is safe to print. */
+        const val MATCH_MARGIN = 0.05f
 
         /** Audio per cluster used to identify it. Beyond this, more adds accuracy too slowly to pay for. */
         private const val LABEL_SAMPLE_SECONDS = 30

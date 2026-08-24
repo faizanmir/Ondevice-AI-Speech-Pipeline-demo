@@ -16,6 +16,27 @@ data class DiarizedSegment(
     val cluster: Int,
 )
 
+internal data class SpeakerDiarizationPolicy(
+    val numClusters: Int,
+    val threshold: Float,
+    val minDurationOn: Float,
+    val minDurationOff: Float,
+)
+
+/**
+ * Resolves the app's speaker-count instruction into sherpa's clustering convention.
+ *
+ * A positive count is explicit user evidence and stays a hard instruction. Unknown counts use
+ * threshold clustering. Keeping this decision pure makes it possible to pin the values that affect
+ * model output without loading native models in a JVM test.
+ */
+internal fun speakerDiarizationPolicy(expectedSpeakers: Int) = SpeakerDiarizationPolicy(
+    numClusters = expectedSpeakers.takeIf { it > 0 } ?: -1,
+    threshold = if (expectedSpeakers > 0) 0f else 0.5f,
+    minDurationOn = 0.2f,
+    minDurationOff = 0.5f,
+)
+
 /**
  * Works out who spoke when, using pyannote segmentation plus speaker-embedding clustering.
  *
@@ -37,10 +58,21 @@ class SpeakerDiarizer {
     /**
      * Loads the models.
      *
-     * [expectedSpeakers] is the user's answer to "how many people are in this recording". When they
-     * know, fixing the cluster count is a materially better instruction than any similarity threshold:
-     * threshold-based clustering has to guess how many groups exist, and on short or noisy recordings it
-     * habitually splits one person in two. Zero or negative means "work it out".
+     * [expectedSpeakers] fixes the cluster count. Zero or negative means "work it out". A positive
+     * value is deliberately honoured whether or not enrolled voices exist: enrolment can name a
+     * cluster, but it cannot recover a real speaker that clustering merged away.
+     *
+     * This used to claim that fixing the count was a materially better instruction than any
+     * similarity threshold. Measurement said otherwise: sherpa cuts the dendrogram at exactly k
+     * (`cutree_k` in `fast-clustering.cc`, which ignores [FastClusteringConfig.threshold] entirely),
+     * so k is a hard budget rather than a hint. On a two-person recording it spent one of its two
+     * slots on a 0.3-second fragment and handed the entire conversation to one voice. Threshold
+     * clustering over-segments instead, which is the harmless direction whenever something
+     * downstream can merge -- and speaker naming merges by matching each cluster to an enrolled
+     * voice on its own.
+     *
+     * This makes the caller responsible for only passing a count it actually knows. It is not a hint:
+     * sherpa cuts the dendrogram at exactly that number.
      */
     fun load(
         segmentationModel: File,
@@ -50,6 +82,7 @@ class SpeakerDiarizer {
     ) {
         release()
 
+        val policy = speakerDiarizationPolicy(expectedSpeakers)
         val config = OfflineSpeakerDiarizationConfig(
             segmentation = OfflineSpeakerSegmentationModelConfig(
                 pyannote = OfflineSpeakerSegmentationPyannoteModelConfig(
@@ -65,15 +98,19 @@ class SpeakerDiarizer {
                 debug = false,
                 provider = "cpu",
             ),
-            clustering = if (expectedSpeakers > 0) {
-                FastClusteringConfig(numClusters = expectedSpeakers, threshold = 0f)
-            } else {
-                // sherpa's own default. Only consulted when the cluster count is unknown.
-                FastClusteringConfig(numClusters = -1, threshold = 0.5f)
-            },
-            // Sub-200 ms of speech or silence is not a turn, it is a breath.
-            minDurationOn = 0.2f,
-            minDurationOff = 0.5f,
+            // threshold is unread when numClusters is positive; carrying both values from one policy
+            // keeps the native configuration and its JVM-testable contract together.
+            clustering = FastClusteringConfig(
+                numClusters = policy.numClusters,
+                threshold = policy.threshold,
+            ),
+            // Sherpa's own default, and what its Android sample uses. This used to say 0.3 was
+            // the default and set it there; the default is 0.2, so the app was quietly stricter than
+            // the pipeline it borrows -- which discards short speech the diariser would otherwise
+            // have placed. Small clusters are dealt with after clustering instead, where the
+            // decision can be made on what the fragment sounds like rather than how long it is.
+            minDurationOn = policy.minDurationOn,
+            minDurationOff = policy.minDurationOff,
         )
 
         diarization = OfflineSpeakerDiarization(assetManager = null, config = config)
@@ -81,35 +118,39 @@ class SpeakerDiarizer {
     }
 
     /**
-     * Diarises a whole recording, reporting progress in 0..1.
+     * Diarises a whole recording.
      *
      * Returns an empty list when the model found nothing to attribute, which the caller treats as
      * "carry on without speaker labels" rather than as an error.
+     *
+     * **No progress callback, and it is not an oversight.** sherpa offers `processWithCallback`, and
+     * calling it aborts the process on this toolchain:
+     *
+     * ```
+     * JNI DETECTED ERROR IN APPLICATION: JNI FindClass called with pending exception
+     * java.lang.NoSuchMethodError: no non-static method
+     * "SpeakerDiarizer$$ExternalSyntheticLambda0.invoke(IIJ)Ljava/lang/Integer;"
+     * ```
+     *
+     * The native side looks the callback up by an *unerased* signature -- three primitives in, a
+     * boxed `Integer` out. A Kotlin lambda used to compile to a class carrying exactly that method,
+     * but D8 desugars it to a synthetic that implements only the erased
+     * `invoke(Object, Object, Object): Object`, so the lookup misses. It is a `FindClass` with a
+     * pending exception, which is an abort rather than a `NoSuchMethodError` anyone can catch -- the
+     * recording dies with the process.
+     *
+     * The same lesson as the keyword spotter's null handle, one layer along: these bindings are
+     * generated against assumptions the app's own build does not have to share, so anything that
+     * hands sherpa a Kotlin object to call back into gets verified on a device before it is trusted.
      */
-    fun diarize(
-        samples: FloatArray,
-        onProgress: ((Float) -> Unit)? = null,
-    ): List<DiarizedSegment> {
+    fun diarize(samples: FloatArray): List<DiarizedSegment> {
         val active = diarization ?: return emptyList()
         if (samples.isEmpty()) return emptyList()
 
         val rate = AudioRecorder.SAMPLE_RATE
 
         return try {
-            val segments = if (onProgress != null) {
-                active.processWithCallback(
-                    samples = samples,
-                    callback = { processed, total, _ ->
-                        if (total > 0) onProgress(processed.toFloat() / total)
-                        0 // non-zero would ask sherpa to stop
-                    },
-                    arg = 0,
-                )
-            } else {
-                active.process(samples)
-            }
-
-            segments
+            active.process(samples)
                 .map { segment ->
                     DiarizedSegment(
                         // Sherpa reports seconds; clamped because rounding can land a hair past the end.
@@ -120,6 +161,28 @@ class SpeakerDiarizer {
                 }
                 .filter { it.endSample > it.startSample }
                 .sortedBy { it.startSample }
+                .also { turns ->
+                    // How the turns divide between clusters, which is the one thing that separates
+                    // "the clustering put everything in one group" from "the clustering was fine and
+                    // the alignment lost it". Forcing two speakers on a two-person recording
+                    // collapsed the whole transcript onto one name, and the cluster totals say which
+                    // half of the pipeline did it.
+                    turns.groupBy { it.cluster }
+                        .toSortedMap()
+                        .forEach { (cluster, its) ->
+                            val seconds = its.sumOf { it.endSample - it.startSample } /
+                                AudioRecorder.SAMPLE_RATE.toDouble()
+                            Log.i(
+                                TAG,
+                                "cluster %d: %d turns, %.1fs, first at %.1fs".format(
+                                    cluster,
+                                    its.size,
+                                    seconds,
+                                    its.first().startSample / AudioRecorder.SAMPLE_RATE.toDouble(),
+                                ),
+                            )
+                        }
+                }
         } catch (e: Exception) {
             Log.w(TAG, "diarisation failed; carrying on without speaker labels", e)
             emptyList()

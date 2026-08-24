@@ -1,6 +1,7 @@
 package com.example.aiagenttestapp.ui.speakers
 
 import android.Manifest
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -52,7 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.aiagenttestapp.data.notes.SpeakerRecord
+import com.example.aiagenttestapp.data.speakers.SpeakerRecord
 import com.example.aiagenttestapp.data.speakers.SpeakerRepository
 import com.example.aiagenttestapp.data.speakers.TakeAnalysis
 
@@ -73,6 +74,19 @@ fun SpeakersScreen(
         val index = pendingTake
         pendingTake = null
         if (granted && index != null) viewModel.onIntent(SpeakersIntent.StartTake(index))
+    }
+
+    // Which take the file picker was opened for. Same pattern as the microphone above, and for the
+    // same reason: the result arrives long after the button that asked for it.
+    var importingTake by remember { mutableStateOf<Int?>(null) }
+    val pickTake = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        val index = importingTake
+        importingTake = null
+        if (uri != null && index != null) {
+            viewModel.onIntent(SpeakersIntent.ImportTake(index, uri))
+        }
     }
 
     Scaffold(
@@ -137,6 +151,12 @@ fun SpeakersScreen(
                             micPermission.launch(Manifest.permission.RECORD_AUDIO)
                         },
                         onStopTake = { viewModel.onIntent(SpeakersIntent.StopTake) },
+                        onImportTake = { index ->
+                            importingTake = index
+                            // Anything the two decoders can read; a wrong pick is rejected on
+                            // inspection rather than filtered out of the picker.
+                            pickTake.launch(arrayOf("audio/*"))
+                        },
                         onFinish = { viewModel.onIntent(SpeakersIntent.Finish) },
                         onCancel = { viewModel.onIntent(SpeakersIntent.CancelEnroll) },
                     )
@@ -200,6 +220,7 @@ private fun EnrollCard(
     onNameChange: (String) -> Unit,
     onStartTake: (Int) -> Unit,
     onStopTake: () -> Unit,
+    onImportTake: (Int) -> Unit,
     onFinish: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -243,6 +264,7 @@ private fun EnrollCard(
                     level = state.level,
                     onStart = { onStartTake(index) },
                     onStop = onStopTake,
+                    onImport = { onImportTake(index) },
                 )
             }
 
@@ -301,6 +323,7 @@ private fun TakeRow(
     level: Float,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    onImport: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -328,11 +351,17 @@ private fun TakeRow(
                     )
                 }
 
-                else -> IconButton(onClick = onStart, enabled = !isBusy) {
-                    Icon(
-                        Icons.Default.Mic,
-                        contentDescription = if (analysis == null) "Record" else "Record again",
-                    )
+                else -> {
+                    // Import sits beside Record rather than replacing it: reading aloud is still the
+                    // normal way to enrol, and a file is the exception for voices that already exist
+                    // as audio.
+                    TextButton(onClick = onImport, enabled = !isBusy) { Text("Import") }
+                    IconButton(onClick = onStart, enabled = !isBusy) {
+                        Icon(
+                            Icons.Default.Mic,
+                            contentDescription = if (analysis == null) "Record" else "Record again",
+                        )
+                    }
                 }
             }
         }

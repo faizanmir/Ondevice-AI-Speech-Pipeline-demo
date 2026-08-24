@@ -139,6 +139,52 @@ fun cosineSimilarity(a: FloatArray, b: FloatArray): Float {
     return (dot / (sqrt(normA) * sqrt(normB))).toFloat()
 }
 
+internal data class SpeakerMatchDecision(
+    val acceptedName: String?,
+    val bestName: String?,
+    val bestScore: Float,
+    val runnerUpName: String?,
+    val runnerUpScore: Float?,
+)
+
+/**
+ * Matches a cluster voiceprint only when one enrolled person is both strong and unambiguous.
+ *
+ * The native manager returns only a name, which hides whether the winner cleared the threshold by a
+ * hair or tied another person. A transcript needs the more conservative answer: below-threshold and
+ * near-tie results stay unknown. Each person's strongest take is used because enrolment deliberately
+ * stores several takes to cover natural variation rather than averaging it away.
+ */
+internal fun matchSpeaker(
+    embedding: FloatArray,
+    enrolled: Map<String, List<FloatArray>>,
+    threshold: Float,
+    minimumMargin: Float,
+): SpeakerMatchDecision {
+    val ranked = enrolled.mapNotNull { (name, takes) ->
+        val score = takes.asSequence()
+            .filter { it.size == embedding.size }
+            .map { cosineSimilarity(embedding, it) }
+            .maxOrNull()
+            ?: return@mapNotNull null
+        name to score
+    }.sortedWith(compareByDescending<Pair<String, Float>> { it.second }.thenBy { it.first })
+
+    val best = ranked.firstOrNull()
+        ?: return SpeakerMatchDecision(null, null, 0f, null, null)
+    val runnerUp = ranked.getOrNull(1)
+    val clearsMargin = runnerUp == null || best.second - runnerUp.second >= minimumMargin
+    val accepted = best.first.takeIf { best.second >= threshold && clearsMargin }
+
+    return SpeakerMatchDecision(
+        acceptedName = accepted,
+        bestName = best.first,
+        bestScore = best.second,
+        runnerUpName = runnerUp?.first,
+        runnerUpScore = runnerUp?.second,
+    )
+}
+
 /** Element-wise mean of several voiceprints, for representing a cluster or a person by one vector. */
 fun averageEmbedding(embeddings: List<FloatArray>): FloatArray? {
     val usable = embeddings.filter { it.isNotEmpty() }
