@@ -24,7 +24,8 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * Downloads and tracks the optional audio-model bundles: speaker identification and spoken keywords.
+ * Downloads and tracks the optional audio-model bundles: speaker identification, spoken keywords
+ * and punctuation.
  *
  * Same discipline as [com.example.aiagenttestapp.stt.SpeechModelRepository] -- a WorkManager
  * foreground job does the transfer so it survives leaving the screen, backgrounding and process
@@ -74,6 +75,7 @@ class AudioModelRepository(context: Context) {
 
     val speaker: AudioModelBundle get() = AudioModelCatalog.SPEAKER
     val keywords: AudioModelBundle get() = AudioModelCatalog.KEYWORDS
+    val punctuation: AudioModelBundle get() = AudioModelCatalog.PUNCTUATION
 
     /**
      * Every file the bundle promises is present and usable.

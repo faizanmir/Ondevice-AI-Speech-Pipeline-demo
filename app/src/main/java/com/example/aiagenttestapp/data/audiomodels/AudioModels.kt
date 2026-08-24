@@ -38,7 +38,7 @@ internal sealed interface BundlePayload {
  *
  * Deliberately not a [com.example.aiagenttestapp.stt.SpeechModel]. That type answers "which one of
  * these did the user pick?" -- it has a Settings-backed selection, a picker blurb, one-of-N
- * semantics. These bundles have none of that: speaker identification either has its two models or it
+ * semantics. These bundles have none of that: the keyword spotter either has its four models or it
  * is switched off, and there is nothing to choose between. Forcing them through the ASR type would
  * have meant giving it a meaningless "selected" concept and an archive-shaped payload it never wants.
  */
@@ -86,6 +86,8 @@ internal object AudioModelCatalog {
         "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models"
     private const val GH_KWS =
         "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models"
+    private const val GH_PUNCT =
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models"
     private const val HF = "https://huggingface.co"
 
     /** Stable local names, so nothing outside this file knows the upstream naming. */
@@ -105,25 +107,38 @@ internal object AudioModelCatalog {
      * user deleting the model takes it too.
      */
     const val KWS_KEYWORDS = "kws-keywords.txt"
+    const val PUNCT_MODEL = "punct-model.onnx"
+    const val PUNCT_VOCAB = "punct-bpe.vocab"
 
     const val SPEAKER_BUNDLE_ID = "speaker"
     const val KEYWORD_BUNDLE_ID = "keywords"
+    const val PUNCTUATION_BUNDLE_ID = "punctuation"
 
     /**
      * The identifier written onto every enrolled voiceprint, so a future change of embedding model is
-     * detectable instead of silently matching nothing. See `SpeakerRecord.embeddingModelId`.
+     * detectable instead of silently matching nothing. See [SpeakerRecord.embeddingModelId].
      */
-    const val EMBEDDING_MODEL_ID = "wespeaker-en-voxceleb-campplus"
+    const val EMBEDDING_MODEL_ID = "3dspeaker-eres2net-base-16k"
 
     /**
      * Speaker identification: pyannote for "who is talking when", WeSpeaker CAM++ for "and which of
      * my enrolled people is that".
      *
      * The float pyannote build rather than its 1.5 MB int8 sibling: segmentation decides every
-     * boundary downstream, and 6 MB is nothing beside the ASR model already on disk. CAM++ at 29 MB
-     * over the stronger 71 MB 3D-Speaker model because embeddings transfer across languages far
-     * better than recognition does -- and [EMBEDDING_MODEL_ID] makes the swap safe if that turns out
-     * to be optimistic on this app's German notes.
+     * boundary downstream, and 6 MB is nothing beside the ASR model already on disk.
+     *
+     * 3D-Speaker ERes2Net-base for the embeddings, replacing WeSpeaker CAM++, because the clustering
+     * that consumes them is calibrated against this model and not against CAM++. sherpa's stock
+     * `threshold = 0.5` -- the value the diariser cuts the dendrogram at -- was set with the
+     * 3D-Speaker family, and it is what both sherpa's Android sample and its Python example ship.
+     * Running CAM++ against a threshold tuned for something else is how a two-speaker recording came
+     * back as eleven clusters. Trained on Mandarin, which matters less than it sounds: a voiceprint
+     * encodes the voice rather than the words, and speaker embeddings transfer across languages far
+     * better than recognition does.
+     *
+     * Changing this invalidates every enrolled voiceprint, which is exactly what [EMBEDDING_MODEL_ID]
+     * exists to make visible -- vectors from a different model do not look wrong, they simply match
+     * nobody, so the app offers re-enrolment instead of silently recognising no one.
      */
     val SPEAKER = AudioModelBundle(
         id = SPEAKER_BUNDLE_ID,
@@ -140,8 +155,8 @@ internal object AudioModelCatalog {
                 ),
                 AudioModelFile(
                     name = EMBEDDING,
-                    url = "$GH_SPEAKER/wespeaker_en_voxceleb_CAM++.onnx",
-                    sizeBytes = 29_292_684L,
+                    url = "$GH_SPEAKER/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+                    sizeBytes = 39_593_761L,
                 ),
             ),
         ),
@@ -163,9 +178,9 @@ internal object AudioModelCatalog {
             "stopping to type. English only.",
         payload = BundlePayload.Archive(
             archive = AudioModelFile(
-                name = "kws-gigaspeech-mobile.tar.bz2",
-                url = "$GH_KWS/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01-mobile.tar.bz2",
-                sizeBytes = 15_667_804L,
+                name = "kws-gigaspeech.tar.bz2",
+                url = "$GH_KWS/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01.tar.bz2",
+                sizeBytes = 17_626_723L,
             ),
             entries = listOf(
                 // int8 preferred, float accepted. Only the encoder and joiner ship both.
@@ -198,5 +213,50 @@ internal object AudioModelCatalog {
         ),
     )
 
-    val all: List<AudioModelBundle> = listOf(SPEAKER, KEYWORDS)
+
+    /**
+     * Restores capitalisation and sentence punctuation on streaming transcripts.
+     *
+     * Needed only by the streaming transducer, and needed *badly*: measured on device, that model
+     * returns `GOOD MORNING THIS IS THE OPENING NARRATION FOR THE SURVEILLANCE AUDIT` -- one
+     * unbroken uppercase stream. The offline recognisers do not have this problem. SenseVoice is
+     * loaded with inverse text normalisation on, and Whisper punctuates natively; a transducer emits
+     * raw tokens and has no equivalent setting.
+     *
+     * That is more than an aesthetic complaint here. This app feeds the transcript to a summarising
+     * language model and matches spoken marker phrases against its text, and both do measurably
+     * worse on an uncased run-on stream. So this bundle is what makes streaming output usable by the
+     * rest of the pipeline rather than merely readable.
+     *
+     * int8 preferred: 7 MB against 28 MB, roughly twice as fast, and the task is inserting commas
+     * rather than deciding words.
+     */
+    val PUNCTUATION = AudioModelBundle(
+        id = PUNCTUATION_BUNDLE_ID,
+        label = "Punctuation",
+        blurb = "Adds capitals and full stops to live transcripts. Only used by the streaming " +
+            "speech model, which produces none of its own. English.",
+        payload = BundlePayload.Archive(
+            archive = AudioModelFile(
+                name = "online-punct-en.tar.bz2",
+                url = "$GH_PUNCT/sherpa-onnx-online-punct-en-2024-08-06.tar.bz2",
+                sizeBytes = 30_667_839L,
+            ),
+            entries = listOf(
+                ArchiveEntry(
+                    localName = PUNCT_MODEL,
+                    patterns = listOf(
+                        Regex("^model\\.int8\\.onnx$"),
+                        Regex("^model\\.onnx$"),
+                    ),
+                ),
+                ArchiveEntry(
+                    localName = PUNCT_VOCAB,
+                    patterns = listOf(Regex("^bpe\\.vocab$")),
+                ),
+            ),
+        ),
+    )
+
+    val all: List<AudioModelBundle> = listOf(SPEAKER, KEYWORDS, PUNCTUATION)
 }
