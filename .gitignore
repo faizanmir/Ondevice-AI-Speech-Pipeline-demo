@@ -16,8 +16,6 @@ local.properties
 # Generated knowledge graph (~99 MB); rebuilt by /graphify, never reviewed as source.
 graphify-out/
 
-# Per-developer Claude Code permission state.
-/.claude/settings.local.json
 
 __pycache__/
 *.pyc
@@ -27,3 +25,9 @@ __pycache__/
 # bot settings arrived as a diff, and the ignore list still needed a new line each time the IDE
 # invented a file. The whole directory is IDE state, regenerated on any checkout.
 .idea/
+
+# Claude Code's project directory. settings.json was tracked to pin the plugins the project
+# expects, but it sits beside settings.local.json -- one developer's permission allowlist, which
+# changes every session -- and keeping half a directory under version control invites the other
+# half in by accident. Agent configuration is not part of the build.
+.claude/
