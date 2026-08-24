@@ -41,18 +41,26 @@ object NotePrompts {
         transcript: String,
         tagged: List<TaggedItem>,
         language: String?,
-        speakers: List<String>,
+        partNumber: Int = 1,
+        totalParts: Int = 1,
     ): String = buildString {
-        appendLine("Summarise the following transcript of a voice note, then report its findings.")
-        appendLine()
-
-        if (speakers.isNotEmpty()) {
+        if (totalParts > 1) {
+            // The model is told it is reading a part, and told not to reach for the ending, because
+            // both failures were cheap to prevent and expensive to detect afterwards: asked to
+            // "summarise this transcript", a model handed section 2 of 5 writes a closing summary of
+            // the whole note from a fifth of it, and the merge then has five confident endings to
+            // reconcile. Naming the part turns that into a partial answer, which is what the merge
+            // is built to combine.
+            appendLine("This is part $partNumber of $totalParts of one voice note's transcript.")
             appendLine(
-                "The transcript is labelled with who was speaking: ${speakers.joinToString(", ")}. " +
-                    "Use their names when an action belongs to someone.",
+                "Report only what this part contains. Do not write a conclusion for the whole " +
+                    "note, and do not refer to parts you have not been shown.",
             )
             appendLine()
         }
+
+        appendLine("Summarise the following transcript of a voice note, then report its findings.")
+        appendLine()
 
         appendLine("Reply in exactly these three sections, with these headings:")
         appendLine()
@@ -66,8 +74,9 @@ object NotePrompts {
         appendLine("- one bullet per thing somebody needs to do, as \"what to do — owner: who\"")
         appendLine()
         appendLine(
-            "Write \"none\" under a heading that has no items. Keep the three headings in English " +
-                "exactly as written above, and write everything else in the transcript's language.",
+            "Write \"none\" under a heading that has no items. Keep the three headings in " +
+                "English exactly as written above, and write everything else in the " +
+                "transcript's language.",
         )
         appendLine()
 

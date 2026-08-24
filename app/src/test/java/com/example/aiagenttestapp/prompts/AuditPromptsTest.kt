@@ -11,6 +11,9 @@ import com.example.aiagenttestapp.data.audit.AuditFinding
 import com.example.aiagenttestapp.data.audit.AuditMode
 import com.example.aiagenttestapp.data.audit.AuditOutputFormat
 import com.example.aiagenttestapp.data.audit.AuditPromptProfile
+import com.example.aiagenttestapp.data.audit.AuditProtocolVocabulary
+import com.example.aiagenttestapp.data.audit.AuditRecordParser
+import com.example.aiagenttestapp.data.audit.AuditResultType
 import com.example.aiagenttestapp.data.audit.AuditSeverity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -33,8 +36,14 @@ class AuditPromptsTest {
         // complexity of carrying two profiles. Dropping two of the three examples takes it to ~20%,
         // and that is the ceiling while the instructions stay byte-identical (they are ~55% of the
         // preamble and are what decides whether a finding is found at all).
+        //
+        // The threshold drops as SHARED instruction grows, and that is arithmetic rather than
+        // regression: the profiles differ only in worked examples, so every line added to both
+        // shrinks the examples' share of the whole. It fell from 15% to 14% when the rule telling an
+        // element's grade from a finding's went in. Lower it for that reason and no other -- a fall
+        // caused by examples being trimmed is the failure this test is here to catch.
         val saved = 1 - lean.length.toDouble() / rich.length
-        assertTrue("LEAN saves only ${(saved * 100).toInt()}% of RICH", saved > 0.15)
+        assertTrue("LEAN saves only ${(saved * 100).toInt()}% of RICH", saved > 0.13)
     }
 
     @Test
@@ -48,8 +57,31 @@ class AuditPromptsTest {
         // what lets classification happen here instead of in a separate grading turn per finding.
         // A preamble paid once per chunk is cheaper than a turn paid once per finding, and a
         // verdict decided where the evidence is cannot be softened by a second opinion later.
-        assertTrue("RICH is ${ContextWindow.estimateTokens(rich)} tok", ContextWindow.estimateTokens(rich) < 1950)
-        assertTrue("LEAN is ${ContextWindow.estimateTokens(lean)} tok", ContextWindow.estimateTokens(lean) < 1650)
+        //
+        // Lowered once since, by a pass that took out restated instruction and the format block's
+        // decorative blank lines -- 71 tokens, which is what a prompt this dense had left to give.
+        // Everything larger that was considered (the cue-word list, the worked example, the schema
+        // the example fills in) decides what a finding IS, and is not a saving, it is a different
+        // audit.
+        //
+        // Then raised, by more than the trim ever saved: +616 on RICH and +562 on LEAN for the
+        // protocol -- the elements, what was merely stated, what was left unresolved, and the
+        // action fields. That is what the capability costs, and it is worth recording plainly:
+        // roughly a third of it is the instruction, the rest is the shape it has to be answered in
+        // and example C demonstrating it. Chunks shrink accordingly, so this bought fewer sections
+        // of transcript per window; see AuditChunker.chunkCharBudget for where that lands.
+        //
+        // Raised once more, by ~60 tokens, for the four lines that separate an element's grade from
+        // a finding's. Bought with a real defect: one document read twice graded the same missing
+        // signature minorNonconformity and resultOkForDocumentation, because the preamble supported
+        // both readings and nothing chose between them.
+        //
+        // And again, ~65 tokens, to name each passing grade the rule forbids on a non-conformity
+        // and to say the verdict is the document's own words. Both bought with observed defects:
+        // findings badged "Improvement", and a "Stated result" holding a vocabulary name the
+        // document never used.
+        assertTrue("RICH is ${ContextWindow.estimateTokens(rich)} tok", ContextWindow.estimateTokens(rich) < 2650)
+        assertTrue("LEAN is ${ContextWindow.estimateTokens(lean)} tok", ContextWindow.estimateTokens(lean) < 2270)
     }
 
     @Test
@@ -61,10 +93,113 @@ class AuditPromptsTest {
             "Count issues, not mentions",
             "Also find EVERY action",
             "Every non-conformity must include",
-            "Never invent one; use [] if none is named",
+            "if the text names none, leave it out",
         ).forEach { line ->
             assertTrue("RICH is missing: $line", rich.contains(line))
             assertTrue("LEAN is missing: $line", lean.contains(line))
+        }
+    }
+
+    @Test
+    fun `both profiles ask for the protocol, not just the failures`() {
+        // The point of the protocol half is that an audit reaches a conclusion about a requirement,
+        // pass or fail, not just a list of problems. A profile that asked only for findings would
+        // produce a report whose Protocol Element section is empty -- which reads as "nothing was
+        // examined". The one-per-section wording matters too: the report shows exactly one, and a
+        // model asked for several would have the extras collapsed away.
+        listOf(
+            "Also recognise the PROTOCOL ELEMENT this section audits",
+            "whether or not that conclusion is a failure",
+            "One element per section",
+            "STATED",
+            "UNRESOLVED",
+        ).forEach { line ->
+            assertTrue("RICH is missing: $line", rich.contains(line))
+            assertTrue("LEAN is missing: $line", lean.contains(line))
+        }
+    }
+
+    @Test
+    fun `every vocabulary the prompt offers is one the parser reads back`() {
+        // The prompt lists the element types, priorities, statuses and result names it will accept.
+        // A word offered here that AuditProtocolVocabulary does not know comes back as an
+        // unrecognised value -- silently, as a blank field in the finished report -- so the prompt
+        // is built from those lists rather than typed out beside them. This is that wiring's guard.
+        (
+            AuditProtocolVocabulary.ELEMENT_TYPES +
+                AuditProtocolVocabulary.ACTION_PRIORITIES +
+                AuditProtocolVocabulary.ACTION_STATUSES +
+                AuditResultType.entries.map { it.wireName }
+            ).forEach { word ->
+            assertTrue("RICH never offers: $word", rich.contains(word))
+        }
+    }
+
+    @Test
+    fun `the worked examples answer in blocks the record parser can read`() {
+        // An example is the shape a model copies, so an example the parser cannot read is a section
+        // lost on every document. Parsing RICH's own example C proves the two agree.
+        val reply = rich.substringAfter("Worked example C").substringBefore("Now analyse")
+        val parsed = AuditRecordParser.parse(reply)
+
+        assertEquals(1, parsed.protocolElements.size)
+        assertEquals(AuditResultType.OK_FOR_DOCUMENTATION, parsed.protocolElements.single().result)
+        assertEquals("Auditor", parsed.protocolElements.single().speaker)
+        assertEquals(1, parsed.nonConformities.size)
+        assertEquals(2, parsed.actions.size)
+        assertEquals(1, parsed.alsoStated.size)
+        assertEquals(1, parsed.unresolvedItems.size)
+        // The action fields the screenshot's report renders, demonstrated and read back.
+        assertEquals("Agreed", parsed.actions.first().status)
+        assertEquals(true, parsed.actions.first().accepted)
+        // Priority is deliberately absent from the example: the dialogue states none, and a field
+        // invented to fill the shape is what every other rule in the preamble exists to prevent.
+        assertEquals("", parsed.actions.first().priority)
+    }
+
+    @Test
+    fun `a non-conformity is never graded as a pass`() {
+        // One file, two runs, the same missing signature graded minorNonconformity once and
+        // resultOkForDocumentation the other. The prompt supported both: the cue list calls "not
+        // signed" a non-conformity, the result rule calls weak approval OK for documentation, and
+        // example C graded the FINDING with the ELEMENT's conclusion -- so a model could take
+        // either, and temperature decided which.
+        //
+        // Read through the parser rather than by regex, so this asserts what a model copying the
+        // example would actually produce. Also a type-level contradiction the old example carried:
+        // isNonconformity is false for both passing grades, so a NONCONFORMITY block graded with one
+        // says it is not the thing it is.
+        val reply = rich.substringAfter("Worked example C").substringBefore("Now analyse")
+        val parsed = AuditRecordParser.parse(reply)
+
+        val element = parsed.protocolElements.single()
+        val finding = parsed.nonConformities.single()
+        // The element judges the requirement as a whole: the calibration happened, so it passes on
+        // substance and fails only on paperwork.
+        assertEquals(AuditResultType.OK_FOR_DOCUMENTATION, element.result)
+        // The finding names the gap, and a gap is a non-conformity whatever the element concluded.
+        assertTrue(
+            "example grades its non-conformity ${finding.resultType?.wireName}",
+            finding.resultType?.isNonconformity == true,
+        )
+    }
+
+    @Test
+    fun `both profiles say how an element and a finding differ`() {
+        // The rule the examples now demonstrate, stated as well as shown -- one worked example is a
+        // prior, not an instruction, and this is the pair a small model most often confuses.
+        // Every passing grade named one by one, not "as OK": the rule said that, and a model
+        // graded non-conformities resultPotentialImprovement instead -- not OK, and equally not a
+        // non-conformity. A prohibition has to name what it prohibits.
+        listOf(
+            "graded separately",
+            "ONLY ever minorNonconformity or",
+            "Never resultOkForDocumentation or",
+            "no name for a plain pass",
+            "verdict is the document's OWN words",
+        ).forEach {
+            assertTrue("RICH is missing: $it", rich.contains(it))
+            assertTrue("LEAN is missing: $it", lean.contains(it))
         }
     }
 
@@ -126,16 +261,22 @@ class AuditPromptsTest {
     }
 
     @Test
-    fun `an extraction turn fits the smallest context the planner admits`() {
+    fun `an extraction turn fits the smallest context that can hold one`() {
+        // Nothing refuses a small window up front any more, so the guarantee this test protects is
+        // narrower than it was: whenever a window CAN hold the preamble, a reply and a floor-sized
+        // chunk, the chunk sizing must not push the turn back over it. Below that the floor takes
+        // over and a turn deliberately overflows -- see AuditChunker.chunkCharBudget.
         val promptTokens = AuditPromptBudget.fixedPromptTokens()
-        val minimum = AuditChunker.minimumContextTokens(promptTokens)
+        val smallest = promptTokens +
+            AuditChunker.MIN_OUTPUT_RESERVE_TOKENS +
+            AuditChunker.MIN_CHUNK_TOKENS
 
-        val chunkChars = AuditChunker.chunkCharBudget(minimum, promptTokens)
+        val chunkChars = AuditChunker.chunkCharBudget(smallest, promptTokens)
         val turn = promptTokens +
-            AuditChunker.outputReserveTokens(minimum, promptTokens) +
+            AuditChunker.outputReserveTokens(smallest, promptTokens) +
             ContextWindow.estimateTokens("x".repeat(chunkChars))
 
-        assertTrue("a turn of $turn tokens does not fit $minimum", turn <= minimum)
+        assertTrue("a turn of $turn tokens does not fit $smallest", turn <= smallest)
     }
 
     @Test
