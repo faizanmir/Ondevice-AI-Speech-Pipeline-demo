@@ -18,3 +18,12 @@ local.properties
 # llama.cpp is cloned at build time by tools/fetch_llama_cpp.sh (~200 MB of upstream source, with
 # its own .git). It is an input to the build, not part of this repository.
 /engine-llamacpp/third_party/
+
+# Generated knowledge graph (~99 MB); rebuilt by /graphify, never reviewed as source.
+graphify-out/
+/.idea/appInsightsSettings.xml
+/.idea/markdown.xml
+/.idea/planningMode.xml
+
+# Per-developer Claude Code permission state.
+/.claude/settings.local.json
