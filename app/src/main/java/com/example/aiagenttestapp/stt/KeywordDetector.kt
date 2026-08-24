@@ -57,11 +57,53 @@ data class SpottedKeyword(
  *
  * English only: no German keyword model exists upstream. `SpokenKeywords.spokenPhrases` covers other
  * languages by scanning the finished transcript instead.
+ *
+ * ## Do not switch back to the "-mobile" KWS bundle
+ *
+ * It aborts the process. On device (2026-08-13, Lenovo TB336FU) a few seconds into any recording:
+ *
+ *     Ort::Exception: Reshape node '/downsample/Reshape_1'
+ *     Input shape:{17,1,128}, requested shape:{8,2,1,128}
+ *
+ * Its encoder is handed an odd frame count where the downsample needs an even one. That arrives as a
+ * C++ exception and libc++abi turns it straight into SIGABRT, so the `runCatching` in [accept] cannot
+ * contain it -- the app dies and takes the in-progress recording with it.
+ *
+ * The fix was the bundle, and nothing else. Ruled out on device first, all reproducing identically:
+ * resetting inside the decode loop, an unset `OnlineModelConfig.modelType`, the int8 encoder, and
+ * sherpa-onnx 1.13.5. The standard `gigaspeech-3.3M` archive works where `-mobile` does not, even
+ * though the two declare the same `model_type=zipformer2` and `decode_chunk_len=32` -- only their
+ * encoder graphs differ (their decoders and tokens are byte-identical). Nothing in the metadata
+ * predicts it, which is why `AudioModelCatalog.KEYWORDS` names the working archive explicitly.
  */
 class KeywordDetector {
 
     private var spotter: KeywordSpotter? = null
     private var stream: OnlineStream? = null
+
+    /**
+     * End of the last marker accepted this recording, in samples. The floor every later hit has to
+     * clear.
+     *
+     * Kept because the model's own timestamps cannot be trusted to move forward: they restart after
+     * `reset(stream)`, which the spotter calls every time a keyword fires. Without a floor the
+     * second marker in a recording reports a time from before the first.
+     */
+    private var lastAcceptedEnd = 0
+
+    /**
+     * Whether the stream has been reset since it was created -- i.e. whether a keyword has already
+     * fired this recording.
+     *
+     * Once it has, the model's token timestamps are not used again. They restart from zero after
+     * `reset(stream)` and then count forward from the wrong base, which a floor cannot repair: it
+     * catches a marker that goes *backwards* but not one that is merely early. Measured on device
+     * with four phrases spoken about eight seconds apart, the second hit reported 6.4 s for audio
+     * spoken at 12 s -- forward of the previous marker, so plausible by every test, and wrong by
+     * five seconds. The feed position has no such problem: it is the caller's own count of audio
+     * handed over, so it cannot drift.
+     */
+    private var hasReset = false
 
     /**
      * Where in the recording the last accepted chunk ended.
@@ -123,6 +165,14 @@ class KeywordDetector {
                 ),
                 tokens = paths.tokens.absolutePath,
                 numThreads = 1,
+                // Pinned to CPU, and deliberately left out of the provider setting the transcription
+                // path honours. Two reasons, and the second is the one that decides it. This does not
+                // run during transcription at all -- it runs live, while the user is recording -- so
+                // it contributes nothing to the number that setting exists to measure. And a provider
+                // that mishandles a tensor here does not return an error: sherpa has been seen to
+                // abort the process outright on a shape mismatch in this model, which during a
+                // recording costs the user the walkthrough they are in the middle of. There is
+                // nothing to win here and a recording to lose.
                 provider = "cpu",
             ),
             keywordsFile = paths.keywords.absolutePath,
@@ -146,6 +196,8 @@ class KeywordDetector {
         stream = createdStream
         spotter = created
         position = 0
+        lastAcceptedEnd = 0
+        hasReset = false
         Log.i(TAG, "keyword spotter loaded with ${SpokenKeywords.entries.size} keywords")
     }
 
@@ -165,17 +217,27 @@ class KeywordDetector {
             activeStream.acceptWaveform(samples, AudioRecorder.SAMPLE_RATE)
             position = chunkStartSample + samples.size
 
-            val fired = mutableListOf<SpottedKeyword>()
+            // Decode to exhaustion, THEN read the result, THEN reset -- the order sherpa's own
+            // streaming samples use, with the reset outside the decode loop rather than inside it.
+            //
+            // Honest note on what this does and does not buy. Resetting mid-loop is not the
+            // documented usage and is worth not doing; but it is NOT the cause of the abort this
+            // detector currently hits on device (see the class docs), which reproduces with this
+            // ordering too. The cost of the safer order is at most one keyword per chunk -- ~100 ms
+            // of audio, and nobody says two marker phrases in a tenth of a second.
             while (active.isReady(activeStream)) {
                 active.decode(activeStream)
+            }
 
-                val result = active.getResult(activeStream)
-                if (result.keyword.isEmpty()) continue
-
+            val fired = mutableListOf<SpottedKeyword>()
+            val result = active.getResult(activeStream)
+            if (result.keyword.isNotEmpty()) {
                 fired += offsetsFor(result.keyword, result.timestamps)
                 // Without this the same keyword can never fire twice in one recording -- and opening
                 // three non-conformities in a walkthrough is the normal case, not the exotic one.
+                // It is also what invalidates the model's timestamps from here on: see [hasReset].
                 active.reset(activeStream)
+                hasReset = true
             }
             fired
         } catch (e: Exception) {
@@ -203,15 +265,28 @@ class KeywordDetector {
         val first = timestamps?.firstOrNull()
         val last = timestamps?.lastOrNull()
 
-        val plausible = first != null && last != null &&
+        val plausible = !hasReset &&
+            first != null && last != null &&
             first >= 0f && last >= first &&
-            (last * rate) <= position + rate // one second of slack for decoder lookahead
+            (last * rate) <= position + rate && // one second of slack for decoder lookahead
+            // ...and after everything already heard. This is the check that was missing, and its
+            // absence was not theoretical: on device a recording produced ACTION_START at 10.4 s
+            // followed by ACTION_END at 3.8 s, both reported as trustworthy, because every other
+            // test above passes for a timestamp that is merely *early*. The frame counter restarts
+            // after `reset(stream)` -- which is exactly what the class docs said was undocumented
+            // and worth checking. A marker placed before the one it follows does not just misplace
+            // itself; it inverts the span, and SpokenMarkers.pair then reads the end as orphaned and
+            // lets the start run to the end of the recording, swallowing the whole note.
+            (first * rate) >= lastAcceptedEnd
 
         if (plausible) {
+            val start = (first!! * rate).toInt().coerceAtLeast(lastAcceptedEnd)
+            val end = (last!! * rate).toInt().coerceIn(start, position.toInt())
+            lastAcceptedEnd = end
             return SpottedKeyword(
                 id = keyword,
-                startSample = (first!! * rate).toInt().coerceAtLeast(0),
-                endSample = (last!! * rate).toInt().coerceIn(0, position.toInt()),
+                startSample = start,
+                endSample = end,
                 timestamped = true,
             )
         }
@@ -221,10 +296,15 @@ class KeywordDetector {
             "keyword $keyword had unusable timestamps (${timestamps?.joinToString()}); " +
                 "using the feed position instead",
         )
-        val end = position.toInt()
+        // The feed position is monotonic by construction, so this branch cannot go backwards -- but
+        // the backdated start still has to clear the last hit, or two phrases spoken close together
+        // would overlap.
+        val end = position.toInt().coerceAtLeast(lastAcceptedEnd)
+        val start = (end - TYPICAL_PHRASE_SAMPLES).coerceIn(lastAcceptedEnd, end)
+        lastAcceptedEnd = end
         return SpottedKeyword(
             id = keyword,
-            startSample = (end - TYPICAL_PHRASE_SAMPLES).coerceAtLeast(0),
+            startSample = start,
             endSample = end,
             timestamped = false,
         )
@@ -236,6 +316,8 @@ class KeywordDetector {
         val activeStream = stream ?: return
         runCatching { active.reset(activeStream) }
         position = 0
+        lastAcceptedEnd = 0
+        hasReset = false
     }
 
     fun release() {

@@ -1,11 +1,13 @@
 package com.example.aiagenttestapp.stt
 
 import android.util.Log
+import com.example.aiagenttestapp.data.SettingsStore
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig
 import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -20,20 +22,32 @@ data class Transcription(
     val text: String,
     /** Lowercase ISO 639 code ("de", "en", "yue"), or null when the model reported none. */
     val language: String?,
+    /**
+     * Where each word sits in the audio, when the model says.
+     *
+     * Empty for every backend but Parakeet, and defaulted so that stays a detail of this file: the
+     * transcript itself is what almost every caller wants, and a nullable list would push a
+     * "did this model have timestamps?" branch into all of them.
+     */
+    val words: List<TimedWord> = emptyList(),
 )
 
 /**
  * One transcribed slice of a recording, together with the sample range it came from.
  *
- * The range is kept because it is the only thing that can tie text back to the audio timeline:
- * neither Whisper nor SenseVoice reports word timestamps through sherpa-onnx, so once slices are
- * joined into one string there is no way to recover which part of the recording a given word came
- * from. Speaker attribution and spoken markers both depend on not losing that.
+ * The range is kept because it is the only thing that can tie text back to the audio timeline. Of
+ * the models offered, only Parakeet returns word timestamps through sherpa-onnx, and nothing reads
+ * them: the pipeline is written against ranges because Whisper, SenseVoice and Gemma have nothing
+ * to offer instead, so once slices are joined into one string there is no way to recover which part
+ * of the recording a given word came from. Speaker attribution and spoken markers both depend on
+ * not losing that.
  */
 data class SegmentTranscription(
     val range: IntRange,
     val text: String,
     val language: String?,
+    /** In *recording* coordinates, not the slice's -- see [SpeechRecognizer.transcribeSegments]. */
+    val words: List<TimedWord> = emptyList(),
 )
 
 /** Joins segment texts into one transcript, skipping the blanks so silence adds no double spaces. */
@@ -47,7 +61,7 @@ internal fun joinSegments(segments: List<SegmentTranscription>): String = segmen
 /**
  * Speech-to-text with sherpa-onnx, running entirely on the device.
  *
- * Loads whichever model Settings selected -- SenseVoice or Whisper, both *offline*
+ * Loads whichever model Settings selected -- SenseVoice, Whisper or Parakeet, all *offline*
  * (non-streaming) recognisers: the whole recording is transcribed once the user stops talking,
  * rather than word-by-word as they speak. That is the right trade here. A streaming model has to
  * commit to each word before hearing the next one, so it cannot revise -- and this transcript is
@@ -58,7 +72,7 @@ internal fun joinSegments(segments: List<SegmentTranscription>): String = segmen
  * them into the APK would multiply its size for a feature not everyone uses. They are downloaded
  * on demand instead, like the language models.
  */
-class SpeechRecognizer {
+class SpeechRecognizer(private val settings: SettingsStore) {
 
     private var recognizer: OfflineRecognizer? = null
 
@@ -107,6 +121,7 @@ class SpeechRecognizer {
                 ),
                 tokens = paths.tokens.absolutePath,
                 numThreads = recommendedThreadCount(),
+                provider = settings.settings.value.onnxProvider.slug,
                 modelType = "sense_voice",
                 debug = false,
             )
@@ -119,17 +134,58 @@ class SpeechRecognizer {
                     // offered is notes in whatever language the user happens to speak.
                     language = "",
                     task = "transcribe",
+                    // Off by default, and leaving it off is what made Whisper look like a model with
+                    // no timestamps at all. sherpa computes a time per token from the decoder's
+                    // cross-attention (OpenAI's DTW method) only when asked; unasked, it returns an
+                    // empty array that reads exactly like "this model cannot do that".
+                    enableTokenTimestamps = true,
                 ),
                 tokens = paths.tokens.absolutePath,
                 numThreads = recommendedThreadCount(),
+                provider = settings.settings.value.onnxProvider.slug,
                 modelType = "whisper",
                 debug = false,
+            )
+
+            SpeechEngineKind.NEMO_TRANSDUCER -> OfflineModelConfig(
+                transducer = OfflineTransducerModelConfig(
+                    encoder = requirePath(paths.encoder, "encoder"),
+                    decoder = requirePath(paths.decoder, "decoder"),
+                    joiner = requirePath(paths.joiner, "joiner"),
+                ),
+                tokens = paths.tokens.absolutePath,
+                numThreads = recommendedThreadCount(),
+                provider = settings.settings.value.onnxProvider.slug,
+                // Named, not left empty for sherpa to work out. It can -- but only by opening the
+                // encoder to read its metadata, which is a second load of a 650 MB file, and its own
+                // log calls that path "Invalid model_type ... trying to load the model to get its
+                // type". The value has to be exactly this one: "transducer" is also accepted and
+                // selects the icefall implementation, which fails on these files.
+                modelType = "nemo_transducer",
+                // No language field to set. Unlike Whisper above, this model identifies the language
+                // internally and never says which it chose; see the note on [Transcription.language].
+                debug = false,
+            )
+
+            // Refused rather than quietly handled. A streaming transducer is not a slow offline
+            // model -- it is fed audio as it arrives and has its own recogniser, [StreamingRecognizer].
+            // Routing one here would mean the caller believes it is streaming when it is not, and the
+            // symptom of that is a transcript that arrives at the end anyway, with no error to
+            // explain why.
+            SpeechEngineKind.STREAMING_ZIPFORMER -> error(
+                "${paths.id} is a streaming model; load it with StreamingRecognizer, not this one",
             )
         }
 
         val config = OfflineRecognizerConfig(
             featConfig = FeatureConfig(
                 sampleRate = AudioRecorder.SAMPLE_RATE,
+                // 80 is right for Whisper and SenseVoice and wrong for Parakeet, which is trained on
+                // 128 mel bins -- and it is still correct to pass it. sherpa's NeMo recogniser
+                // overwrites feature_dim from the model's own metadata as it constructs (along with
+                // the normalisation type and the librosa-compatible filterbank), so a number set
+                // here is ignored on that path. Changing it to 128 would silently break the two
+                // families that do read it.
                 featureDim = 80,
             ),
             modelConfig = modelConfig,
@@ -144,9 +200,11 @@ class SpeechRecognizer {
     /**
      * Transcribes [samples] -- the whole recording, 16 kHz mono, -1..1.
      *
-     * Both models detect the spoken language themselves -- SenseVoice always, among its five;
+     * Two of the three models report the language they heard -- SenseVoice always, among its five;
      * Whisper because it is loaded with `language = ""` -- and the result carries it out, so
-     * downstream work (the summary, the saved note) can follow the language the user spoke.
+     * downstream work (the summary, the saved note) can follow the language the user spoke. Parakeet
+     * detects it too and has nowhere to put it: sherpa's transducer result has no `lang` field, so
+     * that path returns null and callers fall back to whatever they do for an unknown language.
      *
      * sherpa-onnx streams are single-use: one stream per utterance, decoded once. Reusing one across
      * recordings would append the new audio to the old and transcribe both together.
@@ -164,7 +222,18 @@ class SpeechRecognizer {
             stream.acceptWaveform(samples, AudioRecorder.SAMPLE_RATE)
             active.decode(stream)
             val result = active.getResult(stream)
-            Transcription(result.text.trim(), normalizeLanguage(result.lang))
+            Transcription(
+                text = result.text.trim(),
+                language = normalizeLanguage(result.lang),
+                // Empty for the families that report none, which costs nothing: the arrays are
+                // parallel, so a model with no timestamps yields no words rather than words at
+                // time zero.
+                words = TimedWords.fromTokens(
+                    tokens = result.tokens?.toList().orEmpty(),
+                    timestamps = result.timestamps ?: FloatArray(0),
+                    clipEndSeconds = samples.size.toFloat() / AudioRecorder.SAMPLE_RATE,
+                ),
+            )
         } finally {
             stream.release()
         }
@@ -204,8 +273,9 @@ class SpeechRecognizer {
      * text on each side kept apart. Speaker-turn boundaries need it so each turn can be attributed to
      * a person, and spoken-marker boundaries need it so the text inside a "non-conformity" tag is
      * exactly the audio between the two spoken markers. Both would be destroyed by joining first and
-     * trying to split the string afterwards -- neither Whisper nor SenseVoice returns word
-     * timestamps in sherpa-onnx, so there is nothing to align a character offset against.
+     * trying to split the string afterwards -- of the offered models only Parakeet returns word
+     * timestamps in sherpa-onnx, so on every other one there is nothing to align a character offset
+     * against.
      *
      * The whole pass holds [decodeLock], so a model swap cannot land halfway through a recording.
      */
@@ -220,8 +290,8 @@ class SpeechRecognizer {
             bounds.forEachIndexed { index, range ->
                 currentCoroutineContext().ensureActive()
 
-                // Defensive clamp: a caller computing boundaries from diarisation timings in seconds
-                // can round a range one sample past the buffer, and copyOfRange throws on that.
+                // Defensive clamp: a caller computing boundaries in seconds can round a range one
+                // sample past the buffer, and copyOfRange throws on that.
                 val from = range.first.coerceIn(0, samples.size)
                 val to = (range.last + 1).coerceIn(from, samples.size)
 
@@ -235,6 +305,16 @@ class SpeechRecognizer {
                     range = from until to,
                     text = piece.text,
                     language = piece.language,
+                    // Into recording coordinates here and nowhere else. Each slice is decoded on its
+                    // own and reports times from its own zero, so without this every slice's words
+                    // would claim to be at the start of the recording -- and the CLAUDE.md warning
+                    // about mixing window and recording coordinates is exactly this trap, one
+                    // abstraction up from the array indexing that has already caused a crash here.
+                    words = TimedWords.offsetBySamples(
+                        words = piece.words,
+                        offsetSamples = from,
+                        sampleRate = AudioRecorder.SAMPLE_RATE,
+                    ),
                 )
                 onProgress?.invoke(index + 1, bounds.size, joinSegments(results))
             }
@@ -243,56 +323,15 @@ class SpeechRecognizer {
         }
     }
 
-    /**
-     * Splits [samples] into inclusive ranges, each at most [MAX_SEGMENT_SAMPLES] long and ending on
-     * the quietest frame between the target length and the hard cap -- a pause, so segment edges
-     * fall between words rather than through them.
-     */
-    fun segmentBounds(samples: FloatArray): List<IntRange> {
-        val bounds = mutableListOf<IntRange>()
-        var start = 0
-        while (start < samples.size) {
-            if (samples.size - start <= MAX_SEGMENT_SAMPLES) {
-                bounds += start..samples.lastIndex
-                break
-            }
-            val cut = quietestCutBetween(samples, start, minOf(start + MAX_SEGMENT_SAMPLES, samples.size))
-            bounds += start until cut
-            start = cut
-        }
-        return bounds
-    }
+    /** Where this recogniser's segment boundaries go. See [AudioSegmenter] for the arithmetic. */
+    fun segmentBounds(samples: FloatArray): List<IntRange> =
+        AudioSegmenter.segmentBounds(samples, AudioSegmenter.ONNX)
 
     /**
-     * The sample index of the quietest ~30 ms frame in `[from, until)`, preferring a cut no earlier
-     * than [TARGET_SEGMENT_SAMPLES] past [from] so most segments run near their useful length.
-     *
-     * Public because the slicer needs it: when spoken markers and speaker turns decide where the
-     * boundaries go, an over-long slice between two of them still has to be split somewhere sensible,
-     * and "at the quietest moment" is that somewhere. Passing it in as a function keeps the slicing
-     * rules pure and testable while the acoustics stay here.
+     * SenseVoice reports a token like `<|en|>`, Whisper a bare `en`; both become a plain code.
+     * Parakeet reports an empty string, which falls out of here as null -- the same answer, and the
+     * right one, since it never said.
      */
-    fun quietestCutBetween(samples: FloatArray, from: Int, until: Int): Int {
-        val hardEnd = until.coerceIn(0, samples.size)
-        // Never search past the end, and never insist on a target the window is too short to reach.
-        val searchStart = (from + TARGET_SEGMENT_SAMPLES).coerceAtMost(hardEnd)
-
-        var quietest = Double.MAX_VALUE
-        var cutAt = hardEnd
-        var i = searchStart
-        while (i + CUT_FRAME_SAMPLES <= hardEnd) {
-            var energy = 0.0
-            for (j in i until i + CUT_FRAME_SAMPLES) energy += (samples[j] * samples[j]).toDouble()
-            if (energy < quietest) {
-                quietest = energy
-                cutAt = i + CUT_FRAME_SAMPLES / 2
-            }
-            i += CUT_FRAME_SAMPLES
-        }
-        return cutAt.coerceIn(from + 1, hardEnd.coerceAtLeast(from + 1))
-    }
-
-    /** SenseVoice reports a token like `<|en|>`, Whisper a bare `en`; both become a plain code. */
     private fun normalizeLanguage(raw: String?): String? {
         val code = raw.orEmpty().trim()
             .removePrefix("<|").removeSuffix("|>")
@@ -327,20 +366,7 @@ class SpeechRecognizer {
     private fun requirePath(file: File?, role: String): String =
         file?.absolutePath ?: error("Speech model is missing its $role file")
 
-    companion object {
-        private const val TAG = "SpeechRecognizer"
-
-        /**
-         * Both SenseVoice and Whisper are trained on utterances of roughly half a minute -- Whisper's
-         * encoder ignores anything past 30 s outright, SenseVoice degrades into repeated garbage.
-         * Long recordings are therefore transcribed in segments no larger than [MAX_SEGMENT_SAMPLES].
-         * 28 s leaves headroom under the 30 s wall; [TARGET_SEGMENT_SAMPLES] is 20 s so most cuts land
-         * at a natural pause well before the cap.
-         */
-        val TARGET_SEGMENT_SAMPLES = AudioRecorder.SAMPLE_RATE * 20
-        val MAX_SEGMENT_SAMPLES = AudioRecorder.SAMPLE_RATE * 28
-
-        /** ~30 ms energy frame used to find the quietest cut point between segments. */
-        private val CUT_FRAME_SAMPLES = AudioRecorder.SAMPLE_RATE * 30 / 1000
+    private companion object {
+        const val TAG = "SpeechRecognizer"
     }
 }
