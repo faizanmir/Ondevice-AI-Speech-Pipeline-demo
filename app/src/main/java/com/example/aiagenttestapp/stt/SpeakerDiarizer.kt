@@ -21,6 +21,8 @@ internal data class SpeakerDiarizationPolicy(
     val threshold: Float,
     val minDurationOn: Float,
     val minDurationOff: Float,
+    /** How far the segmentation window advances, as a fraction of its length. */
+    val windowShiftRatio: Float,
 )
 
 /**
@@ -35,6 +37,7 @@ internal fun speakerDiarizationPolicy(expectedSpeakers: Int) = SpeakerDiarizatio
     threshold = if (expectedSpeakers > 0) 0f else 0.5f,
     minDurationOn = 0.2f,
     minDurationOff = 0.5f,
+    windowShiftRatio = 0.25f,
 )
 
 /**
@@ -85,8 +88,28 @@ class SpeakerDiarizer {
         val policy = speakerDiarizationPolicy(expectedSpeakers)
         val config = OfflineSpeakerDiarizationConfig(
             segmentation = OfflineSpeakerSegmentationModelConfig(
+                // How far the 10-second window advances between passes. sherpa and pyannote both
+                // default to 0.1 -- a 90% overlap, which buys the finest boundaries by embedding
+                // roughly ten windows for every one a 0.5 shift would.
+                //
+                // Diarisation was 73% of this pipeline's runtime (82.9s of 112.9s on a 288.6s
+                // recording) and almost all of that is embedding those windows, so this is the knob
+                // that trades accuracy for time. Measured on that recording against its own
+                // timeline:
+                //
+                //     shift   diarise   correctly named   turns right
+                //     0.10     82.9s        96.5%           29/36
+                //     0.25     33.2s        96.0%           27/36
+                //     0.50     15.6s        94.5%           25/36
+                //
+                // 0.25 because the curve bends there: it buys back 49.7 seconds for half a point,
+                // where going on to 0.5 buys only 17.6 more and costs three times as much accuracy.
+                // Turn-level accuracy falls faster than frame-level at every step, which is the
+                // shape to expect -- coarser windows lose short turns first, and those are the
+                // backchannels this app's recordings are full of.
                 pyannote = OfflineSpeakerSegmentationPyannoteModelConfig(
                     model = segmentationModel.absolutePath,
+                    windowShiftRatio = policy.windowShiftRatio,
                 ),
                 numThreads = threadCount,
                 debug = false,

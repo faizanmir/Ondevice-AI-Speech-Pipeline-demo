@@ -19,13 +19,17 @@ import com.example.aiagenttestapp.data.audiomodels.AudioModelCatalog
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
 import com.example.aiagenttestapp.data.notes.WavFile
 import com.example.aiagenttestapp.stt.AudioRecorder
+import com.example.aiagenttestapp.stt.DiarizedSegment
 import com.example.aiagenttestapp.stt.SpeakerDiarizer
 import com.example.aiagenttestapp.stt.SpeechEngineKind
 import com.example.aiagenttestapp.stt.SpeechModelRepository
 import com.example.aiagenttestapp.stt.SpeechRecognizer
+import com.example.aiagenttestapp.stt.TimedWord
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -94,48 +98,110 @@ class DiarizeWorker @AssistedInject constructor(
             val samples = withProgress(id, 0.05f) { WavFile.read(audio) }
             check(samples.isNotEmpty()) { "The recording is empty." }
 
+            // The two halves run concurrently. Nothing flows between them -- diarisation makes
+            // turns, recognition makes words, and they meet only at SpeakerAlignment -- so the wall
+            // clock is the longer branch rather than their sum.
+            //
+            // This is not free, and the ceiling is lower than it looks. Both are CPU-saturating ONNX
+            // inference asking for recommendedThreadCount() threads each, so on an eight-core device
+            // the two together want all eight with nothing left over. The gain is bounded by spare
+            // cores, not by the work: measured sequentially at 44.4s of diarisation against 20.0s of
+            // recognition, the best case is the 20 seconds, not half the total.
+            //
+            // Peak memory is the cost. Both model sets are resident at once -- roughly 46 MB of
+            // segmentation and embedding alongside the recogniser -- on top of the whole recording
+            // as floats. If that ever has to be given back, this is the first thing to undo.
+            //
             // A count the user supplied is evidence about this recording and is independent of which
             // voices happen to be enrolled. The old branch discarded that evidence whenever *any*
             // enrolment existed, even if the other people in this recording were strangers. Naming
             // can merge duplicate clusters, but it cannot split two real voices already merged into
             // one, so the explicit count must reach sherpa unchanged.
-            diarizer.load(
-                segmentationModel = audioModels.fileFor(bundle, AudioModelCatalog.SEGMENTATION),
-                embeddingModel = audioModels.fileFor(bundle, AudioModelCatalog.EMBEDDING),
-                expectedSpeakers = recording.expectedSpeakers,
-            )
+            val wallStarted = System.currentTimeMillis()
+            val (diarised, transcribed) = coroutineScope {
+                val diarisation = async(Dispatchers.Default) {
+                    diarizer.load(
+                        segmentationModel = audioModels.fileFor(bundle, AudioModelCatalog.SEGMENTATION),
+                        embeddingModel = audioModels.fileFor(bundle, AudioModelCatalog.EMBEDDING),
+                        expectedSpeakers = recording.expectedSpeakers,
+                    )
 
-            // Diarisation reports no progress -- see [SpeakerDiarizer.diarize] for why asking it to
-            // takes the process down -- so the row sits at 0.05 for the whole phase and the screen
-            // shows an indeterminate bar. Honest, and better than a bar that claims to know: the
-            // alternative was a fabricated ramp, which is a worse lie on the one screen whose job is
-            // reporting what the models actually did.
-            val rawTurns = withContext(Dispatchers.Default) { diarizer.diarize(samples) }
-            diarizer.release()
+                    val diariseStarted = System.currentTimeMillis()
+                    val rawTurns = diarizer.diarize(samples)
+                    diarizer.release()
+                    val diariseMillis = System.currentTimeMillis() - diariseStarted
 
-            // The step sherpa's clustering leaves out. Fragments too short to be a speaker are
-            // folded into whichever cluster they sound like, before anything downstream inherits
-            // their ids -- see [SpeakerRepository.mergeSmallClusters].
-            val turns = speakers.mergeSmallClusters(samples, rawTurns)
-            Log.i(
-                TAG,
-                "diarisation found ${rawTurns.map { it.cluster }.distinct().size} clusters in " +
-                    "${rawTurns.size} turns, ${turns.map { it.cluster }.distinct().size} after " +
-                    "folding fragments",
-            )
+                    // The step sherpa's clustering leaves out. Fragments too short to be a speaker
+                    // are folded into whichever cluster they sound like, before anything downstream
+                    // inherits their ids -- see [SpeakerRepository.mergeSmallClusters].
+                    val foldStarted = System.currentTimeMillis()
+                    val turns = speakers.mergeSmallClusters(samples, rawTurns)
+                    val foldMillis = System.currentTimeMillis() - foldStarted
 
-            if (recognizer.loadedModelId != model.id) {
-                recognizer.load(speechModels.selectedPaths())
+                    val nameStarted = System.currentTimeMillis()
+                    val names = speakers.labelClusters(samples, turns)
+                    val nameMillis = System.currentTimeMillis() - nameStarted
+
+                    Log.i(
+                        TAG,
+                        "diarisation found ${rawTurns.map { it.cluster }.distinct().size} clusters " +
+                            "in ${rawTurns.size} turns, " +
+                            "${turns.map { it.cluster }.distinct().size} after folding fragments",
+                    )
+                    Diarised(turns, names, diariseMillis, foldMillis, nameMillis)
+                }
+
+                // Recognition owns the progress bar outright now. Diarisation cannot report any --
+                // see [SpeakerDiarizer.diarize] for why asking it to takes the process down -- and
+                // with the two running together there is no longer a diarisation phase for the row
+                // to sit still through.
+                val transcription = async(Dispatchers.Default) {
+                    val started = System.currentTimeMillis()
+                    if (recognizer.loadedModelId != model.id) {
+                        recognizer.load(speechModels.selectedPaths())
+                    }
+                    val bounds = recognizer.segmentBounds(samples)
+                    val pieces = recognizer.transcribeSegments(samples, bounds) { done, total, _ ->
+                        dao.updateProgress(id, 0.05f + (done.toFloat() / total) * 0.9f)
+                    }
+                    Transcribed(
+                        pieces.flatMap { it.words },
+                        System.currentTimeMillis() - started,
+                    )
+                }
+
+                diarisation.await() to transcription.await()
             }
-            val bounds = recognizer.segmentBounds(samples)
-            val pieces = recognizer.transcribeSegments(samples, bounds) { done, total, _ ->
-                dao.updateProgress(id, 0.5f + (done.toFloat() / total) * 0.45f)
-            }
 
-            val words = pieces.flatMap { it.words }
+            val turns = diarised.turns
+            val names = diarised.names
+            val words = transcribed.words
+            val diariseMillis = diarised.diariseMillis
+            val foldMillis = diarised.foldMillis
+            val nameMillis = diarised.nameMillis
+            val transcribeMillis = transcribed.millis
 
             val blocks = SpeakerAlignment.blocks(words, turns, AudioRecorder.SAMPLE_RATE)
-            val names = speakers.labelClusters(samples, turns)
+
+            // Timed per phase because the two halves of this pipeline are data-independent -- nothing
+            // flows between diarisation and recognition until SpeakerAlignment joins them -- so
+            // whether running them concurrently is worth the peak memory is decided entirely by
+            // which one is the long pole. That is a per-device answer, so the numbers have to come
+            // from the device rather than from a guess.
+            Log.i(
+                TAG,
+                ("phases over %.1fs of audio: diarise %.1fs + fold %.1fs + name %.1fs = %.1fs " +
+                    "|| transcribe %.1fs -> wall %.1fs (sequential would be %.1fs)").format(
+                    samples.size / AudioRecorder.SAMPLE_RATE.toFloat(),
+                    diariseMillis / 1000f,
+                    foldMillis / 1000f,
+                    nameMillis / 1000f,
+                    (diariseMillis + foldMillis + nameMillis) / 1000f,
+                    transcribeMillis / 1000f,
+                    (System.currentTimeMillis() - wallStarted) / 1000f,
+                    (diariseMillis + foldMillis + nameMillis + transcribeMillis) / 1000f,
+                ),
+            )
 
             // One person is routinely several clusters, all correctly given the same name, and a
             // block cut at every hop between them splits their sentence across duplicate labels.
@@ -291,3 +357,18 @@ class DiarizeWorker @AssistedInject constructor(
         }
     }
 }
+
+/** What the diarisation branch produced, so it can be awaited as one value. */
+private data class Diarised(
+    val turns: List<DiarizedSegment>,
+    val names: Map<Int, String>,
+    val diariseMillis: Long,
+    val foldMillis: Long,
+    val nameMillis: Long,
+)
+
+/** What the recognition branch produced. */
+private data class Transcribed(
+    val words: List<TimedWord>,
+    val millis: Long,
+)

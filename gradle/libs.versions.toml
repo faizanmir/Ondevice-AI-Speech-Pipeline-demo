@@ -51,7 +51,7 @@ startup = "1.2.0"
 # project's Kotlin 2.2 compiler cannot read. 0.35.0 requires only stdlib 2.1.21.
 markdownRenderer = "0.35.0"
 # Speech-to-text. Resolved from GitHub releases via the ivy repo in settings.gradle.kts.
-sherpaOnnx = "1.13.5"
+sherpaOnnx = "1.13.6"
 # bzip2 + tar, for one job: sherpa-onnx publishes its keyword-spotting models only as .tar.bz2 on
 # GitHub releases, with no per-file mirror, and the Android runtime has neither codec.
 commonsCompress = "1.27.1"
