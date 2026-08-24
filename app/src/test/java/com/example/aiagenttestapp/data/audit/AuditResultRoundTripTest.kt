@@ -82,4 +82,49 @@ class AuditResultRoundTripTest {
         // a null, and the decoder reads a missing key as no conclusion.
         assertNull(restored?.nonConformities?.get(1)?.resultType)
     }
+
+    @Test
+    fun `a section's cost survives the checkpoint it is banked in`() {
+        // This is the round trip that makes a resumed document report its whole cost: each section's
+        // turn is stored with that section's findings and added up again at the end.
+        val chunk = AuditAnalysis(
+            facts = listOf("Calibration log signed 3 March."),
+            runStats = AuditRunStats(
+                turns = 1,
+                promptTokens = 3_600,
+                generatedTokens = 900,
+                prefillMillis = 4_000,
+                decodeMillis = 50_000,
+            ),
+        )
+
+        val restored = AuditResultCodec.decode(AuditResultCodec.encode(chunk))
+
+        assertEquals(chunk.runStats, restored?.runStats)
+    }
+
+    @Test
+    fun `a report with no measurements says so rather than claiming zero throughput`() {
+        // Reports saved before the runtime's counters were switched on, and any engine that reports
+        // none, must not render as "0 tok/s" -- a measurement nobody made.
+        val restored = AuditResultCodec.decode(AuditResultCodec.encode(AuditAnalysis(summary = "x")))
+
+        assertTrue(restored?.runStats?.isEmpty == true)
+    }
+
+    @Test
+    fun `section costs add up across a document`() {
+        val a = AuditRunStats(1, promptTokens = 3_600, generatedTokens = 900, prefillMillis = 4_000, decodeMillis = 50_000)
+        val b = AuditRunStats(1, promptTokens = 3_400, generatedTokens = 800, prefillMillis = 3_800, decodeMillis = 44_000)
+
+        val total = a + b
+
+        assertEquals(2, total.turns)
+        assertEquals(7_000, total.promptTokens)
+        assertEquals(1_700, total.generatedTokens)
+        // 7,000 prompt tokens in 7.8 seconds.
+        assertEquals(897.4, total.prefillTokensPerSecond, 0.1)
+        // 1,700 generated in 94 seconds.
+        assertEquals(18.1, total.decodeTokensPerSecond, 0.1)
+    }
 }

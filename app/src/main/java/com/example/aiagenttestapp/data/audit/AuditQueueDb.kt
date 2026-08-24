@@ -37,6 +37,19 @@ data class AuditDocumentEntity(
      * checkpointed sections under the other mode's assumptions would silently mis-size every one.
      */
     val mode: String = AuditMode.DETAILED.name,
+    /**
+     * Whether this document gets a written summary -- and, with it, whether extraction is asked for
+     * the per-section facts a summary is written from.
+     *
+     * One flag for both because the two are the same decision: facts are rendered nowhere and feed
+     * nothing else, so facts without a summary is output nobody reads, and a summary without facts
+     * cannot be written. Turning it off is where the saving is: the summary is one turn, the facts
+     * are several lines on every section.
+     *
+     * Pinned at enqueue for the same reason as [mode] and [modelId]: dropping the facts shortens
+     * the preamble, which changes the reserve, which is where the chunk boundaries fell.
+     */
+    val includeSummary: Boolean = true,
     val status: String,
     val chunkCount: Int,
     /**
@@ -163,12 +176,25 @@ abstract class AuditDao {
     abstract suspend fun deleteDocument(id: Long)
 }
 
-@Database(entities = [AuditDocumentEntity::class, AuditChunkEntity::class], version = 6, exportSchema = false)
+@Database(entities = [AuditDocumentEntity::class, AuditChunkEntity::class], version = 7, exportSchema = false)
 abstract class AuditDatabase : RoomDatabase() {
 
     abstract fun auditDao(): AuditDao
 
     companion object {
+        /**
+         * Adds includeSummary. Existing documents default to 1 -- true -- because that is how every
+         * one of them was actually produced: the choice did not exist when they were queued, and a
+         * report that already carries a summary must not start describing itself as one without.
+         */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE audit_documents ADD COLUMN includeSummary INTEGER NOT NULL DEFAULT 1",
+                )
+            }
+        }
+
         /** Adds analysisMillis. Existing documents report 0, which the UI reads as "unknown". */
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {

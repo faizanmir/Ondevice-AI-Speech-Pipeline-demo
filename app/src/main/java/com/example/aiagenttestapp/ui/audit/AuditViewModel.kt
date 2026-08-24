@@ -90,7 +90,15 @@ sealed interface AuditIntent : UiIntent {
      * state, so what gets pinned is exactly the option the user tapped -- no window in which a
      * default could change between the tap and the file coming back from the picker.
      */
-    data class AttachFile(val uri: Uri, val mode: AuditMode) : AuditIntent
+    data class AttachFile(
+        val uri: Uri,
+        val mode: AuditMode,
+        /**
+         * Pinned with the mode and for the same reason: it shortens the extraction prompt, and the
+         * chunk boundaries are cut from what that prompt leaves.
+         */
+        val includeSummary: Boolean = true,
+    ) : AuditIntent
     data class Cancel(val id: Long) : AuditIntent
     data class Retry(val id: Long) : AuditIntent
 }
@@ -122,7 +130,7 @@ class AuditViewModel @Inject constructor(
     override fun reduce(intent: AuditIntent): Unit = when (intent) {
         is AuditIntent.Open -> openAudit(intent.modelId, intent.mode)
         is AuditIntent.SwitchModel -> switchModel(intent.modelId)
-        is AuditIntent.AttachFile -> attachFile(intent.uri, intent.mode)
+        is AuditIntent.AttachFile -> attachFile(intent.uri, intent.mode, intent.includeSummary)
         is AuditIntent.Cancel -> cancel(intent.id)
         is AuditIntent.Retry -> retry(intent.id)
     }
@@ -234,7 +242,7 @@ class AuditViewModel @Inject constructor(
     }
 
     /** Reads a picked file and enqueues it as its own document -- so multiple files fan out cleanly. */
-    private fun attachFile(uri: Uri, mode: AuditMode) {
+    private fun attachFile(uri: Uri, mode: AuditMode, includeSummary: Boolean) {
         val model = currentState.model ?: return
         setState {
             copy(isExtractingFile = true, attachmentError = null, lastAdded = null, mode = mode)
@@ -242,15 +250,16 @@ class AuditViewModel @Inject constructor(
         viewModelScope.launch {
             when (val result = fileTextExtractor.extract(uri, maxChars = MAX_TRANSCRIPT_CHARS)) {
                 is FileTextExtractor.Result.Success -> {
-                    // Chunked against the window an audit run actually opens, not the model's
-                    // maximum -- AuditModelPlan loads with the same capped value -- and for the mode
-                    // being pinned here, which decides the reserve and so the section size.
+                    // Chunked against the model's whole window, which is exactly what
+                    // AuditModelPlan loads with -- and for the mode being pinned here, which
+                    // decides the reserve and so the section size.
                     auditQueue.enqueue(
                         result.name,
                         result.text,
                         model.id,
-                        AuditChunker.auditContextTokens(model.contextTokens),
+                        model.contextTokens,
                         mode,
+                        includeSummary,
                     )
                     setState {
                         copy(

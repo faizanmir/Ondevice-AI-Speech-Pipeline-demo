@@ -19,6 +19,12 @@ data class AuditDocument(
     val modelId: String,
     /** The read pinned at enqueue, which decided how this document was chunked. */
     val mode: AuditMode,
+    /**
+     * Whether this document was queued to get a written summary -- and so whether extraction was
+     * asked for the per-section facts one is written from. Pinned at enqueue like [mode], so a row
+     * describes the read it will actually get rather than whatever the switch says now.
+     */
+    val includeSummary: Boolean,
     val status: AuditStatus,
     val chunkCount: Int,
     val chunksDone: Int,
@@ -71,6 +77,12 @@ class AuditQueue(context: Context, private val dao: AuditDao) {
         modelId: String,
         contextTokens: Int,
         mode: AuditMode = AuditMode.DETAILED,
+        /**
+         * Whether this document gets a written summary, and so whether extraction is asked for the
+         * facts one is written from. Pinned onto the row, because dropping the facts shortens the
+         * preamble and the chunk sizes below are computed from it.
+         */
+        includeSummary: Boolean = true,
     ) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
@@ -94,7 +106,7 @@ class AuditQueue(context: Context, private val dao: AuditDao) {
         // sections are correspondingly larger and a document needs fewer of them.
         val chunkChars = AuditChunker.chunkCharBudget(
             contextTokens.coerceAtLeast(1),
-            AuditPromptBudget.fixedPromptTokens(mode, AuditPromptProfile.RICH),
+            AuditPromptBudget.fixedPromptTokens(mode, AuditPromptProfile.RICH, includeSummary),
             charsPerToken = ContextWindow.charsPerToken(trimmed),
             mode = mode,
         )
@@ -115,6 +127,7 @@ class AuditQueue(context: Context, private val dao: AuditDao) {
                 name = name,
                 modelId = modelId,
                 mode = mode.name,
+                includeSummary = includeSummary,
                 status = AuditStatus.QUEUED.name,
                 chunkCount = chunks.size,
                 truncatedChars = plan.droppedChars,
@@ -163,6 +176,7 @@ class AuditQueue(context: Context, private val dao: AuditDao) {
         name = name,
         modelId = modelId,
         mode = AuditMode.from(mode),
+        includeSummary = includeSummary,
         status = runCatching { AuditStatus.valueOf(status) }.getOrDefault(AuditStatus.FAILED),
         chunkCount = chunkCount,
         chunksDone = chunksDone,

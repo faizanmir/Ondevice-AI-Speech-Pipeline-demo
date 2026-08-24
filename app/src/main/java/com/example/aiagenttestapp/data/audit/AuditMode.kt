@@ -7,22 +7,25 @@ package com.example.aiagenttestapp.data.audit
  * decides how the document was chunked, so a later switch cannot be allowed to reinterpret sections
  * that were sized for the other mode. One queue can therefore hold both kinds side by side.
  *
- * The two are not the same job at different lengths. [DETAILED] decides *what counts as a
- * non-conformity* and has to defend each one with a verified quote and a grade; [QUICK] only has to
- * say what the document contains and what it says will be done. That difference is why quick is
- * fast: it drops the draft pass, the evidence quotes and the whole severity-grading stage, and its
- * far shorter preamble leaves more of every window for text -- so a document also needs fewer
- * sections to cover.
+ * The two are not the same job at different lengths. Both now reach a conclusion -- quick states its
+ * result in the same [AuditResultType] vocabulary detailed does -- but [DETAILED] also enumerates
+ * *what counts as a non-conformity* and defends each one with a verified quote, a grade and the
+ * clause it cites. [QUICK] answers one question about the document and stops: what was evaluated,
+ * what was concluded, why, on what evidence, plus the actions and what was left open.
+ *
+ * That difference is why quick is fast: it drops the draft pass, the per-finding evidence quotes,
+ * the severity grading, the cited standards and the whole prose-summary turn, and its far shorter
+ * preamble leaves more of every window for text -- so a document also needs fewer sections to cover.
  *
  * What quick does NOT drop is chunking. It reads the whole document section by section like detailed
- * does, then condenses; a "quick" mode that only read the first window would be a different and much
- * worse feature.
+ * does, and the per-section elements are merged and collapsed in code afterwards; a "quick" mode that
+ * only read the first window would be a different and much worse feature.
  */
 enum class AuditMode {
     /** The full audit: non-conformities, severity grades, verified quotes, cited standards. */
     DETAILED,
 
-    /** Key points and actions only, condensed to at most [QuickAudit.MAX_POINTS] points. */
+    /** One evaluation -- result, reason, evidence -- plus the actions and the unresolved items. */
     QUICK,
     ;
 
@@ -36,7 +39,7 @@ enum class AuditMode {
     val blurb: String
         get() = when (this) {
             DETAILED -> "Non-conformities with severity, quotes and clauses. Slower."
-            QUICK -> "Up to ${QuickAudit.MAX_POINTS} key points and the actions. Much faster."
+            QUICK -> "The evaluation, its result, reason and evidence. Much faster."
         }
 
     companion object {
@@ -49,10 +52,18 @@ enum class AuditMode {
 /** Shared constants for the quick read, so the prompt, the cap and the UI copy cannot disagree. */
 object QuickAudit {
     /**
-     * The most points a quick summary may hold.
+     * The most actions a quick report may carry.
      *
-     * Asked for in the prompt *and* enforced in code after the reply: a small model asked for "at
-     * most 10" will hand back 14, and a cap that only lives in a prompt is a request, not a limit.
+     * Asked for in the prompt *and* enforced in code after the merge: a small model asked for "at
+     * most two" hands back five, and a cap that only lives in a prompt is a request, not a limit.
+     *
+     * The cap is applied to the merged list, so the two that survive are the two raised earliest in
+     * the document. That is a choice, not an accident: it is the only ordering the pipeline can
+     * defend without a second model turn, since [AuditChunker.mergeFindings] preserves order of
+     * first appearance and nothing downstream knows which action mattered most.
      */
-    const val MAX_POINTS = 10
+    const val MAX_ACTIONS = 2
+
+    /** The most unresolved items a quick report may carry. Capped exactly as [MAX_ACTIONS] is. */
+    const val MAX_UNRESOLVED = 2
 }

@@ -1,5 +1,6 @@
 package com.example.aiagenttestapp.data.audit
 
+import com.example.aiagent.engine.core.SamplingParams
 import com.example.aiagenttestapp.prompts.audit.AuditExtractionPrompts
 import com.example.aiagenttestapp.prompts.audit.AuditPromptBudget
 import com.example.aiagenttestapp.prompts.audit.AuditSystemPrompts
@@ -42,11 +43,11 @@ sealed interface AuditModelPlan {
     ) : AuditModelPlan {
 
         /**
-         * The context this run uses -- the model's, capped to what the audit actually needs. Read by
-         * every caller that sizes anything, so the load, the chunking and the budgets cannot disagree
-         * about how big the window is.
+         * The context this run uses: the model's own, whole. Read by every caller that sizes
+         * anything, so the load, the chunking and the budgets cannot disagree about how big the
+         * window is.
          */
-        val contextTokens: Int = AuditChunker.auditContextTokens(resolved.contextTokens)
+        val contextTokens: Int = resolved.contextTokens
 
         /**
          * The load an audit run performs: the audit system prompt, and the extraction temperature
@@ -60,9 +61,9 @@ sealed interface AuditModelPlan {
         fun loadRequest(mode: AuditMode = AuditMode.DETAILED): LoadRequest {
             val base = resolved.baseLoadRequest()
             return base.copy(
-                // Deliberately not the model's full window: see AuditChunker.auditContextTokens. The
-                // cost is that a model made resident for chat is loaded with a different request and
-                // so cannot be reused here -- switching between chat and audit reloads it.
+                // The model's full window -- the same value chat loads with, since the audit-only
+                // clamp is gone. The request still differs from chat's by system prompt and
+                // temperature, so switching between the two reloads the model regardless.
                 contextTokens = contextTokens,
                 // No reasoning directive of any kind: extraction needs the model's thinking, and
                 // suppressing it measurably cost findings. See AuditPromptBudget.fixedPromptTokens.
@@ -75,7 +76,16 @@ sealed interface AuditModelPlan {
                     AuditMode.DETAILED -> AuditSystemPrompts.SYSTEM_PROMPT
                     AuditMode.QUICK -> AuditSystemPrompts.QUICK_SYSTEM_PROMPT
                 },
-                sampling = base.sampling.copy(temperature = AuditExtractionPrompts.EXTRACTION_TEMPERATURE),
+                // Temperature pinned for the read, and the seed pinned so the read repeats. A chat
+                // draws a fresh seed every load, which is right for a chat and wrong for a document
+                // that will be read again: the same section graded two ways on two runs is a coin
+                // toss nobody can defend. A seed the user already fixed is left alone -- see
+                // AuditExtractionPrompts.EXTRACTION_SEED.
+                sampling = base.sampling.copy(
+                    temperature = AuditExtractionPrompts.EXTRACTION_TEMPERATURE,
+                    seed = base.sampling.seed.takeIf { it != SamplingParams.SEED_RANDOM }
+                        ?: AuditExtractionPrompts.EXTRACTION_SEED,
+                ),
             )
         }
     }
@@ -105,18 +115,13 @@ class AuditLoadPlanner @Inject constructor(
             is ModelLoadPlan.Resolved -> when {
                 !plan.downloaded -> AuditModelPlan.Unavailable("${plan.model.name} is not downloaded.")
 
-                // A context that cannot hold the audit prompt plus a usable slice of transcript is
-                // refused here rather than absorbed downstream. AuditChunker's floor would otherwise
-                // keep handing out chunks the window cannot fit, and every turn of the run would
-                // overflow -- producing a finished-looking report from sections the model only ever
-                // saw the tail of. Measured against RICH, the same worst case AuditQueue reserves
-                // for, so the gate and the chunk sizing can never disagree.
-                AuditChunker.auditContextTokens(plan.contextTokens) < MIN_CONTEXT_TOKENS ->
-                    AuditModelPlan.Unavailable(
-                        "${plan.model.name} has too small a context window to audit with " +
-                            "(${plan.contextTokens} tokens; about $MIN_CONTEXT_TOKENS are needed).",
-                    )
-
+                // No minimum-context gate. There used to be one, refusing any model whose window
+                // could not hold the RICH preamble plus a reply plus a floor-sized chunk (~3,300
+                // tokens), on the grounds that smaller windows overflow every turn and produce a
+                // finished-looking report from sections the model only saw the tail of. That is
+                // still true, and it is now the user's call rather than this planner's: a degraded
+                // audit beats no audit, and the gate was firing on models that run perfectly well.
+                // AuditChunker.chunkCharBudget carries the floor that keeps such a run going.
                 else -> AuditModelPlan.Ready(
                     modelName = plan.model.name,
                     engineName = plan.engineName,
@@ -132,10 +137,4 @@ class AuditLoadPlanner @Inject constructor(
         mode: AuditMode = AuditMode.DETAILED,
     ): InferenceEngine =
         modelResidency.open(plan.resolved, plan.loadRequest(mode), reuseWhenResident = true)
-
-    private companion object {
-        /** Derived from the prompts, so editing them moves the bar rather than invalidating it. */
-        val MIN_CONTEXT_TOKENS =
-            AuditChunker.minimumContextTokens(AuditPromptBudget.fixedPromptTokens())
-    }
 }

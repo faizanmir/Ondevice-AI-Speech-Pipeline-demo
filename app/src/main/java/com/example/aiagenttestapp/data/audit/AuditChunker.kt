@@ -87,9 +87,14 @@ object AuditChunker {
      * [promptTokens] (the system prompt and the extraction prompt's scaffolding, from
      * [AuditPromptBudget.fixedPromptTokens]) and room for that chunk's reply are set aside. So the chunk
      * fills as much of the *actual* window as is safe (a 128K model takes near-128K chunks, a 4K
-     * model small ones), rather than a flat fraction that under-fills large contexts. Floored at
-     * [MIN_CHUNK_TOKENS] so a tiny context never yields a zero-length budget -- though a context
-     * that small should never reach here, as [minimumContextTokens] refuses it up front.
+     * model small ones), rather than a flat fraction that under-fills large contexts.
+     *
+     * Floored at [MIN_CHUNK_TOKENS], and that floor is now load-bearing rather than defensive:
+     * nothing refuses a small context up front any more, so a window that cannot hold the preamble
+     * plus a reply arrives here and leaves with [MIN_CHUNK_TOKENS]-sized sections. Those turns will
+     * overflow the window and the engine will evict from the start of the prompt to fit them. That
+     * is a worse audit, not a broken one, and it is the trade the removed refusal used to make for
+     * the user.
      */
     fun chunkCharBudget(
         contextTokens: Int,
@@ -102,37 +107,19 @@ object AuditChunker {
         return ContextWindow.estimateChars(chunkTokens, charsPerToken)
     }
 
-    /**
-     * The context an audit run asks for, however much the model could offer.
-     *
-     * llama.cpp allocates the whole KV cache when the session opens, so the window is not a ceiling
-     * you grow into -- it is memory spent up front. On a 1.9B model that is roughly 45 KB a token, so
-     * a 22K window costs a gigabyte before a single token is read, and on a phone already holding the
-     * weights that is the difference between running and swapping.
-     *
-     * This pipeline does not need a large window: it needs the audit prompt, one section, and room
-     * for the reply. 8K buys ~3,200-token sections with ~3,200 tokens of reply, which is comfortably
-     * more than the longest extraction observed, at a KV cost near 370 MB rather than 1 GB.
-     *
-     * Not larger, because the memory is real. Not smaller, because the preamble is charged against
-     * every section's window: at 8K it is 23% of it, at 4K it was 45% -- which is what made a 4K
-     * model split documents into twice as many sections as it needed to.
-     */
-    fun auditContextTokens(modelContextTokens: Int): Int =
-        modelContextTokens.coerceAtMost(AUDIT_CONTEXT_TOKENS)
-
-    const val AUDIT_CONTEXT_TOKENS = 8192
-
-    /**
-     * The smallest context a document can actually be audited in: the fixed prompt, the smallest
-     * useful reply reserve, and one floor-sized chunk of transcript.
-     *
-     * Below this the arithmetic in [chunkCharBudget] stops being a budget and becomes a wish -- the
-     * floor keeps handing out chunks the window cannot hold, and every turn overflows. Refusing the
-     * model is the honest answer; see [AuditLoadPlanner.plan], which is where that refusal is made.
-     */
-    fun minimumContextTokens(promptTokens: Int): Int =
-        promptTokens + MIN_OUTPUT_RESERVE_TOKENS + MIN_CHUNK_TOKENS
+    // An audit used to clamp its window to AUDIT_CONTEXT_TOKENS = 8192 however much the model
+    // offered, on the reasoning that llama.cpp allocates the whole KV cache up front and this
+    // pipeline only ever needs the prompt, one section and a reply. Both halves of that stopped
+    // holding: the window a model reaches here is now the one it declares rather than a
+    // device-shrunk estimate (see ModelContextDefaults), and clamping it made the fixed preamble a
+    // larger share of every section's window, so a document was split into more sections than it
+    // needed -- more sections being the one cost this pipeline pays in whole minutes of inference.
+    // The window is now the model's, and the sizing below scales to it.
+    //
+    // There is likewise no minimum-context refusal any more. It gated on the prompt plus a reply
+    // plus one floor-sized chunk (~3,300 tokens against the RICH preamble) and turned a small
+    // window into "this model cannot audit at all" rather than "this model audits in small
+    // sections".
 
     /**
      * A document split into at most [maxChunks] pieces, and how much of it that left unread.
@@ -262,6 +249,117 @@ object AuditChunker {
         return merged
     }
 
+    /**
+     * Protocol elements from every chunk, in document order, with restatements folded together.
+     *
+     * Chunks overlap, so the element at a boundary is read twice and must not appear twice. Matched
+     * on the statement rather than on [AuditChunker.sameIssue]'s fuzzy title rules: an element states
+     * a conclusion in a full sentence, and two sentences that differ are two conclusions -- collapsing
+     * them on a word-overlap threshold would merge "records were in order" with "records were not in
+     * order", which is the one merge that must never happen.
+     *
+     * Where two copies do match, the fuller one wins field by field, and the conclusion follows
+     * [AuditResultType.neverDowngrade]: a chunk that saw the qualification and a chunk that did not
+     * must not average out into a clean pass.
+     */
+    fun mergeElements(perChunk: List<List<AuditProtocolElement>>): List<AuditProtocolElement> {
+        val merged = LinkedHashMap<String, AuditProtocolElement>()
+        for (element in perChunk.flatten()) {
+            val key = normalise(element.statement)
+            if (key.isEmpty()) continue
+            val existing = merged[key]
+            merged[key] = if (existing == null) {
+                element
+            } else {
+                existing.copy(
+                    type = existing.type.ifBlank { element.type },
+                    speaker = existing.speaker.ifBlank { element.speaker },
+                    result = AuditResultType.neverDowngrade(existing.result, element.result),
+                    reason = existing.reason.ifBlank { element.reason },
+                    evidence = existing.evidence.ifBlank { element.evidence },
+                    standards = (existing.standards + element.standards).distinct(),
+                )
+            }
+        }
+        return merged.values.toList()
+    }
+
+    /**
+     * The one protocol element the report shows, from the elements every section produced.
+     *
+     * A document is audited against one requirement and reaches one conclusion about it; the
+     * per-section elements are that conclusion seen from wherever the evidence happened to fall.
+     * So they are merged ([mergeElements]) and then collapsed here rather than listed -- a report
+     * with eight "protocol elements" would be showing the chunking, not the audit.
+     *
+     * Which one leads is not arbitrary. The element carrying a cited standard wins, because the
+     * element IS the requirement the audit was run against and the clause is what names it; among
+     * those, the one whose conclusion is most severe, on the same never-downgrade rule that governs
+     * every other merge here. Nothing is discarded in the process: the standards of all of them are
+     * unioned onto the survivor, and its result is the worst any section reached, so a section that
+     * saw the qualification cannot be outvoted by sections that did not.
+     */
+    fun collapseElements(elements: List<AuditProtocolElement>): AuditProtocolElement? {
+        if (elements.isEmpty()) return null
+        val lead = elements
+            .sortedWith(
+                compareByDescending<AuditProtocolElement> { it.standards.isNotEmpty() }
+                    .thenByDescending { it.result?.let(::resultRank) ?: -1 },
+            )
+            .first()
+        return lead.copy(
+            result = elements.fold(lead.result) { worst, e ->
+                AuditResultType.neverDowngrade(worst, e.result)
+            },
+            standards = elements.flatMap { it.standards }.distinct(),
+        )
+    }
+
+    /**
+     * Severity order for [collapseElements] only, and the same ordering [AuditResultType] uses
+     * internally. Spelled out here rather than exposed on the enum: this is a tie-break for
+     * choosing which element leads, not a public ranking of conclusions.
+     */
+    private fun resultRank(result: AuditResultType): Int = when (result) {
+        AuditResultType.POTENTIAL_IMPROVEMENT -> 0
+        AuditResultType.OK_FOR_DOCUMENTATION -> 1
+        AuditResultType.MINOR_NONCONFORMITY -> 2
+        AuditResultType.MAJOR_NONCONFORMITY -> 3
+    }
+
+    /**
+     * Statements and unresolved items from every chunk, deduplicated on their text, first wording
+     * kept. Same overlap problem as [mergeElements], with nothing to merge field by field -- these
+     * are single strings, so a duplicate is simply dropped.
+     */
+    fun mergeStatements(perChunk: List<List<AuditStatement>>): List<AuditStatement> {
+        val seen = mutableSetOf<String>()
+        return perChunk.flatten().filter { seen.add(normalise("${it.speaker} ${it.text}")) }
+    }
+
+    fun mergeStrings(perChunk: List<List<String>>): List<String> {
+        val seen = mutableSetOf<String>()
+        return perChunk.flatten()
+            .filter { it.isNotBlank() && normalise(it).trim('.', '!') !in NOTHING_WORDS }
+            .filter { seen.add(normalise(it)) }
+    }
+
+    /**
+     * What a model writes under a heading when the heading has nothing under it.
+     *
+     * The prompts ask for "none" where a section is empty, and that answer was being carried through
+     * as an item: an unresolved-items list of exactly `["None"]` renders as "Unresolved items (1)" on
+     * the report and in the PDF, which states the opposite of what the model said. Filtered here
+     * rather than at each of the three call sites, because every caller of this function is merging
+     * a list the model wrote and every one of them has the same problem.
+     *
+     * German included: the audit benchmark runs German documents, and a German reply says "keine".
+     */
+    private val NOTHING_WORDS = setOf(
+        "none", "n/a", "na", "nothing", "no items", "no unresolved items", "not applicable",
+        "keine", "keine angaben", "nichts",
+    )
+
     private fun combine(existing: AuditFinding, incoming: AuditFinding) = existing.copy(
         detail = existing.detail.ifBlank { incoming.detail },
         // Same first-non-blank rule as detail. A quote verified in either chunk is a verified
@@ -271,6 +369,15 @@ object AuditChunker {
         // Keep the worse grade: the same lapse seen as minor in one chunk and major in another is
         // a major, and must never be de-escalated by the merge.
         severity = AuditSeverity.moreSevere(existing.severity, incoming.severity),
+        // The same rule on the shared vocabulary, which has its own never-downgrade ordering: a
+        // conclusion reached in one chunk cannot be softened by a chunk that reached a milder one,
+        // and "no clear conclusion" never overwrites a conclusion at all.
+        resultType = AuditResultType.neverDowngrade(existing.resultType, incoming.resultType),
+        // Actions: first non-blank wins, like detail. An action seen with a status in one chunk and
+        // without one in the overlap keeps the status.
+        priority = existing.priority.ifBlank { incoming.priority },
+        status = existing.status.ifBlank { incoming.status },
+        accepted = existing.accepted ?: incoming.accepted,
     )
 
     /**

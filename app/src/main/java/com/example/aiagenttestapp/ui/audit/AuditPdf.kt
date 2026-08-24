@@ -45,6 +45,12 @@ object AuditPdf {
                 )
             }
             formatDuration(analysisMillis).takeIf { it.isNotEmpty() }?.let { add("Generated in $it") }
+            // The same two figures the screen shows as chips, in the same order -- what the run
+            // spent reading prompts and what it spent writing answers.
+            if (!analysis.runStats.isEmpty) {
+                add(analysis.runStats.prefillLabel)
+                add(analysis.runStats.decodeLabel)
+            }
         }.joinToString(" · ")
         if (provenance.isNotEmpty()) page.text(provenance, MUTED, spacingAfter = 14f)
 
@@ -81,22 +87,78 @@ object AuditPdf {
             )
         }
 
-        page.heading("Summary")
+        // Same rule as the screen: the heading holds the stated result and the also-stated points
+        // even when no prose was asked for, and it prints nothing where a summary was skipped --
+        // "no summary was produced" reports a failure, and skipping one deliberately is not one.
+        if (analysis.includeSummary || analysis.verdict.isNotBlank() || analysis.alsoStated.isNotEmpty()) {
+            page.heading(if (analysis.includeSummary) "Summary" else "Result")
+        }
         if (analysis.verdict.isNotBlank()) {
             page.text("Stated result: “${analysis.verdict}”", BODY_BOLD, spacingAfter = 4f)
         }
-        // Mirrors the screen: a quick read's summary is its point list, so it prints as one.
+        // Mirrors the screen, and for the same reason: legacy quick reports only. Quick mode no
+        // longer produces a point list, but one saved before that change prints as it always did.
         if (analysis.auditMode == AuditMode.QUICK && analysis.keyPoints.isNotEmpty()) {
             analysis.keyPoints.forEachIndexed { index, point ->
                 page.text("${index + 1}.  $point", BODY, spacingAfter = 4f)
             }
             page.text("", BODY, spacingAfter = 12f)
-        } else {
+        } else if (analysis.includeSummary) {
             page.text(
                 analysis.summary.ifBlank { "No summary was produced for this document." },
                 BODY,
                 spacingAfter = 16f,
             )
+        }
+
+        // Under the summary, not in a section of its own -- these are claims the parties made, and
+        // printing them as a section would present them as findings. Same placement as the screen.
+        if (analysis.alsoStated.isNotEmpty()) {
+            page.text("Also stated", BODY_BOLD, spacingAfter = 4f)
+            analysis.alsoStated.forEach { statement ->
+                page.text(
+                    if (statement.speaker.isBlank()) "·  ${statement.text}"
+                    else "·  ${statement.text} (${statement.speaker})",
+                    MUTED_BODY,
+                    indent = INDENT,
+                    spacingAfter = 2f,
+                )
+            }
+            page.spacer(14f)
+        }
+
+        // Every clause the document cited, gathered from elements and findings alike -- each already
+        // checked against the source text, so nothing printed here is a requirement the document
+        // never named.
+        val standards = (
+            analysis.protocolElements.flatMap { it.standards } +
+                analysis.nonConformities.flatMap { it.standards } +
+                analysis.actions.flatMap { it.standards }
+            ).distinct()
+        if (standards.isNotEmpty()) {
+            page.heading("Standards")
+            standards.forEach { page.text(it, BODY, indent = INDENT, spacingAfter = 4f) }
+            page.spacer(12f)
+        }
+
+        if (analysis.protocolElements.isNotEmpty()) {
+            // Singular and uncounted, exactly as on screen: a report carries one element.
+            page.heading("Protocol Element")
+            analysis.protocolElements.forEach { element ->
+                // Keep a statement from being orphaned at the foot of a page; the fields may split.
+                page.reserve(36f)
+                page.text(element.statement, BODY_BOLD, spacingAfter = 2f)
+                page.labelled("Type", element.type)
+                page.labelled("Speaker", element.speaker)
+                page.labelled("Result", element.result?.label.orEmpty())
+                page.labelled("Reason", element.reason)
+                page.labelled("Evidence", element.evidence)
+                if (element.standards.isNotEmpty()) {
+                    page.labelled("Standards", element.standards.joinToString(", "))
+                }
+                page.spacer(10f)
+            }
+            page.spacer(6f)
         }
 
         // Omitted entirely for a quick read, exactly as on screen: quick mode never looks for
@@ -113,6 +175,14 @@ object AuditPdf {
             findings = analysis.actions,
             emptyText = "No actions identified.",
         )
+
+        // Last on paper as on screen: the gaps the document opened and never closed.
+        if (analysis.unresolvedItems.isNotEmpty()) {
+            page.heading("Unresolved items (${analysis.unresolvedItems.size})")
+            analysis.unresolvedItems.forEach {
+                page.text("?  $it", UNRESOLVED, indent = INDENT, spacingAfter = 4f)
+            }
+        }
 
         page.finish()
         val out = ByteArrayOutputStream()
@@ -146,6 +216,17 @@ object AuditPdf {
             if (finding.evidence.isNotBlank()) {
                 text("“${finding.evidence}”", QUOTE, indent = INDENT, spacingAfter = 2f)
             }
+            // Actions only; a non-conformity carries none of these and prints exactly as before.
+            labelled("Priority", finding.priority)
+            labelled("Status", finding.status)
+            labelled(
+                "Accepted",
+                when (finding.accepted) {
+                    true -> "Yes"
+                    false -> "No"
+                    null -> ""
+                },
+            )
             if (finding.standards.isNotEmpty()) {
                 text(
                     "Standards: ${finding.standards.joinToString(", ")}",
@@ -158,6 +239,16 @@ object AuditPdf {
         }
     }
 
+    /**
+     * "Type: Result" as one printed line, or nothing at all when the value is blank -- the paper
+     * equivalent of the screen's LabelledLine, and blank for the same reason: a field the document
+     * never supplied should be absent, not empty.
+     */
+    private fun Writer.labelled(label: String, value: String) {
+        if (value.isBlank()) return
+        text("$label: $value", MUTED_BODY, indent = INDENT, spacingAfter = 2f)
+    }
+
     /** The PDF's copy of the screen's result badge -- same words, same colours, printed. */
     private fun resultColours(resultType: AuditResultType): Triple<Int, Int, String> = when (resultType) {
         AuditResultType.MAJOR_NONCONFORMITY -> Triple(0xFFF9DEDC.toInt(), 0xFF410E0B.toInt(), "MAJOR")
@@ -166,7 +257,6 @@ object AuditPdf {
             Triple(0xFFE8DEF8.toInt(), 0xFF1D192B.toInt(), "OK · DOCUMENTATION")
         AuditResultType.POTENTIAL_IMPROVEMENT ->
             Triple(0xFFE7E0EC.toInt(), 0xFF49454F.toInt(), "IMPROVEMENT")
-        AuditResultType.OK -> Triple(0xFFE7E0EC.toInt(), 0xFF49454F.toInt(), "OK")
     }
 
     private fun severityColours(severity: String): Triple<Int, Int, String>? = when (severity) {
@@ -326,6 +416,13 @@ object AuditPdf {
     private val MUTED_BODY = paint(10f, 0xFF5F5F66.toInt())
     private val MUTED = paint(9f, 0xFF5F5F66.toInt())
     private val QUOTE = paint(9.5f, 0xFF5F5F66.toInt(), italic = true)
+
+    /**
+     * Unresolved items print in the warning red the screen shows them in, not in body black. They
+     * are the one part of a finished report that is still an open question, and a reader skimming a
+     * printout has no other cue -- the "?" alone reads as a typo.
+     */
+    private val UNRESOLVED = paint(10f, 0xFFA1440E.toInt())
     private val BANNER_BG = 0xFFF9DEDC.toInt()
     private val BANNER_TEXT = paint(9.5f, 0xFF410E0B.toInt())
 }

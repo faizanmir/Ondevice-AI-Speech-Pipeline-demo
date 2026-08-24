@@ -38,6 +38,9 @@ object AuditRecordParser {
         val facts = mutableListOf<String>()
         val nonConformities = mutableListOf<AuditFinding>()
         val actions = mutableListOf<AuditFinding>()
+        val elements = mutableListOf<AuditProtocolElement>()
+        val stated = mutableListOf<AuditStatement>()
+        val unresolved = mutableListOf<String>()
         var verdict = ""
 
         var block: Block? = null
@@ -45,11 +48,12 @@ object AuditRecordParser {
         var lastField: Field? = null
 
         fun flush() {
-            val finding = fields.toFinding()
-            when {
-                finding == null -> Unit
-                block == Block.NONCONFORMITY -> nonConformities += finding
-                block == Block.ACTION -> actions += finding
+            when (block) {
+                // An element is titled by its statement, so it is dropped on the same rule a finding
+                // is: no statement, no element.
+                Block.ELEMENT -> fields.toElement()?.let { elements += it }
+                Block.NONCONFORMITY -> fields.toFinding()?.let { nonConformities += it }
+                Block.ACTION -> fields.toAction()?.let { actions += it }
                 else -> Unit
             }
             fields = mutableMapOf()
@@ -75,7 +79,15 @@ object AuditRecordParser {
 
                 block == Block.VERDICT -> verdict = "$verdict $line".trim()
 
-                block == Block.NONCONFORMITY || block == Block.ACTION -> {
+                // "The organization: We maintain a centralized risk register" -- who said it, then
+                // what they said, split by the one rule both parsers share.
+                block == Block.STATED -> AuditStatement.of(line)?.let { stated += it }
+
+                block == Block.UNRESOLVED -> line.removePrefix("-").trim()
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { unresolved += it }
+
+                block == Block.NONCONFORMITY || block == Block.ACTION || block == Block.ELEMENT -> {
                     val field = fieldOf(line)
                     if (field != null) {
                         fields[field.first] = field.second
@@ -99,12 +111,19 @@ object AuditRecordParser {
             facts = facts,
             nonConformities = nonConformities,
             actions = actions,
+            protocolElements = elements,
+            alsoStated = stated,
+            unresolvedItems = unresolved,
         )
     }
 
-    private enum class Block { RECORDS, FACTS, VERDICT, NONCONFORMITY, ACTION }
+    private enum class Block {
+        RECORDS, FACTS, VERDICT, NONCONFORMITY, ACTION, ELEMENT, STATED, UNRESOLVED
+    }
 
-    private enum class Field { TITLE, DETAIL, QUOTE, STANDARD }
+    private enum class Field {
+        TITLE, DETAIL, QUOTE, STANDARD, TYPE, SPEAKER, RESULT, REASON, PRIORITY, STATUS, ACCEPTED
+    }
 
     /**
      * The block a line opens, or null if it opens none.
@@ -113,7 +132,9 @@ object AuditRecordParser {
      * mistaken for an ACTION record -- and a trailing colon is allowed because models add one.
      */
     private fun headerOf(line: String): Block? {
-        val word = line.trimEnd(':').trim().uppercase()
+        // Spaces out, so "PROTOCOL ELEMENT" and "ALSO STATED" are the headers they obviously are.
+        // Hyphens stay, because "NON-CONFORMITY" is spelled with one below.
+        val word = line.trimEnd(':').trim().uppercase().replace(" ", "")
         return when (word) {
             "RECORDS" -> Block.RECORDS
             // POINTS is what quick mode asks for, and it lands in the same place: both modes are
@@ -123,6 +144,11 @@ object AuditRecordParser {
             "VERDICT" -> Block.VERDICT
             "NONCONFORMITY", "NON-CONFORMITY", "NONCONFORMANCE" -> Block.NONCONFORMITY
             "ACTION" -> Block.ACTION
+            // "ELEMENTS" too, because a model handed a block name and told to repeat it pluralises
+            // the header about as often as it does not.
+            "ELEMENT", "ELEMENTS", "PROTOCOL", "PROTOCOLELEMENT" -> Block.ELEMENT
+            "STATED", "ALSOSTATED", "STATEMENTS" -> Block.STATED
+            "UNRESOLVED", "UNRESOLVEDITEMS", "OPEN" -> Block.UNRESOLVED
             else -> null
         }
     }
@@ -132,13 +158,26 @@ object AuditRecordParser {
         "name" to Field.TITLE,
         "finding" to Field.TITLE,
         "issue" to Field.TITLE,
+        // An element is titled by what it states, so the two names land in the same slot.
+        "statement" to Field.TITLE,
         "detail" to Field.DETAIL,
         "description" to Field.DETAIL,
+        // Shared between a finding and an element, and read differently by each: a finding's is a
+        // verbatim quote that AuditEvidence checks, an element's is a summary of what was produced
+        // and is never checked. See AuditProtocolElement.evidence.
         "quote" to Field.QUOTE,
         "evidence" to Field.QUOTE,
         "standard" to Field.STANDARD,
         "standards" to Field.STANDARD,
         "clause" to Field.STANDARD,
+        "type" to Field.TYPE,
+        "speaker" to Field.SPEAKER,
+        "who" to Field.SPEAKER,
+        "result" to Field.RESULT,
+        "reason" to Field.REASON,
+        "priority" to Field.PRIORITY,
+        "status" to Field.STATUS,
+        "accepted" to Field.ACCEPTED,
     )
 
     /**
@@ -161,14 +200,56 @@ object AuditRecordParser {
         return AuditFinding(
             title = title,
             detail = get(Field.DETAIL)?.trim().orEmpty(),
-            // One line may name more than one clause; splitting on the separators a model actually
-            // uses costs nothing and the list is deduplicated downstream anyway.
-            standards = get(Field.STANDARD)
-                ?.split(';', ',')
-                ?.map { it.trim() }
-                ?.filter { it.isNotEmpty() }
-                .orEmpty(),
+            standards = standards(),
             evidence = get(Field.QUOTE)?.trim().orEmpty(),
+            // Stated per record, so a model that grades one block and not the next is read
+            // correctly rather than having the last grade carried forward.
+            resultType = AuditResultType.fromWire(get(Field.RESULT)),
         )
     }
+
+    /**
+     * An action, which is a finding plus where it stands. Same title rule.
+     *
+     * The three extra fields are absent on most replies and that is fine: an action with no priority
+     * is an action, and inventing "Medium" to fill the line would be inventing a commitment.
+     */
+    private fun Map<Field, String>.toAction(): AuditFinding? = toFinding()?.copy(
+        priority = AuditProtocolVocabulary.canonical(
+            get(Field.PRIORITY),
+            AuditProtocolVocabulary.ACTION_PRIORITIES,
+        ),
+        status = AuditProtocolVocabulary.canonical(
+            get(Field.STATUS),
+            AuditProtocolVocabulary.ACTION_STATUSES,
+        ),
+        accepted = AuditProtocolVocabulary.acceptance(get(Field.ACCEPTED)),
+    )
+
+    /** An element with no statement is dropped: there would be nothing to report. */
+    private fun Map<Field, String>.toElement(): AuditProtocolElement? {
+        val statement = get(Field.TITLE)?.trim().orEmpty().ifBlank { return null }
+        return AuditProtocolElement(
+            statement = statement,
+            type = AuditProtocolVocabulary.canonical(
+                get(Field.TYPE),
+                AuditProtocolVocabulary.ELEMENT_TYPES,
+            ),
+            speaker = get(Field.SPEAKER)?.trim().orEmpty(),
+            result = AuditResultType.fromWire(get(Field.RESULT)),
+            reason = get(Field.REASON)?.trim().orEmpty(),
+            evidence = get(Field.QUOTE)?.trim().orEmpty(),
+            standards = standards(),
+        )
+    }
+
+    /**
+     * One line may name more than one clause; splitting on the separators a model actually uses
+     * costs nothing and the list is deduplicated downstream anyway.
+     */
+    private fun Map<Field, String>.standards(): List<String> = get(Field.STANDARD)
+        ?.split(';', ',')
+        ?.map { it.trim() }
+        ?.filter { it.isNotEmpty() }
+        .orEmpty()
 }

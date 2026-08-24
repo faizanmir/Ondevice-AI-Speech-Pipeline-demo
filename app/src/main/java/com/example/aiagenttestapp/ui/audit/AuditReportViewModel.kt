@@ -39,12 +39,22 @@ class AuditReportViewModel @Inject constructor(
 
     private var job: Job? = null
 
+    /** Which document [job] is following, so re-selecting the open one does not restart it. */
+    private var loadedId: Long? = null
+
     override fun reduce(intent: AuditReportIntent) = when (intent) {
         is AuditReportIntent.Load -> load(intent.id)
     }
 
     private fun load(id: Long) {
-        if (job != null) return
+        // Cancel and restart rather than ignore. The guard used to be `if (job != null) return`,
+        // which was true while this screen was only ever reached by a route carrying one document
+        // id -- one instance, one document, for its whole life. In a detail pane the same instance
+        // is asked for a second document the moment the user picks another row, and the old guard
+        // answered by silently continuing to show the first.
+        if (loadedId == id) return
+        loadedId = id
+        job?.cancel()
         job = viewModelScope.launch {
             auditQueue.document(id).collect { doc ->
                 setState {

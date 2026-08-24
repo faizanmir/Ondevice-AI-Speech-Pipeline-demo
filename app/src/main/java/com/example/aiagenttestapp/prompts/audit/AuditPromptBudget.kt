@@ -27,7 +27,10 @@ object AuditPromptBudget {
      * pinned at enqueue while the engine, and so the profile, is resolved later. Reserving for the
      * largest AuditExtractionPrompts.preamble is the only sizing that stays safe if that resolution changes.
      */
-    fun fixedPromptTokens(profile: AuditPromptProfile = AuditPromptProfile.RICH): Int =
+    fun fixedPromptTokens(
+        profile: AuditPromptProfile = AuditPromptProfile.RICH,
+        facts: Boolean = true,
+    ): Int =
         ContextWindow.estimateTokens(AuditSystemPrompts.SYSTEM_PROMPT) +
             ContextWindow.estimateTokens(
                 // Measured with the draft, the larger of the two, so a run that drops it has more
@@ -38,6 +41,7 @@ object AuditPromptBudget {
                     totalParts = AuditExtractionPrompts.MULTI_PART,
                     profile = profile,
                     draft = true,
+                    facts = facts,
                 ),
             )
 
@@ -48,8 +52,14 @@ object AuditPromptBudget {
      * document: the AuditExtractionPrompts.preamble is charged against every section's window, so a shorter one leaves more
      * of each window for text.
      */
-    fun fixedPromptTokens(mode: AuditMode, profile: AuditPromptProfile): Int = when (mode) {
-        AuditMode.DETAILED -> fixedPromptTokens(profile)
+    fun fixedPromptTokens(
+        mode: AuditMode,
+        profile: AuditPromptProfile,
+        // Quick mode ignores it: its POINTS are its whole deliverable, not raw material for a
+        // summary, so there is nothing to drop.
+        facts: Boolean = true,
+    ): Int = when (mode) {
+        AuditMode.DETAILED -> fixedPromptTokens(profile, facts)
         AuditMode.QUICK -> quickFixedPromptTokens()
     }
 

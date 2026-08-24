@@ -1,8 +1,10 @@
 package com.example.aiagenttestapp.data.audit
 
+import com.example.aiagenttestapp.prompts.audit.AuditAnalysisSchema
 import com.example.aiagenttestapp.prompts.audit.AuditExtractionPrompts
 import com.example.aiagenttestapp.prompts.audit.AuditPromptBudget
 import com.example.aiagenttestapp.prompts.audit.AuditQuickPrompts
+import com.example.aiagenttestapp.prompts.audit.AuditRecordGrammar
 import com.example.aiagenttestapp.prompts.audit.AuditSummaryPrompts
 import android.Manifest
 import android.R
@@ -101,11 +103,15 @@ class AuditDrainWorker @AssistedInject constructor(
         modelResidency.attach()
         val extractStats = PhaseStats("extract")
         val summaryStats = PhaseStats("summarise")
+        // Held outside the try so the finally can lift a grammar this run set. The engine stays
+        // resident after an audit ends -- a chat can pick it up next -- and a records grammar left
+        // in force would constrain that chat into answering in audit blocks.
+        var opened: InferenceEngine? = null
         try {
             // llama.cpp reuses a shared prompt prefix, so it can afford the fuller preamble; the
             // engines that re-prefill every chunk get the trimmed one. Decided by the plan.
             val profile = plan.profile
-            val engine = loadPlanner.open(plan, mode)
+            val engine = loadPlanner.open(plan, mode).also { opened = it }
             // The audit's own window, not the model's full one -- the same number the load request
             // used, so chunk sizing, the reply reserve and the context-full check all agree.
             val contextTokens = plan.contextTokens
@@ -156,6 +162,48 @@ class AuditDrainWorker @AssistedInject constructor(
                     if (draft) "drafting before records" else "records only, no draft",
             )
 
+            // Constrain extraction, by whichever means this engine has. Both remove the failure that
+            // costs a whole section -- a reply the parser cannot read -- and they are mutually
+            // exclusive because they ask for different shapes.
+            //
+            //  - A GBNF grammar (llama.cpp) constrains the RECORDS format the preamble already
+            //    teaches, costs nothing in the prompt, and leaves a truncated reply readable up to
+            //    the cut.
+            //  - A JSON Schema (LiteRT-LM, via LLGuidance behind a tool description) constrains the
+            //    JSON variant instead, is charged against every turn's window, and makes a truncated
+            //    reply worth nothing. In exchange the closed vocabularies become unsampleable.
+            //
+            // Which is better is a question for measurement, not for a comment, so both are wired
+            // and each says what it got. Quick mode is excluded from the schema path: it has no JSON
+            // variant to ask for, and its whole point is being cheap.
+            val schemaConstrained = mode == AuditMode.DETAILED && engine.supportsResponseSchema &&
+                modelResidency.runExclusive { engine.setResponseSchema(AuditAnalysisSchema.TOOL_JSON) }
+            val grammarConstrained = !schemaConstrained && engine.supportsGrammar &&
+                modelResidency.runExclusive {
+                    engine.setGrammar(AuditRecordGrammar.GRAMMAR, AuditRecordGrammar.TRIGGER)
+                }
+            // The prompt has to ask for the shape the constraint enforces, or the model is told one
+            // thing and allowed another. Both variants already exist -- nothing here is written for
+            // this -- so the schema path simply selects the JSON branch the preamble has carried all
+            // along for exactly this comparison.
+            // Both stay mutable: whether the schema BINDS cannot be known until a turn comes back,
+            // and asking for JSON while nothing enforces it is the worst combination available --
+            // the format with the least tolerance for a mistake and none of the enforcement that
+            // justified choosing it. So the first section verifies, and an unverified schema is
+            // dropped in favour of records, which degrade instead of failing.
+            var schemaActive = schemaConstrained
+            var format = if (schemaActive) AuditOutputFormat.JSON else AuditExtractionPrompts.OUTPUT_FORMAT
+            var schemaVerified = false
+            Log.i(
+                TAG,
+                when {
+                    schemaConstrained -> "analysis schema declared; asking for JSON pending the first reply"
+                    grammarConstrained -> "records grammar active for extraction"
+                    else -> "extraction is unconstrained on this engine"
+                },
+            )
+            val constrained = schemaConstrained || grammarConstrained
+
             var consecutiveStarved = 0
             for (chunk in dao.pendingChunks(doc.id)) {
                 // Cancelled (row deleted) or explicitly cancelled -> abandon this document.
@@ -167,34 +215,81 @@ class AuditDrainWorker @AssistedInject constructor(
                 if (isStopped) return
 
                 safeSetForeground(foregroundInfo(doc.name, chunk.chunkIndex + 1, doc.chunkCount))
-                modelResidency.runExclusive { engine.resetKeepingPrefixCache() }
-                val turn = generateFull(
-                    engine,
-                    when (mode) {
-                        AuditMode.DETAILED -> AuditExtractionPrompts.extraction(
-                            chunk.text,
-                            chunk.chunkIndex + 1,
-                            doc.chunkCount,
-                            profile,
-                            draft = draft,
-                        )
 
-                        AuditMode.QUICK -> AuditQuickPrompts.quickExtraction(
-                            chunk.text,
-                            chunk.chunkIndex + 1,
-                            doc.chunkCount,
+                // One section, in whichever format is currently believed to be enforced.
+                suspend fun runSection(): Turn {
+                    modelResidency.runExclusive { engine.resetKeepingPrefixCache() }
+                    return generateFull(
+                        engine,
+                        when (mode) {
+                            AuditMode.DETAILED -> AuditExtractionPrompts.extraction(
+                                chunk.text,
+                                chunk.chunkIndex + 1,
+                                doc.chunkCount,
+                                profile,
+                                format = format,
+                                draft = draft,
+                                facts = doc.includeSummary,
+                            )
+
+                            AuditMode.QUICK -> AuditQuickPrompts.quickExtraction(
+                                chunk.text,
+                                chunk.chunkIndex + 1,
+                                doc.chunkCount,
+                            )
+                        },
+                        extractStats,
+                        maxMillis = turnMaxMillis,
+                        // The room actually left for this reply -- the window, less this run's real
+                        // preamble and this chunk's real text. Not the sizing formula: chunks are
+                        // sized reserving for the larger RICH preamble because the profile is not
+                        // known at enqueue, so a LEAN run has a few hundred tokens spare that the
+                        // formula would never hand back, and the cap would clip answers that fit.
+                        maxTokens = extractionMaxTokens(
+                            contextTokens, mode, profile, chunk.text,
+                            facts = doc.includeSummary,
+                            // Zero once the schema is gone: its tokens are no longer in the window,
+                            // and charging for them would clip a reply that fits.
+                            schemaTokens = if (schemaActive) {
+                                com.example.aiagent.engine.core.ContextWindow
+                                    .estimateTokens(AuditAnalysisSchema.TOOL_JSON)
+                            } else {
+                                0
+                            },
+                        ),
+                        label = "chunk ${chunk.chunkIndex}",
+                    )
+                }
+
+                var turn = runSection()
+
+                // Did the schema actually bind? Only a completed turn can say: the runtime accepts a
+                // schema it will not enforce (LiteRT-LM constrains SentencePiece tokenizers only, so
+                // a BPE model declares and enforces nothing), and the reply arriving through the
+                // tool channel at all is the one observable difference.
+                //
+                // Checked once. An unverified schema is lifted and the section re-run as records --
+                // one section's work to avoid asking every remaining section for the format that
+                // loses everything to a single stray character.
+                if (schemaActive && !schemaVerified) {
+                    if (engine.lastReplyWasSchemaBound) {
+                        schemaVerified = true
+                        Log.i(TAG, "analysis schema is enforced; extraction continues in JSON")
+                    } else {
+                        Log.w(
+                            TAG,
+                            "analysis schema was accepted but is not enforced on this model; " +
+                                "falling back to records for the rest of the document",
                         )
-                    },
-                    extractStats,
-                    maxMillis = turnMaxMillis,
-                    // The room actually left for this reply -- the window, less this run's real
-                    // preamble and this chunk's real text. Not the sizing formula: chunks are sized
-                    // reserving for the larger RICH preamble because the profile is not known at
-                    // enqueue, so a LEAN run has a few hundred tokens spare that the formula would
-                    // never hand back, and the cap would clip answers that fit perfectly well.
-                    maxTokens = extractionMaxTokens(contextTokens, mode, profile, chunk.text),
-                    label = "chunk ${chunk.chunkIndex}",
-                )
+                        modelResidency.runExclusive { engine.setResponseSchema(null) }
+                        schemaActive = false
+                        format = AuditExtractionPrompts.OUTPUT_FORMAT
+                        // Re-run rather than parse what came back: the reply was written to a JSON
+                        // instruction with nothing enforcing it, which is the exact combination
+                        // this fallback exists to stop trusting.
+                        turn = runSection()
+                    }
+                }
                 val raw = turn.text
                 // A think block means this model spends part of every turn reasoning before it
                 // answers, which no token budget here accounts for. Raise the ceiling for the rest
@@ -225,9 +320,11 @@ class AuditDrainWorker @AssistedInject constructor(
                 // so "unusable" below is what decides a lost section either way.
                 // Quick mode always answers in records -- it has no JSON variant to fall back on --
                 // so its reply goes straight to the record parser.
+                // Read by whichever parser matches the format this run actually asked for -- which
+                // is the schema's JSON when one is in force, and the compiled-in default otherwise.
                 val rawParsed = when {
                     mode == AuditMode.QUICK -> AuditRecordParser.parse(raw)
-                    AuditExtractionPrompts.OUTPUT_FORMAT == AuditOutputFormat.RECORDS -> AuditRecordParser.parse(raw)
+                    format == AuditOutputFormat.RECORDS -> AuditRecordParser.parse(raw)
                     else -> AuditAnalysisParser.parse(raw)
                 }
 
@@ -258,7 +355,7 @@ class AuditDrainWorker @AssistedInject constructor(
                     turn.stoppedBy == StopReason.TOKEN_CAP ->
                         "the model's reply outgrew the room reserved for it"
                     filledContext -> "the model ran out of context part-way through this section"
-                    mode == AuditMode.QUICK || AuditExtractionPrompts.OUTPUT_FORMAT == AuditOutputFormat.RECORDS ->
+                    mode == AuditMode.QUICK || format == AuditOutputFormat.RECORDS ->
                         "the model's reply contained no records to read"
                     else -> AuditAnalysisParser.diagnose(raw)
                 }
@@ -267,7 +364,7 @@ class AuditDrainWorker @AssistedInject constructor(
                     // The parser's precise complaint, when it had one: which offset, and what it
                     // expected to find there. A reply that ends in a closed object and still will
                     // not parse is malformed somewhere the tail cannot show.
-                    if (mode == AuditMode.DETAILED && AuditExtractionPrompts.OUTPUT_FORMAT == AuditOutputFormat.JSON) {
+                    if (mode == AuditMode.DETAILED && format == AuditOutputFormat.JSON) {
                         AuditAnalysisParser.parseFailureDetail(raw)?.let {
                             Log.w(TAG, "chunk ${chunk.chunkIndex}: $it")
                         }
@@ -281,7 +378,9 @@ class AuditDrainWorker @AssistedInject constructor(
                 // The one place the character estimate meets ground truth. Chunk sizes are derived
                 // from an estimated chars-per-token ratio, and if that estimate is wrong every
                 // budget downstream is wrong with it -- silently, until a window overflows.
-                logEstimateDrift(chunk.text, extractStats.lastPromptTokens, mode, profile)
+                logEstimateDrift(
+                    chunk.text, extractStats.lastPromptTokens, mode, profile, doc.includeSummary,
+                )
                 // Verify quotes and cited standards here, the one point where both the findings and
                 // their source text are in hand. An unverifiable claim is cleared, not the finding.
                 // Actions go through too: they carry no quotes, but a standard echoed onto an action
@@ -291,12 +390,56 @@ class AuditDrainWorker @AssistedInject constructor(
                 if (checked.rejected > 0) {
                     Log.w(TAG, "chunk ${chunk.chunkIndex}: ${checked.rejected} unverifiable quote(s)")
                 }
-                val rejectedStandards = checked.rejectedStandards + checkedActions.rejectedStandards
+                // Elements go through the citation half of the same check and no further: their
+                // "evidence" is a summary of what was produced rather than a quote, so the quote
+                // check would blank every one of them. Their standards are as inventable as a
+                // finding's, and the report gives standards a section of their own.
+                val (checkedElements, rejectedElementStandards) =
+                    AuditEvidence.verifyElements(parsed?.protocolElements.orEmpty(), chunk.text)
+                val rejectedStandards = checked.rejectedStandards + checkedActions.rejectedStandards +
+                    rejectedElementStandards
                 if (rejectedStandards > 0) {
                     Log.w(TAG, "chunk ${chunk.chunkIndex}: $rejectedStandards uncited standard(s) dropped")
                 }
+                // A non-conformity graded as a pass is a contradiction the report cannot show -- it
+                // renders the grade, so the finding arrives badged "Improvement" or "OK". The prompt
+                // forbids it and this is the same rule in code, where it cannot be sampled away.
+                val regraded = checked.findings.map {
+                    it.copy(resultType = AuditResultType.asNonconformity(it.resultType))
+                }
+                val cleared = regraded.indices.count {
+                    checked.findings[it].resultType != regraded[it].resultType
+                }
+                if (cleared > 0) {
+                    Log.w(TAG, "chunk ${chunk.chunkIndex}: $cleared non-conformit(ies) graded as a pass; grade dropped")
+                }
+                // Actions are ungraded by design -- a commitment is not a conclusion -- so a grade
+                // on one is a field the model filled in because it was in the vocabulary.
+                val plainActions = checkedActions.findings.map { it.copy(resultType = null) }
+                // The verdict is the document's own wording. A vocabulary name in it is the model
+                // answering the wrong question, and printing it as "Stated result" would attribute
+                // to the document a word it never used.
+                val statedVerdict = parsed?.verdict.orEmpty()
+                    .takeUnless { AuditResultType.isWireName(it) }
+                    .orEmpty()
+                if (statedVerdict.isEmpty() && parsed?.verdict?.isNotBlank() == true) {
+                    Log.w(
+                        TAG,
+                        "chunk ${chunk.chunkIndex}: verdict was the vocabulary name " +
+                            "'${parsed.verdict}', not the document's wording; dropped",
+                    )
+                }
                 val findings = (parsed ?: AuditAnalysis(parseFailed = true, parseError = parseError))
-                    .copy(nonConformities = checked.findings, actions = checkedActions.findings)
+                    .copy(
+                        verdict = statedVerdict,
+                        nonConformities = regraded,
+                        actions = plainActions,
+                        protocolElements = checkedElements,
+                        // Banked with the section, so the cost of a document survives a run that is
+                        // stopped and resumed -- and so a section that failed still reports what it
+                        // spent failing, which is the expensive kind.
+                        runStats = extractStats.lastTurn,
+                    )
                 // Keyed by chunk row -> reprocessing a chunk overwrites, never double-counts.
                 dao.completeChunk(chunk.id, AuditResultCodec.encode(findings))
                 dao.addElapsed(doc.id, sliceMillis())
@@ -337,6 +480,15 @@ class AuditDrainWorker @AssistedInject constructor(
             // -- where an auditor states the result -- is the last place one appears.
             val verdict = partials.lastOrNull { it.verdict.isNotBlank() }?.verdict.orEmpty()
 
+            // The reduce stage writes prose or bullets, not records, so the constraint has to come
+            // off before it -- a summary decoded against a records grammar could not produce a
+            // sentence. Cleared here rather than in the finally block because this is where the job
+            // changes; the finally clears it again for the paths that never reach this line.
+            if (grammarConstrained) modelResidency.runExclusive { engine.setGrammar(null) }
+            // schemaActive, not schemaConstrained: a schema dropped mid-document is already gone,
+            // and lifting it twice would rebuild the conversation for nothing.
+            if (schemaActive) modelResidency.runExclusive { engine.setResponseSchema(null) }
+
             // One flag covers the whole reduce phase, and the label says so. Setting it here and
             // calling it "Summarising" sent a grading pass that ran long to the wrong place
             // entirely: the screen said summarising, the summary had not started, and the phase
@@ -350,18 +502,28 @@ class AuditDrainWorker @AssistedInject constructor(
             // sweeps of the merged list out of every detailed run.
             val graded = nonConformities
 
-            safeSetForeground(
-                foregroundInfo(doc.name, doc.chunkCount, doc.chunkCount, phase = "Writing the summary…"),
-            )
-            val summaryResult = when (mode) {
-                AuditMode.DETAILED ->
+            // Mode as well as the flag: a quick run is enqueued with includeSummary set and writes
+            // no summary regardless, so naming one here would announce a turn that never happens.
+            if (doc.includeSummary && mode == AuditMode.DETAILED) {
+                safeSetForeground(
+                    foregroundInfo(doc.name, doc.chunkCount, doc.chunkCount, phase = "Writing the summary…"),
+                )
+            }
+            // Quick mode writes no summary at all any more, so it takes no reduce turn: its whole
+            // deliverable -- the element, the actions, the unresolved items -- is merged from the
+            // sections in code below. Not "the summary switched off" either; there is nothing to
+            // switch, which is why the flag is not consulted on this branch.
+            val summaryResult = when {
+                mode == AuditMode.QUICK -> SummaryResult()
+
+                doc.includeSummary ->
                     finalSummary(engine, factsByPart, verdict, contextTokens, summaryStats, turnMaxMillis)
 
-                AuditMode.QUICK ->
-                    quickSummary(engine, factsByPart, contextTokens, summaryStats, turnMaxMillis)
+                // Skipped entirely: no turn, no notes, and nothing to trim -- the saving is this
+                // turn plus the facts that were never extracted to feed it.
+                else -> SummaryResult()
             }
             val summary = summaryResult.text
-            val keyPoints = summaryResult.points
             val notesTrimmed = summaryResult.notesTrimmed
             val summaryTruncated = summaryResult.summaryTruncated
 
@@ -370,6 +532,12 @@ class AuditDrainWorker @AssistedInject constructor(
                 "audit '${doc.name}' on ${engine.activeAccelerator?.label ?: "unknown"} -- " +
                     "$extractStats | $summaryStats",
             )
+
+            // Quick's whole deliverable comes from the one shared implementation, which voice
+            // notes run too -- see QuickRead. Detailed keeps its own uncapped merges below: it is
+            // the complete record, and dropping an action or an unresolved item from it would be
+            // dropping a commitment somebody made.
+            val quick = if (mode == AuditMode.QUICK) QuickRead.reduce(partials) else null
 
             val unanalysed = partials.count { it.parseFailed }
             if (unanalysed > 0) {
@@ -382,16 +550,44 @@ class AuditDrainWorker @AssistedInject constructor(
                 if (!partial.parseFailed) null
                 else "Section ${index + 1}: ${partial.parseError.ifBlank { "the reply could not be read" }}."
             }
+            // keyPoints is deliberately left at its default. The field stays on AuditAnalysis so
+            // quick reports saved before this change still decode and still render their points --
+            // dropping it would need a migration and would blank finished artefacts -- but nothing
+            // written from here on fills it.
             val result = AuditAnalysis(
                 summary = summary,
-                keyPoints = keyPoints,
                 mode = mode.name,
                 verdict = verdict,
                 nonConformities = graded,
                 // Merged in code in both modes: handing a small model the whole action list and
                 // asking it to consolidate is where recall silently dies, and quick mode has no more
                 // reason to take that risk than detailed does.
-                actions = AuditChunker.mergeFindings(partials.map { it.actions }),
+                // Capped for quick, where the report is meant to leave a reader with one thing to
+                // do: the merge preserves order of first appearance, so the survivors are the
+                // actions raised earliest. Detailed is uncapped -- it is the complete record, and
+                // dropping an action from it would be dropping a commitment somebody made.
+                actions = quick?.actions
+                    ?: AuditChunker.mergeFindings(partials.map { it.actions }),
+                // The protocol half, merged the same way and for the same reason, then collapsed to
+                // the single element the document was audited against -- the per-section copies are
+                // one conclusion seen from wherever its evidence fell, not several. Both modes now:
+                // quick asks for the element too, and it is quick's entire conclusion rather than
+                // one section of a longer report.
+                protocolElements = listOfNotNull(
+                    quick?.element ?: AuditChunker.collapseElements(
+                        AuditChunker.mergeElements(partials.map { it.protocolElements }),
+                    ),
+                ),
+                // Capped after the merge, not just asked for in the prompt: this section is a few
+                // points the summary would otherwise miss, and a document that filled it with thirty
+                // would bury the ones that mattered.
+                alsoStated = AuditChunker.mergeStatements(partials.map { it.alsoStated })
+                    .take(AuditProtocolVocabulary.MAX_ALSO_STATED),
+                // Capped for quick on the same rule as the actions, and uncapped for detailed for
+                // the same reason: an unresolved item is something a reader has to chase, and a
+                // complete audit that silently drops one has not reported the gap.
+                unresolvedItems = quick?.unresolved
+                    ?: AuditChunker.mergeStrings(partials.map { it.unresolvedItems }),
                 unanalysedSections = unanalysed,
                 // Section failures first, then the document-level gaps, so the banner reads in the
                 // order a reader needs: what was unreadable, then what was never read at all.
@@ -401,6 +597,17 @@ class AuditDrainWorker @AssistedInject constructor(
                 // Provenance on the artefact itself: which engine and prompt profile produced it.
                 engineName = plan.engineName,
                 promptProfile = profile.label,
+                // Carried onto the report so a skipped summary reads as skipped rather than failed.
+                // Always false for quick, whatever the document was enqueued with: quick writes no
+                // summary now, and a report claiming one was asked for renders a "No summary was
+                // produced" line -- reporting a failure where nothing was ever attempted.
+                includeSummary = doc.includeSummary && mode == AuditMode.DETAILED,
+                // Summed from the checkpoints, not from extractStats: a document that was stopped
+                // and resumed has sections this run never touched, and its report should still say
+                // what the whole document cost. The summary turn happens in this run by definition,
+                // so it comes straight off the phase.
+                runStats = partials.fold(AuditRunStats()) { total, part -> total + part.runStats } +
+                    summaryStats.total(),
             )
             dao.setResult(doc.id, AuditResultCodec.encode(result), sliceMillis(), now())
             notifyCompleted(doc, result)
@@ -411,6 +618,18 @@ class AuditDrainWorker @AssistedInject constructor(
             dao.addElapsed(doc.id, sliceMillis())
             dao.setStatus(doc.id, AuditStatus.FAILED.name, t.message ?: "Analysis failed.", now())
         } finally {
+            // Unconditional, and on every exit: a document that was cancelled, failed or stopped by
+            // the platform leaves the engine resident exactly as a finished one does, and only this
+            // stands between that and a chat answering in audit blocks -- or, on the schema path,
+            // answering every message as a tool call. Cheap enough to run when none was ever set.
+            opened?.let { active ->
+                runCatching {
+                    modelResidency.runExclusive {
+                        if (active.supportsGrammar) active.setGrammar(null)
+                        if (active.supportsResponseSchema) active.setResponseSchema(null)
+                    }
+                }.onFailure { t -> Log.w(TAG, "could not lift the extraction constraint", t) }
+            }
             modelResidency.detach()
         }
     }
@@ -526,9 +745,18 @@ class AuditDrainWorker @AssistedInject constructor(
         // Likewise for prefill: on an engine that reuses a shared prompt prefix the first call pays
         // for the preamble and later calls should not, so first-vs-rest is the tell that it is live.
         private var firstPrefillMs = 0L
+        private var firstPrefillTokensPerSecond = 0.0
+        private var lastPrefillTokensPerSecond = 0.0
 
         /** The runtime's own token count for the most recent prompt; 0 when it reported none. */
         var lastPromptTokens = 0
+            private set
+
+        /**
+         * The turn just measured, on its own. Checkpointed with the section it produced, so the
+         * finished report can add up what every section cost even across a resumed run.
+         */
+        var lastTurn = AuditRunStats()
             private set
 
         fun add(stats: GenerationStats) {
@@ -541,17 +769,43 @@ class AuditDrainWorker @AssistedInject constructor(
             if (calls == 1) {
                 firstTokensPerSecond = stats.tokensPerSecond
                 firstPrefillMs = stats.timeToFirstTokenMs
+                firstPrefillTokensPerSecond = stats.prefillTokensPerSecond
             }
             lastTokensPerSecond = stats.tokensPerSecond
+            lastPrefillTokensPerSecond = stats.prefillTokensPerSecond
+            lastTurn = AuditRunStats(
+                turns = 1,
+                promptTokens = stats.promptTokens,
+                generatedTokens = stats.generatedTokens,
+                prefillMillis = stats.timeToFirstTokenMs,
+                // Time to first token is prefill; everything after it is decode. Never negative:
+                // a runtime that reports its own timings can put the two on slightly different
+                // clocks from the wall-clock total.
+                decodeMillis = (stats.totalMs - stats.timeToFirstTokenMs).coerceAtLeast(0),
+            )
         }
+
+        /** This phase as a whole, for the report. */
+        fun total() = AuditRunStats(
+            turns = calls,
+            promptTokens = promptTokens,
+            generatedTokens = generatedTokens,
+            prefillMillis = prefillMs,
+            decodeMillis = (totalMs - prefillMs).coerceAtLeast(0),
+        )
 
         override fun toString(): String = "$name x$calls: ${totalMs}ms " +
             "(prefill ${prefillMs}ms, decode ${totalMs - prefillMs}ms), " +
             "$promptTokens prompt / $generatedTokens generated tok, " +
-            "decode %.1f->%.1f tok/s, first prefill ${firstPrefillMs}ms, ".format(
+            // Both rates first-to-last, and both matter: decode drifts down as the device heats,
+            // while prefill is what a long fixed preamble is actually charged at.
+            "prefill %.0f->%.0f tok/s, decode %.1f->%.1f tok/s, ".format(
+                firstPrefillTokensPerSecond,
+                lastPrefillTokensPerSecond,
                 firstTokensPerSecond,
                 lastTokensPerSecond,
             ) +
+            "first prefill ${firstPrefillMs}ms, " +
             "rest avg ${if (calls > 1) (prefillMs - firstPrefillMs) / (calls - 1) else 0}ms"
     }
 
@@ -566,70 +820,15 @@ class AuditDrainWorker @AssistedInject constructor(
     /**
      * The summary, plus whether the notes had to be trimmed to fit the window to produce it.
      *
-     * [text] is detailed mode's prose and [points] is quick mode's bullet list; each mode fills one
-     * and leaves the other empty. Two fields rather than a joined string because the report renders
-     * a list as a list, and re-splitting prose on newlines to get it back would be guesswork.
+     * Detailed mode's prose only. It carried a second field for quick mode's bullet list until quick
+     * stopped writing a summary at all; a quick run now returns this empty and never takes the turn.
      */
     private data class SummaryResult(
         val text: String = "",
-        val points: List<String> = emptyList(),
         val notesTrimmed: Boolean = false,
         /** The reply ran into its own output cap, so the summary stops mid-thought. */
         val summaryTruncated: Boolean = false,
     )
-
-    /**
-     * Quick mode's reduce: every section's points condensed into at most [QuickAudit.MAX_POINTS].
-     *
-     * One turn over notes gathered from the whole document -- so the result reflects a full read
-     * even though no single turn ever saw the whole text. The cap is applied in code by
-     * [QuickPointsParser.parseQuickPoints], not merely asked for.
-     *
-     * Falls back to the leading section notes when the model returns nothing parseable. A quick
-     * report whose points are the raw notes is thin; one with no points at all is a blank report,
-     * and the notes are already the document's own content in its own words.
-     */
-    private suspend fun quickSummary(
-        engine: InferenceEngine,
-        pointsByPart: List<List<String>>,
-        contextTokens: Int,
-        phase: PhaseStats,
-        maxMillis: Long,
-    ): SummaryResult {
-        if (pointsByPart.all { it.isEmpty() }) return SummaryResult()
-        modelResidency.runExclusive { engine.resetKeepingPrefixCache() }
-
-        val budget = AuditQuickPrompts.quickSummaryNoteBudget(contextTokens)
-        val noteChars = AuditSummaryPrompts.noteChars(pointsByPart)
-        val trimmed = noteChars > budget
-        if (trimmed) {
-            Log.w(TAG, "quick summary notes trimmed to fit context: $noteChars chars into $budget")
-        }
-
-        val turn = generateFull(
-            engine,
-            AuditQuickPrompts.quickSummary(pointsByPart, QuickAudit.MAX_POINTS, budget),
-            phase,
-            maxTokens = AuditQuickPrompts.QUICK_SUMMARY_OUTPUT_RESERVE_TOKENS,
-            label = "quick summary",
-            maxMillis = maxMillis,
-        )
-        val raw = turn.text
-
-        val points = QuickPointsParser.parseQuickPoints(Reasoning.stripThinking(raw))
-            .ifEmpty {
-                Log.w(TAG, "quick summary produced no readable points; falling back to section notes")
-                pointsByPart.flatten().take(QuickAudit.MAX_POINTS)
-            }
-        // A truncated quick summary loses whole points rather than half a sentence: the parser
-        // reads bullets, so a reply cut mid-list simply yields fewer of them, with nothing to show
-        // that more were coming.
-        return SummaryResult(
-            points = points,
-            notesTrimmed = trimmed,
-            summaryTruncated = turn.stoppedBy != null,
-        )
-    }
 
     private suspend fun finalSummary(
         engine: InferenceEngine,
@@ -767,6 +966,7 @@ class AuditDrainWorker @AssistedInject constructor(
         reportedPromptTokens: Int,
         mode: AuditMode,
         profile: AuditPromptProfile,
+        facts: Boolean,
     ) {
         if (reportedPromptTokens <= 0) {
             if (!warnedNoPromptTokens) {
@@ -775,7 +975,7 @@ class AuditDrainWorker @AssistedInject constructor(
             }
             return
         }
-        val estimated = AuditPromptBudget.fixedPromptTokens(mode, profile) +
+        val estimated = AuditPromptBudget.fixedPromptTokens(mode, profile, facts) +
             com.example.aiagent.engine.core.ContextWindow.estimateTokens(chunkText)
         val drift = (reportedPromptTokens - estimated).toDouble() / estimated
         if (kotlin.math.abs(drift) >= ESTIMATE_DRIFT_WARN) {
@@ -898,9 +1098,12 @@ class AuditDrainWorker @AssistedInject constructor(
                 buildString {
                     append(doc.name)
                     append(" — ")
+                    // A quick report has one conclusion, so the notification states it rather than
+                    // counting anything: "0 key points" is what a count reads as now that quick
+                    // produces none, and a count of one element says nothing a reader wants.
                     append(
                         if (result.auditMode == AuditMode.QUICK) {
-                            "${result.keyPoints.size} key points"
+                            result.protocolElements.firstOrNull()?.result?.label ?: "no clear result"
                         } else {
                             "${result.nonConformities.size} non-conformities"
                         },
@@ -964,9 +1167,16 @@ class AuditDrainWorker @AssistedInject constructor(
             mode: AuditMode,
             profile: AuditPromptProfile,
             chunkText: String,
+            facts: Boolean = true,
+            // A response schema is prefilled with the prompt and the chunk sizing knows nothing
+            // about it -- chunks are cut at enqueue, long before any engine is resolved. Charging it
+            // here is what keeps the turn inside the window: the reply gets whatever the schema did
+            // not take, rather than the window overflowing where the failure is silent. Zero on the
+            // grammar path, which costs no prompt at all.
+            schemaTokens: Int = 0,
         ): Int =
             (
-                contextTokens - AuditPromptBudget.fixedPromptTokens(mode, profile) -
+                contextTokens - AuditPromptBudget.fixedPromptTokens(mode, profile, facts) - schemaTokens -
                     com.example.aiagent.engine.core.ContextWindow.estimateTokens(chunkText)
                 ).coerceAtLeast(AuditChunker.MIN_OUTPUT_RESERVE_TOKENS)
 

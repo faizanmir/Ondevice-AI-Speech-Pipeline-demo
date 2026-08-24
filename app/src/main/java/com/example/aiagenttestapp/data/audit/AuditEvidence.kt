@@ -49,6 +49,34 @@ object AuditEvidence {
     }
 
     /**
+     * The standards check alone, for protocol elements.
+     *
+     * An element's citation is invented exactly as easily as a finding's, and the report gives
+     * standards a section of their own -- so a clause the document never names would be presented as
+     * the requirement the audit was run against. That is the most consequential thing this pipeline
+     * can get wrong, and it is checkable in code.
+     *
+     * The element's *evidence* is deliberately not touched. Unlike a finding's it is a summary of
+     * what was produced, not a quote, so no substring check could ever pass and running one would
+     * blank every element in the report. See [AuditProtocolElement.evidence].
+     */
+    fun verifyElements(
+        elements: List<AuditProtocolElement>,
+        sourceText: String,
+    ): Pair<List<AuditProtocolElement>, Int> {
+        if (elements.isEmpty()) return elements to 0
+
+        val haystack = normalise(sourceText)
+        var rejected = 0
+        val checked = elements.map { element ->
+            val standards = element.standards.filter { isNamedIn(it, haystack) }
+            rejected += element.standards.size - standards.size
+            if (standards.size == element.standards.size) element else element.copy(standards = standards)
+        }
+        return checked to rejected
+    }
+
+    /**
      * A cited standard must be named by the source, and the check keys on its numbers: every
      * digit-bearing token of the citation ("9001", "7.2") must appear in the text. Year tokens
      * (":2015", ":2022") are exempt -- a model expanding "ISO 9001" to "ISO 9001:2015" is

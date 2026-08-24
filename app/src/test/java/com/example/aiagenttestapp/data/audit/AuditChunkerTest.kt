@@ -101,13 +101,13 @@ class AuditChunkerTest {
     }
 
     @Test
-    fun `the minimum context holds the prompt, a reply and a chunk`() {
-        val minimum = AuditChunker.minimumContextTokens(promptTokens = 1800)
+    fun `a context too small for the prompt still yields a floor-sized chunk`() {
+        // Nothing refuses such a model up front any more, so this path is reachable: the window
+        // cannot hold the preamble plus a reply, and the budget must still be a usable number
+        // rather than zero or negative.
+        val chunkTokens = AuditChunker.chunkCharBudget(1024, promptTokens = 1800) / 3.5
 
-        assertTrue(minimum > 1800)
-        // At exactly the minimum the chunk budget is the floor, not something smaller.
-        val chunkTokens = AuditChunker.chunkCharBudget(minimum, promptTokens = 1800) / 3.5
-        assertTrue("chunk at the minimum was $chunkTokens", chunkTokens >= AuditChunker.MIN_CHUNK_TOKENS)
+        assertTrue("chunk was $chunkTokens tokens", chunkTokens >= AuditChunker.MIN_CHUNK_TOKENS)
     }
 
     @Test
@@ -282,19 +282,23 @@ class AuditChunkerTest {
     }
 
     @Test
-    fun `the audit asks for its own window, never the model's whole one`() {
-        // The window is memory spent up front, not a ceiling to grow into. A 22K window on a ~2B
-        // model is about a gigabyte of KV cache before a token is read.
-        assertEquals(AuditChunker.AUDIT_CONTEXT_TOKENS, AuditChunker.auditContextTokens(262144))
-        assertEquals(AuditChunker.AUDIT_CONTEXT_TOKENS, AuditChunker.auditContextTokens(22016))
-        // A model with less than the cap keeps what it has -- capping only ever reduces.
-        assertEquals(4096, AuditChunker.auditContextTokens(4096))
+    fun `a bigger window buys bigger sections, with no ceiling of its own`() {
+        // The audit used to clamp itself to 8192 however much the model offered. It does not any
+        // more, so a large window has to keep producing larger sections all the way up -- that is
+        // the whole point of removing the clamp: fewer sections, and each one is minutes of work.
+        val prompt = 1854
+        val at8k = AuditChunker.chunkCharBudget(8192, prompt)
+        val at32k = AuditChunker.chunkCharBudget(32768, prompt)
+        val at128k = AuditChunker.chunkCharBudget(131072, prompt)
+
+        assertTrue("32k section $at32k was not bigger than 8k's $at8k", at32k > at8k)
+        assertTrue("128k section $at128k was not bigger than 32k's $at32k", at128k > at32k)
     }
 
     @Test
     fun `the audit window leaves a workable section and a matching reply`() {
         val prompt = 1854
-        val context = AuditChunker.auditContextTokens(262144)
+        val context = 8192
         val chunkTokens = AuditChunker.chunkCharBudget(context, prompt) / 3.5
         val reserve = AuditChunker.outputReserveTokens(context, prompt)
 
@@ -306,5 +310,35 @@ class AuditChunkerTest {
         // The preamble's share of the window stays reasonable: at 4K it was 45%, which is what made
         // small-context models split documents into twice the sections they needed.
         assertTrue("preamble is ${100 * prompt / context}% of the window", prompt * 100 / context < 30)
+    }
+
+    /**
+     * A model answering "none" under an empty heading was being carried through as an item, so a
+     * report with nothing unresolved rendered "Unresolved items (1): None". Affects the audit's quick
+     * and detailed paths and a voice note's quick summary, all three of which merge through here.
+     */
+    @Test
+    fun `an empty answer is not an unresolved item`() {
+        assertTrue(AuditChunker.mergeStrings(listOf(listOf("None"))).isEmpty())
+        assertTrue(AuditChunker.mergeStrings(listOf(listOf("none."))).isEmpty())
+        assertTrue(AuditChunker.mergeStrings(listOf(listOf("N/A"))).isEmpty())
+        assertTrue(AuditChunker.mergeStrings(listOf(listOf("keine"))).isEmpty())
+        assertTrue(AuditChunker.mergeStrings(listOf(listOf("Nothing"))).isEmpty())
+    }
+
+    @Test
+    fun `a real unresolved item that merely mentions none survives`() {
+        val kept = AuditChunker.mergeStrings(
+            listOf(listOf("None of the three deviation records were produced")),
+        )
+        assertEquals(1, kept.size)
+    }
+
+    @Test
+    fun `an empty answer in one section does not hide a real item in another`() {
+        val kept = AuditChunker.mergeStrings(
+            listOf(listOf("None"), listOf("The approval record was never produced")),
+        )
+        assertEquals(listOf("The approval record was never produced"), kept)
     }
 }

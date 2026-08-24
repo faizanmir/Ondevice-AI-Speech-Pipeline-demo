@@ -4,8 +4,19 @@ package com.example.aiagenttestapp.data.audit
  * What an audit concluded about one protocol element.
  *
  * Kotlin names in code, the iOS spec's spellings on the wire ([wireName]). The two apps have to
- * emit the same JSON so an audit means the same thing on either platform, but `resultOK` reads
- * wrong as a Kotlin constant and would be inherited forever if it leaked past the serializer.
+ * emit the same JSON so an audit means the same thing on either platform, but `resultOkForDocumentation`
+ * reads wrong as a Kotlin constant and would be inherited forever if it leaked past the serializer.
+ *
+ * ## Four states, and none of them is a bare pass
+ *
+ * There is no `resultOK`. It existed here and was removed: the vocabulary records what an audit had
+ * to SAY about an element, and "nothing to say" is not one of those things -- it is the absence of
+ * them. An element that conformed outright therefore carries no result at all, which the report
+ * shows by omitting the line rather than by asserting a pass.
+ *
+ * A stored `resultOK` from a report written before this decodes to null, on the same rule as any
+ * other unrecognised value. Deliberate: mapping it onto one of the four would be re-grading a
+ * finished artefact, and every one of the four says something stronger than the value it replaced.
  *
  * ## Absence is a verdict
  *
@@ -16,9 +27,6 @@ package com.example.aiagenttestapp.data.audit
  * value this build does not recognise alike.
  */
 enum class AuditResultType(val wireName: String) {
-
-    /** Clear pass. */
-    OK("resultOK"),
 
     /** The activity itself is sound; its documentation, approval or traceability is weak. */
     OK_FOR_DOCUMENTATION("resultOkForDocumentation"),
@@ -37,6 +45,21 @@ enum class AuditResultType(val wireName: String) {
     val isNonconformity: Boolean
         get() = this == MINOR_NONCONFORMITY || this == MAJOR_NONCONFORMITY
 
+    /**
+     * The conclusion written out, for a report line that has room for it ("Result: OK for
+     * documentation").
+     *
+     * Not the same string as the badge on a finding, which is abbreviated to fit a tag, and kept
+     * here rather than in either renderer so the screen and the PDF cannot word it differently.
+     */
+    val label: String
+        get() = when (this) {
+            OK_FOR_DOCUMENTATION -> "OK for documentation"
+            MINOR_NONCONFORMITY -> "Minor non-conformity"
+            MAJOR_NONCONFORMITY -> "Major non-conformity"
+            POTENTIAL_IMPROVEMENT -> "Potential for improvement"
+        }
+
     companion object {
 
         /**
@@ -51,6 +74,34 @@ enum class AuditResultType(val wireName: String) {
                 ?: return null
             return entries.firstOrNull { it.wireName.equals(trimmed, ignoreCase = true) }
         }
+
+        /**
+         * The grade a NON-CONFORMITY is allowed to carry: itself when it is one, null otherwise.
+         *
+         * A block that names a gap and grades it `resultPotentialImprovement` or
+         * `resultOkForDocumentation` is telling both halves of a contradiction, and the report
+         * renders the grade rather than the block, so the finding arrives badged as a pass. The
+         * prompt forbids it; this is the same rule where it cannot be ignored.
+         *
+         * Cleared, never rewritten. Promoting it to a minor would be inventing the conclusion this
+         * whole vocabulary exists to stop inventing -- the model said the finding is real and said
+         * something incoherent about how serious it is, and only the second part is unusable. Same
+         * trade [AuditEvidence] makes with a quote that will not verify: drop the claim, keep the
+         * finding.
+         */
+        fun asNonconformity(result: AuditResultType?): AuditResultType? =
+            result?.takeIf { it.isNonconformity }
+
+        /**
+         * Whether [text] is one of the wire names rather than a document's own wording.
+         *
+         * The verdict field holds what the document called its result, verbatim ("OK for
+         * documentation"). A model that has just been shown five vocabulary names will sometimes put
+         * one of them there instead, and the report then prints `Stated result:
+         * "resultPotentialImprovement"` -- attributing to the document a word it never used, in a
+         * field whose entire purpose is that it is the document's own.
+         */
+        fun isWireName(text: String): Boolean = fromWire(text) != null
 
         /**
          * The more severe of two conclusions about the same element -- never the milder one.
@@ -79,11 +130,10 @@ enum class AuditResultType(val wireName: String) {
          */
         private val AuditResultType.severity: Int
             get() = when (this) {
-                OK -> 0
-                POTENTIAL_IMPROVEMENT -> 1
-                OK_FOR_DOCUMENTATION -> 2
-                MINOR_NONCONFORMITY -> 3
-                MAJOR_NONCONFORMITY -> 4
+                POTENTIAL_IMPROVEMENT -> 0
+                OK_FOR_DOCUMENTATION -> 1
+                MINOR_NONCONFORMITY -> 2
+                MAJOR_NONCONFORMITY -> 3
             }
     }
 }

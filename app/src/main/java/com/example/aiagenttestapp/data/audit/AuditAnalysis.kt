@@ -10,6 +10,67 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
+/**
+ * What a run actually cost the model, summed over the turns that produced a report.
+ *
+ * Kept as counters rather than a formatted line so the report and the log can each say it their own
+ * way, and so the two halves stay separable: prefill scales with the prompt (the preamble is paid on
+ * every section), decode with what the model chooses to say. A report that is slow for one reason
+ * needs a completely different fix from one that is slow for the other, and a single "tokens per
+ * second" hides which it was.
+ *
+ * Accumulated per chunk and checkpointed with that chunk's findings, so a document interrupted and
+ * resumed reports what the whole document cost rather than what its final run did.
+ */
+data class AuditRunStats(
+    /** Model turns: one per section, plus the summary. */
+    val turns: Int = 0,
+    val promptTokens: Int = 0,
+    val generatedTokens: Int = 0,
+    val prefillMillis: Long = 0,
+    val decodeMillis: Long = 0,
+) {
+    /** Nothing was measured -- an old report, or a runtime that reports no counters. */
+    val isEmpty: Boolean get() = turns == 0 || (promptTokens == 0 && generatedTokens == 0)
+
+    operator fun plus(other: AuditRunStats) = AuditRunStats(
+        turns = turns + other.turns,
+        promptTokens = promptTokens + other.promptTokens,
+        generatedTokens = generatedTokens + other.generatedTokens,
+        prefillMillis = prefillMillis + other.prefillMillis,
+        decodeMillis = decodeMillis + other.decodeMillis,
+    )
+
+    val prefillTokensPerSecond: Double
+        get() = if (prefillMillis <= 0 || promptTokens <= 0) 0.0
+        else promptTokens * 1000.0 / prefillMillis
+
+    val decodeTokensPerSecond: Double
+        get() = if (decodeMillis <= 0 || generatedTokens <= 0) 0.0
+        else generatedTokens * 1000.0 / decodeMillis
+
+    /**
+     * The two halves as the report states them, phrased here rather than in either renderer so the
+     * screen and the exported PDF cannot drift into saying it differently.
+     *
+     * Rounded to what each rate can carry: prefill runs in the hundreds or thousands and its decimal
+     * is noise, decode runs in the tens and its decimal is the difference between two models.
+     */
+    val prefillLabel: String get() = "Prefill %s tok · %.0f tok/s".format(
+        compact(promptTokens),
+        prefillTokensPerSecond,
+    )
+
+    val decodeLabel: String get() = "Decode %s tok · %.1f tok/s".format(
+        compact(generatedTokens),
+        decodeTokensPerSecond,
+    )
+
+    /** 43,182 -> "43.2k". A report is read for the order of magnitude, not the last digit. */
+    private fun compact(tokens: Int): String =
+        if (tokens >= 1000) "%.1fk".format(tokens / 1000.0) else tokens.toString()
+}
+
 /** One audit finding: a short [title] plus optional [detail] -- evidence, a clause, an owner, etc. */
 data class AuditFinding(
     val title: String,
@@ -42,6 +103,17 @@ data class AuditFinding(
      * is the older three-way grade and will go once every producer sets this.
      */
     val resultType: AuditResultType? = null,
+    /**
+     * Actions only: how urgent, where it stands, and whether the audited party accepted it. All
+     * three are blank or null on a non-conformity, which carries a grade instead.
+     *
+     * Spellings normalised through [AuditProtocolVocabulary], which is where they are guessed and
+     * where they get corrected. [accepted] is null -- not false -- when the document did not say:
+     * an action nobody accepted and an action whose acceptance went unrecorded are different facts.
+     */
+    val priority: String = "",
+    val status: String = "",
+    val accepted: Boolean? = null,
 )
 
 /**
@@ -165,6 +237,24 @@ data class AuditAnalysis(
     val verdict: String = "",
     val nonConformities: List<AuditFinding> = emptyList(),
     val actions: List<AuditFinding> = emptyList(),
+    /**
+     * The protocol the document followed: what each part of it examined and concluded.
+     *
+     * Alongside [nonConformities], not instead of them -- an element that concluded "OK for
+     * documentation" is not a non-conformity, and a non-conformity found in passing may belong to no
+     * element at all. See [AuditProtocolElement].
+     */
+    val protocolElements: List<AuditProtocolElement> = emptyList(),
+    /** What the parties asserted without it being a finding -- the report's "Also stated". */
+    val alsoStated: List<AuditStatement> = emptyList(),
+    /**
+     * What the document left open: a record still missing, an approval never produced.
+     *
+     * Not the same as a non-conformity, which is a requirement already judged unmet, and not the same
+     * as an action, which is a step someone committed to. An unresolved item is a gap the document
+     * itself never closed, and it is the part of a report a reader has to chase.
+     */
+    val unresolvedItems: List<String> = emptyList(),
     val faqs: List<String> = emptyList(),
     /**
      * The concrete factual content of one chunk -- who, what, dates, numbers, equipment. The raw
@@ -173,12 +263,13 @@ data class AuditAnalysis(
      */
     val facts: List<String> = emptyList(),
     /**
-     * Quick mode, final result only: the whole-document summary as at most
-     * [QuickAudit.MAX_POINTS] points.
+     * Legacy: the whole-document summary quick mode used to produce, as a list of points.
      *
-     * Its own field rather than newlines packed into [summary], because it is a list and the report
-     * and the PDF both render it as one. A detailed report leaves this empty and a quick one leaves
-     * [summary] empty, so [mode] -- not the emptiness of a field -- is what decides the layout.
+     * Nothing writes this any more -- quick mode now reports a protocol element, its actions and its
+     * unresolved items, and takes no summarising turn at all. The field stays because reports saved
+     * before that change carry their points here and nowhere else: dropping it would need a
+     * migration and would blank finished artefacts, so the renderers keep their branch for it and
+     * new reports simply leave it empty.
      */
     val keyPoints: List<String> = emptyList(),
     /**
@@ -227,13 +318,33 @@ data class AuditAnalysis(
      */
     val engineName: String = "",
     val promptProfile: String = "",
+    /**
+     * Final result only: whether this document was asked for a summary at all.
+     *
+     * Recorded so the report can tell a summary that was skipped from one that failed. The two look
+     * identical in the data -- an empty string either way -- and saying "no summary was produced" of
+     * a run that was never asked for one reads as a fault. Defaults to true, which is what every
+     * report saved before the choice existed actually was.
+     */
+    val includeSummary: Boolean = true,
+    /**
+     * What this cost the model. Per-chunk it is that section's single turn; on the final result it
+     * is every section's turn plus the summary's, summed from the checkpoints.
+     *
+     * Deliberately outside [isEmpty]: a section that produced nothing but timings is still an empty
+     * section, and the parser uses that emptiness to pick the real object out of a reply.
+     */
+    val runStats: AuditRunStats = AuditRunStats(),
 ) {
     // facts and verdict count towards emptiness: a clean section legitimately returns facts (or a
     // stated verdict) with no findings, and the parser uses isEmpty to pick the real object out of
     // a reply that also contains a draft.
     val isEmpty: Boolean
         get() = summary.isBlank() && verdict.isBlank() && nonConformities.isEmpty() &&
-            actions.isEmpty() && faqs.isEmpty() && facts.isEmpty() && keyPoints.isEmpty()
+            actions.isEmpty() && faqs.isEmpty() && facts.isEmpty() && keyPoints.isEmpty() &&
+            // A section that yielded only protocol elements yielded a real read of that section, so
+            // it must not be mistaken for the empty object the parser falls back to.
+            protocolElements.isEmpty() && alsoStated.isEmpty() && unresolvedItems.isEmpty()
 
     /** Which read produced this. Old reports carry no mode and are detailed by construction. */
     val auditMode: AuditMode get() = AuditMode.from(mode.ifBlank { null })
@@ -513,7 +624,68 @@ object AuditAnalysisParser {
         notesTrimmed = (this["notesTrimmed"] as? JsonPrimitive)?.contentOrNull == "true",
         engineName = firstString("engineName"),
         promptProfile = firstString("promptProfile"),
+        // Absent means true: every report written before the choice existed carried a summary.
+        includeSummary = (this["includeSummary"] as? JsonPrimitive)?.contentOrNull != "false",
+        runStats = (this["runStats"] as? JsonObject)?.toRunStats() ?: AuditRunStats(),
+        // Either an array or a single object. A schema-constrained reply asks for one element --
+        // the report shows one -- while a free-form reply may list several, and both have to land
+        // here or a whole half of the read is lost to a key name.
+        protocolElements = firstArray("protocolElements", "protocol", "elements")
+            ?.mapNotNull { (it as? JsonObject)?.toElement() }
+            ?: listOfNotNull((this["protocolElement"] as? JsonObject)?.toElement()),
+        alsoStated = firstArray("alsoStated", "stated", "statements")
+            ?.mapNotNull { it.toStatement() }
+            .orEmpty(),
+        unresolvedItems = stringsUnder("unresolvedItems", "unresolved", "openItems"),
     )
+
+    /** An element with no statement is dropped, on the same rule that drops a titleless finding. */
+    private fun JsonObject.toElement(): AuditProtocolElement? {
+        val statement = firstString("statement", "title", "element").ifBlank { return null }
+        return AuditProtocolElement(
+            statement = statement,
+            type = AuditProtocolVocabulary.canonical(
+                firstString("type"),
+                AuditProtocolVocabulary.ELEMENT_TYPES,
+            ),
+            speaker = firstString("speaker", "who"),
+            result = AuditResultType.fromWire(firstString("result", "resultType")),
+            reason = firstString("reason"),
+            evidence = firstString("evidence"),
+            standards = stringsUnder("standards", "standard", "clauses"),
+        )
+    }
+
+    /**
+     * A statement as either an object or the bare "Speaker: what they said" line a model writes when
+     * it forgets the shape. Attribution is optional; the claim is not.
+     */
+    private fun JsonElement.toStatement(): AuditStatement? = when (this) {
+        is JsonObject -> {
+            val text = firstString("text", "statement", "said", "quote")
+            if (text.isBlank()) null else AuditStatement(firstString("speaker", "who"), text)
+        }
+
+        is JsonPrimitive -> contentOrNull?.let(AuditStatement::of)
+
+        else -> null
+    }
+
+    /**
+     * Written by [AuditResultCodec], never by a model, so this reads the exact keys it wrote -- no
+     * aliases. A missing or unreadable field is 0, which [AuditRunStats.isEmpty] then reports as
+     * "not measured" rather than as a run that took no time.
+     */
+    private fun JsonObject.toRunStats() = AuditRunStats(
+        turns = number("turns").toInt(),
+        promptTokens = number("promptTokens").toInt(),
+        generatedTokens = number("generatedTokens").toInt(),
+        prefillMillis = number("prefillMillis"),
+        decodeMillis = number("decodeMillis"),
+    )
+
+    private fun JsonObject.number(key: String): Long =
+        (this[key] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0L
 
     /** First value under any of [keys] that is a non-blank string primitive, or "". */
     private fun JsonObject.firstString(vararg keys: String): String =
@@ -559,10 +731,24 @@ object AuditAnalysisParser {
             // wide on purpose, because a three-way grade can be spelled a dozen ways; a result type
             // is a closed vocabulary, so anything that is not one of its five names is no
             // conclusion rather than a near miss to be guessed at.
-            val resultType = AuditResultType.fromWire(firstString("resultType"))
+            val resultType = AuditResultType.fromWire(firstString("resultType", "result"))
+            // Actions only, absent everywhere else. Read here rather than in a second pass because
+            // this is the only place the object is in hand.
+            val priority = AuditProtocolVocabulary.canonical(
+                firstString("priority"),
+                AuditProtocolVocabulary.ACTION_PRIORITIES,
+            )
+            val status = AuditProtocolVocabulary.canonical(
+                firstString("status"),
+                AuditProtocolVocabulary.ACTION_STATUSES,
+            )
+            val accepted = AuditProtocolVocabulary.acceptance(firstString("accepted"))
             when {
                 title.isNotEmpty() ->
-                    AuditFinding(title, detail, standards, severity, evidence, resultType)
+                    AuditFinding(
+                        title, detail, standards, severity, evidence, resultType,
+                        priority, status, accepted,
+                    )
 
                 detail.isNotEmpty() -> AuditFinding(
                     title = detail,
@@ -570,6 +756,9 @@ object AuditAnalysisParser {
                     severity = severity,
                     evidence = evidence,
                     resultType = resultType,
+                    priority = priority,
+                    status = status,
+                    accepted = accepted,
                 )
 
                 else -> null

@@ -28,8 +28,10 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,6 +44,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -49,10 +52,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -60,7 +65,14 @@ import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagenttestapp.data.audit.AuditDocument
 import com.example.aiagenttestapp.data.audit.AuditMode
 import com.example.aiagenttestapp.data.audit.AuditStatus
+import com.example.aiagenttestapp.ui.components.SwipeAction
+import com.example.aiagenttestapp.ui.components.SwipeActionTone
+import com.example.aiagenttestapp.ui.components.ListDetailPanes
+import com.example.aiagenttestapp.ui.components.rememberListDetailState
+import com.example.aiagenttestapp.ui.components.ControlsContentPanes
+import com.example.aiagenttestapp.ui.components.SwipeRevealBox
 import com.example.aiagenttestapp.ui.components.formatDuration
+import kotlinx.coroutines.launch
 
 @Composable
 fun AuditScreen(
@@ -76,12 +88,25 @@ fun AuditScreen(
     // device, and a restored screen must queue the mode the user actually picked, not the default.
     var pendingMode by rememberSaveable { mutableStateOf(AuditMode.DETAILED) }
 
+    // Held next to pendingMode and for the same reason: it is pinned onto the document at attach,
+    // and the trip to the system file picker can outlive this Activity, so a restored screen must
+    // queue the choice the user actually made rather than the default.
+    var includeSummary by rememberSaveable { mutableStateOf(true) }
+    var pendingIncludeSummary by rememberSaveable { mutableStateOf(true) }
+
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
-    ) { uri -> uri?.let { viewModel.onIntent(AuditIntent.AttachFile(it, pendingMode)) } }
+    ) { uri ->
+        uri?.let {
+            viewModel.onIntent(AuditIntent.AttachFile(it, pendingMode, pendingIncludeSummary))
+        }
+    }
 
     fun pick(mode: AuditMode) {
         pendingMode = mode
+        // Quick mode writes no summary, so it is enqueued without one whatever the switch says --
+        // the switch belongs to the detailed read and is hidden on the quick one.
+        pendingIncludeSummary = includeSummary && mode == AuditMode.DETAILED
         filePicker.launch(arrayOf("*/*"))
     }
 
@@ -108,14 +133,9 @@ fun AuditScreen(
             )
         },
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item {
+        ControlsContentPanes(
+            modifier = Modifier.padding(padding),
+            controls = {
                 when (val loadState = state.loadState) {
                     is AuditLoadState.Failed -> AuditSectionCard(title = "Model") {
                         Text(loadState.message, color = MaterialTheme.colorScheme.error)
@@ -131,12 +151,14 @@ fun AuditScreen(
                     }
                     else -> AddDocumentCard(
                         state = state,
+                        includeSummary = includeSummary,
+                        onIncludeSummaryChange = { includeSummary = it },
                         onPickFile = ::pick,
                         onSwitchModel = { viewModel.onIntent(AuditIntent.SwitchModel(it)) },
                     )
                 }
-            }
-
+            },
+        ) {
             if (state.documents.isEmpty()) {
                 item {
                     Text(
@@ -174,6 +196,8 @@ fun AuditScreen(
 @Composable
 private fun AddDocumentCard(
     state: AuditUiState,
+    includeSummary: Boolean,
+    onIncludeSummaryChange: (Boolean) -> Unit,
     onPickFile: (AuditMode) -> Unit,
     onSwitchModel: (String) -> Unit,
 ) {
@@ -190,6 +214,39 @@ private fun AddDocumentCard(
             isBusy = state.isExtractingFile,
             onPick = onPickFile,
         )
+        // The summary belongs to the detailed read: quick writes none at all, so there is nothing
+        // for the switch to turn off. Hidden rather than disabled -- an off switch that does nothing
+        // invites the question of why it is there.
+        if (state.mode == AuditMode.DETAILED) {
+            Spacer(Modifier.height(4.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = state.canAttach) { onIncludeSummaryChange(!includeSummary) }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Write a summary", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        // Says what it costs, in the terms the pipeline actually pays: the summary
+                        // is one turn, but the facts it is written from are output on every section.
+                        if (includeSummary) {
+                            "Prose overview of the document, from facts gathered per section."
+                        } else {
+                            "Off: no summary turn, and no per-section facts. Findings only, faster."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = includeSummary,
+                    onCheckedChange = onIncludeSummaryChange,
+                    enabled = state.canAttach,
+                )
+            }
+        }
         Spacer(Modifier.height(12.dp))
         Text(
             "Read with",
@@ -356,6 +413,33 @@ private fun DocumentRow(
     onCancel: () -> Unit,
     onRetry: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    SwipeRevealBox(
+        actions = buildList {
+            if (doc.result != null) {
+                add(
+                    SwipeAction(
+                        label = "Share",
+                        icon = Icons.Default.Share,
+                        onClick = { scope.launch { shareAuditReport(context, doc, modelName) } },
+                    ),
+                )
+            }
+            // Cancel and delete are one operation on this queue -- AuditQueue.cancel deletes the
+            // row -- so a queued document stopping and a finished one being thrown away are the
+            // same call. The label follows what the row is actually doing.
+            add(
+                SwipeAction(
+                    label = if (doc.status == AuditStatus.DONE) "Delete" else "Cancel",
+                    icon = Icons.Default.DeleteOutline,
+                    tone = SwipeActionTone.Destructive,
+                    onClick = onCancel,
+                ),
+            )
+        },
+    ) {
     Card(
         Modifier
             .fillMaxWidth()
@@ -377,8 +461,18 @@ private fun DocumentRow(
             // The model and mode pinned at enqueue, which are what analysed this document -- shown
             // per row because either can differ from what the card above currently offers, and a
             // queue holding both kinds of read is otherwise impossible to tell apart.
+            //
+            // The summary choice is pinned the same way and belongs in the same line: it is the
+            // difference between a report that opens with prose and one that opens with findings,
+            // and once queued it cannot be changed. Said only when it was turned OFF -- a summary is
+            // what a reader expects, and annotating the ordinary case would be noise on every row.
             Text(
-                "$modelName · ${doc.mode.label.lowercase()}",
+                buildString {
+                    append(modelName)
+                    append(" · ")
+                    append(doc.mode.label.lowercase())
+                    if (!doc.includeSummary) append(" · no summary")
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -392,9 +486,13 @@ private fun DocumentRow(
                     val reading = if (doc.mode == AuditMode.QUICK) "Reading" else "Analysing"
                     StatusRow(
                         when {
-                            // Quick mode runs no grading pass at all, so naming one here would
-                            // describe a phase that does not exist.
-                            doc.summarising && doc.mode == AuditMode.QUICK -> "Summarising…"
+                            // Quick mode writes no summary and runs no grading pass, so the reduce
+                            // phase is the merge and nothing else. Naming either would describe a
+                            // turn that does not happen.
+                            doc.summarising && doc.mode == AuditMode.QUICK -> "Merging…"
+                            // Same rule for a run with the summary switched off: the reduce phase
+                            // still merges findings, but no summary is being written.
+                            doc.summarising && !doc.includeSummary -> "Merging findings…"
                             doc.summarising -> "Grading and summarising…"
                             doc.chunkCount > 1 ->
                                 "$reading — section ${doc.currentSection} of ${doc.chunkCount}"
@@ -418,8 +516,12 @@ private fun DocumentRow(
                     buildString {
                         append(
                             doc.result?.let {
+                                // A quick report reaches one conclusion, so the row states it.
+                                // There is nothing to count: the element is always one, and the
+                                // key points it used to count are no longer produced.
                                 val headline = if (doc.mode == AuditMode.QUICK) {
-                                    "${it.keyPoints.size} key points"
+                                    it.protocolElements.firstOrNull()?.result?.label
+                                        ?: "No clear result"
                                 } else {
                                     "${it.nonConformities.size} non-conformities"
                                 }
@@ -458,6 +560,7 @@ private fun DocumentRow(
                 )
             }
         }
+    }
     }
 }
 

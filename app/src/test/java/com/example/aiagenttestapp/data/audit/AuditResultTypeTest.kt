@@ -18,7 +18,10 @@ class AuditResultTypeTest {
 
     @Test
     fun `the wire names are the ones the spec states`() {
-        assertEquals("resultOK", AuditResultType.OK.wireName)
+        // Four states, and none of them is a bare pass: resultOK was removed because the
+        // vocabulary records what an audit had to SAY about an element, and "nothing to say" is the
+        // absence of a grade rather than one of them.
+        assertEquals(4, AuditResultType.entries.size)
         assertEquals("resultOkForDocumentation", AuditResultType.OK_FOR_DOCUMENTATION.wireName)
         assertEquals("minorNonconformity", AuditResultType.MINOR_NONCONFORMITY.wireName)
         assertEquals("majorNonconformity", AuditResultType.MAJOR_NONCONFORMITY.wireName)
@@ -46,7 +49,6 @@ class AuditResultTypeTest {
     fun `only the two nonconformities count as findings`() {
         assertTrue(AuditResultType.MAJOR_NONCONFORMITY.isNonconformity)
         assertTrue(AuditResultType.MINOR_NONCONFORMITY.isNonconformity)
-        assertFalse(AuditResultType.OK.isNonconformity)
         assertFalse(AuditResultType.OK_FOR_DOCUMENTATION.isNonconformity)
         assertFalse(AuditResultType.POTENTIAL_IMPROVEMENT.isNonconformity)
     }
@@ -54,12 +56,14 @@ class AuditResultTypeTest {
     @Test
     fun `severity never moves down`() {
         val major = AuditResultType.MAJOR_NONCONFORMITY
-        val ok = AuditResultType.OK
+        // The mildest of the four, which is what a favourable second reading looks like now that
+        // there is no bare pass to propose.
+        val mild = AuditResultType.POTENTIAL_IMPROVEMENT
 
         // The case that matters: a later chunk discussing the same item favourably must not undo a
         // major raised earlier. A finding that softens on its way to the report disappears.
-        assertEquals(major, AuditResultType.neverDowngrade(current = major, proposed = ok))
-        assertEquals(major, AuditResultType.neverDowngrade(current = ok, proposed = major))
+        assertEquals(major, AuditResultType.neverDowngrade(current = major, proposed = mild))
+        assertEquals(major, AuditResultType.neverDowngrade(current = mild, proposed = major))
     }
 
     @Test
@@ -75,12 +79,8 @@ class AuditResultTypeTest {
     fun `the ordering between the milder verdicts is explicit`() {
         fun merge(a: AuditResultType, b: AuditResultType) = AuditResultType.neverDowngrade(a, b)
 
-        // Documentation-weak outranks a pass and a suggestion: it is the one that still needs doing
-        // something about, so a later "OK" must not bury it.
-        assertEquals(
-            AuditResultType.OK_FOR_DOCUMENTATION,
-            merge(AuditResultType.OK_FOR_DOCUMENTATION, AuditResultType.OK),
-        )
+        // Documentation-weak outranks a suggestion: it is the one that still needs doing something
+        // about, so a later "worth improving" must not bury it.
         assertEquals(
             AuditResultType.OK_FOR_DOCUMENTATION,
             merge(AuditResultType.POTENTIAL_IMPROVEMENT, AuditResultType.OK_FOR_DOCUMENTATION),

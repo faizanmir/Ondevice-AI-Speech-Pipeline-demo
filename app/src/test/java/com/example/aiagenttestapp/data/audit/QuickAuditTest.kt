@@ -1,109 +1,63 @@
 package com.example.aiagenttestapp.data.audit
 
 import com.example.aiagenttestapp.prompts.audit.AuditPromptBudget
+import com.example.aiagenttestapp.prompts.audit.AuditQuickPrompts
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The quick read's own moving parts: how its summary reply is read back, how its sections are
- * sized, and that its records go through the one shared parser.
+ * The quick read's own moving parts: what its sections are asked for, how the reply is read back,
+ * how the caps hold, and how its sections are sized.
  *
- * These are the pieces that fail *silently* -- a cap that does not hold, a point list read as
+ * These are the pieces that fail *silently* -- a cap that does not hold, an element read as
  * preamble, a section sized for the wrong mode -- and each produces a plausible-looking report
  * rather than an error.
  */
 class QuickAuditTest {
 
-    // ---- Reading the summary reply ---------------------------------------------------------------
-
-    @Test
-    fun `points are read from the bullet markers a model actually emits`() {
-        val reply = """
-            - Calibration log signed 3 March.
-            * Two operators lacked current certificates.
-            1. Line ran at 22 units per hour.
-            2) Extinguisher inspection overdue by 14 months.
-        """.trimIndent()
-
-        assertEquals(
-            listOf(
-                "Calibration log signed 3 March.",
-                "Two operators lacked current certificates.",
-                "Line ran at 22 units per hour.",
-                "Extinguisher inspection overdue by 14 months.",
-            ),
-            QuickPointsParser.parseQuickPoints(reply),
-        )
-    }
-
-    @Test
-    fun `preamble and trailing chatter are not mistaken for points`() {
-        val reply = """
-            Here are the key points from the document:
-
-            - The audit covered the calibration process.
-
-            Let me know if you would like more detail.
-        """.trimIndent()
-
-        assertEquals(
-            listOf("The audit covered the calibration process."),
-            QuickPointsParser.parseQuickPoints(reply),
-        )
-    }
-
-    @Test
-    fun `the cap is enforced in code, not merely asked for in the prompt`() {
-        // A model asked for "at most 10" that hands back 14 -- the observed failure this guards.
-        val reply = (1..14).joinToString("\n") { "- point $it" }
-
-        val points = QuickPointsParser.parseQuickPoints(reply)
-
-        assertEquals(QuickAudit.MAX_POINTS, points.size)
-        assertEquals("point 1", points.first())
-        assertEquals("point ${QuickAudit.MAX_POINTS}", points.last())
-    }
-
-    @Test
-    fun `markdown decoration around a point is stripped`() {
-        assertEquals(
-            listOf("Torque wrench calibrated 12 May."),
-            QuickPointsParser.parseQuickPoints("**- Torque wrench calibrated 12 May.**"),
-        )
-    }
-
-    @Test
-    fun `a reply with no readable points yields an empty list rather than junk`() {
-        // The worker falls back to the raw section notes on empty; it must not be handed prose.
-        assertTrue(
-            QuickPointsParser.parseQuickPoints("I could not summarise this document.").isEmpty(),
-        )
-    }
-
     // ---- The per-section records -----------------------------------------------------------------
 
     @Test
-    fun `POINTS records are read by the same parser detailed mode uses`() {
+    fun `a quick section's records are read by the same parser detailed mode uses`() {
         val reply = """
             RECORDS
-            POINTS
-            - Torque wrench calibrated 12 May.
-            - Certificate not signed off.
+            ELEMENT
+            statement: Torque wrench calibration is carried out but its certificate is not signed off.
+            result: resultOkForDocumentation
+            reason: The calibration was performed on 12 May; only the sign-off is missing.
+            evidence: Calibration dated 12 May, and the unsigned certificate.
 
             ACTION
             title: Quality manager to sign off the certificate
 
             ACTION
             title: Check the other certificates
+
+            UNRESOLVED
+            - The calibration certificate is still unsigned
         """.trimIndent()
 
         val parsed = AuditRecordParser.parse(reply)
 
+        val element = parsed.protocolElements.single()
         assertEquals(
-            listOf("Torque wrench calibrated 12 May.", "Certificate not signed off."),
-            parsed.facts,
+            "Torque wrench calibration is carried out but its certificate is not signed off.",
+            element.statement,
         )
+        assertEquals(AuditResultType.OK_FOR_DOCUMENTATION, element.result)
+        assertEquals(
+            "The calibration was performed on 12 May; only the sign-off is missing.",
+            element.reason,
+        )
+        assertEquals("Calibration dated 12 May, and the unsigned certificate.", element.evidence)
+        // Never asked for, so never invented: a quick element carries no clause and no attribution,
+        // and the report omits those lines rather than showing them blank.
+        assertTrue(element.standards.isEmpty())
+        assertEquals("", element.speaker)
+        assertEquals("", element.type)
+
         assertEquals(
             listOf(
                 "Quality manager to sign off the certificate",
@@ -111,22 +65,82 @@ class QuickAuditTest {
             ),
             parsed.actions.map { it.title },
         )
+        assertEquals(listOf("The calibration certificate is still unsigned"), parsed.unresolvedItems)
         // Quick mode never asks for these, and must not invent them.
         assertTrue(parsed.nonConformities.isEmpty())
     }
 
     @Test
-    fun `a section that states no action yields no actions`() {
+    fun `a section that states no action and nothing unresolved yields neither`() {
         val parsed = AuditRecordParser.parse(
             """
             RECORDS
-            POINTS
-            - The line ran at 22 units per hour.
+            ELEMENT
+            statement: The line ran at 22 units per hour throughout the observed period.
             """.trimIndent(),
         )
 
-        assertEquals(listOf("The line ran at 22 units per hour."), parsed.facts)
+        assertEquals(1, parsed.protocolElements.size)
         assertTrue(parsed.actions.isEmpty())
+        assertTrue(parsed.unresolvedItems.isEmpty())
+    }
+
+    @Test
+    fun `an element with no clear conclusion carries no result rather than a guessed one`() {
+        // Absence is a verdict: the report shows no Result line instead of asserting a pass.
+        val parsed = AuditRecordParser.parse(
+            """
+            RECORDS
+            ELEMENT
+            statement: The parties discussed the calibration schedule without reaching a conclusion.
+            reason: Neither side stated a result.
+            """.trimIndent(),
+        )
+
+        assertNull(parsed.protocolElements.single().result)
+    }
+
+    // ---- The caps --------------------------------------------------------------------------------
+
+    @Test
+    fun `the action cap is enforced in code, not merely asked for in the prompt`() {
+        // A model asked for "at most two" that hands back five -- the observed failure this guards.
+        // The merge preserves order of first appearance, so the survivors are the earliest raised.
+        val perChunk = listOf((1..5).map { AuditFinding("action $it") })
+
+        val capped = AuditChunker.mergeFindings(perChunk).take(QuickAudit.MAX_ACTIONS)
+
+        assertEquals(QuickAudit.MAX_ACTIONS, capped.size)
+        assertEquals("action 1", capped.first().title)
+        assertEquals("action ${QuickAudit.MAX_ACTIONS}", capped.last().title)
+    }
+
+    @Test
+    fun `the unresolved cap is enforced in code and keeps the earliest items`() {
+        val perChunk = listOf(listOf("gap 1", "gap 2"), listOf("gap 3"))
+
+        val capped = AuditChunker.mergeStrings(perChunk).take(QuickAudit.MAX_UNRESOLVED)
+
+        assertEquals(listOf("gap 1", "gap 2"), capped)
+    }
+
+    @Test
+    fun `the quick preamble teaches every result name the parser reads back`() {
+        // Two lists that must not drift: a name taught here but unknown to fromWire is read as no
+        // conclusion at all, which is the one failure the shared vocabulary exists to prevent.
+        val preamble = AuditQuickPrompts.quickPreamble()
+
+        AuditResultType.entries.forEach { type ->
+            assertTrue("preamble omits ${type.wireName}", preamble.contains(type.wireName))
+        }
+    }
+
+    @Test
+    fun `the quick preamble states its caps rather than leaving them to code alone`() {
+        val preamble = AuditQuickPrompts.quickPreamble()
+
+        assertTrue(preamble.contains("at most ${QuickAudit.MAX_ACTIONS}"))
+        assertTrue(preamble.contains("at most ${QuickAudit.MAX_UNRESOLVED}"))
     }
 
     // ---- Sizing ----------------------------------------------------------------------------------
@@ -156,7 +170,7 @@ class QuickAuditTest {
 
     @Test
     fun `a quick section carries more text than a detailed one`() {
-        val context = AuditChunker.AUDIT_CONTEXT_TOKENS
+        val context = 8192
 
         val detailed = AuditChunker.chunkCharBudget(
             context,
@@ -175,7 +189,9 @@ class QuickAuditTest {
     }
 
     @Test
-    fun `quick's preamble is materially smaller than detailed's`() {
+    fun `quick's preamble stays materially smaller than detailed's`() {
+        // It grew when quick started asking for an element and a result vocabulary. The margin is
+        // the whole speed claim, so it is pinned rather than left to be noticed on a device.
         val detailed = AuditPromptBudget.fixedPromptTokens(AuditMode.DETAILED, AuditPromptProfile.RICH)
         val quick = AuditPromptBudget.fixedPromptTokens(AuditMode.QUICK, AuditPromptProfile.RICH)
 
@@ -194,18 +210,50 @@ class QuickAuditTest {
     }
 
     @Test
-    fun `key points and mode survive the codec`() {
+    fun `a quick report's element, actions and unresolved items survive the codec`() {
         val analysis = AuditAnalysis(
-            keyPoints = listOf("first point", "second point"),
             mode = AuditMode.QUICK.name,
+            includeSummary = false,
+            protocolElements = listOf(
+                AuditProtocolElement(
+                    statement = "Calibration is performed but not signed off.",
+                    result = AuditResultType.OK_FOR_DOCUMENTATION,
+                    reason = "Only the sign-off is missing.",
+                    evidence = "Calibration dated 12 May.",
+                ),
+            ),
             actions = listOf(AuditFinding("Sign the certificate")),
+            unresolvedItems = listOf("The certificate is still unsigned"),
         )
 
         val decoded = AuditResultCodec.decode(AuditResultCodec.encode(analysis))
 
+        assertEquals(AuditMode.QUICK, decoded?.auditMode)
+        assertEquals(false, decoded?.includeSummary)
+        val element = decoded?.protocolElements?.single()
+        assertEquals("Calibration is performed but not signed off.", element?.statement)
+        assertEquals(AuditResultType.OK_FOR_DOCUMENTATION, element?.result)
+        assertEquals("Only the sign-off is missing.", element?.reason)
+        assertEquals("Calibration dated 12 May.", element?.evidence)
+        assertEquals(listOf("Sign the certificate"), decoded?.actions?.map { it.title })
+        assertEquals(listOf("The certificate is still unsigned"), decoded?.unresolvedItems)
+    }
+
+    @Test
+    fun `a quick report saved when quick still wrote key points still decodes them`() {
+        // The field is kept for exactly this: those reports carry their whole result here, and a
+        // migration that dropped it would blank a finished artefact.
+        val legacy = AuditResultCodec.encode(
+            AuditAnalysis(
+                keyPoints = listOf("first point", "second point"),
+                mode = AuditMode.QUICK.name,
+            ),
+        )
+
+        val decoded = AuditResultCodec.decode(legacy)
+
         assertEquals(listOf("first point", "second point"), decoded?.keyPoints)
         assertEquals(AuditMode.QUICK, decoded?.auditMode)
-        assertEquals(listOf("Sign the certificate"), decoded?.actions?.map { it.title })
     }
 
     @Test
@@ -224,10 +272,14 @@ class QuickAuditTest {
     }
 
     @Test
-    fun `a quick analysis carrying only points is not considered empty`() {
-        // isEmpty decides whether a section's reply was usable; missing keyPoints here would let a
-        // good quick result be discarded as nothing.
+    fun `a quick analysis carrying only an element is not considered empty`() {
+        // isEmpty decides whether a section's reply was usable. A quick section now yields nothing
+        // but an element, so treating that as empty would discard every clean section.
         assertTrue(AuditAnalysis().isEmpty)
-        assertTrue(!AuditAnalysis(keyPoints = listOf("a point")).isEmpty)
+        assertTrue(
+            !AuditAnalysis(
+                protocolElements = listOf(AuditProtocolElement(statement = "A conclusion.")),
+            ).isEmpty,
+        )
     }
 }

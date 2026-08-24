@@ -2,6 +2,8 @@ package com.example.aiagenttestapp.prompts.audit
 
 import com.example.aiagenttestapp.data.audit.AuditOutputFormat
 import com.example.aiagenttestapp.data.audit.AuditPromptProfile
+import com.example.aiagenttestapp.data.audit.AuditProtocolVocabulary
+import com.example.aiagenttestapp.data.audit.AuditResultType
 
 /**
  * The prompts that pull findings out of one chunk of a document.
@@ -64,6 +66,26 @@ object AuditExtractionPrompts {
 
 
     /**
+     * The seed an audit run pins, so the same document read twice reads the same way.
+     *
+     * A chat draws a fresh seed per load on purpose -- two chats given the same prompt should not
+     * replay one token stream. An audit is the opposite: it is a compliance artefact, and a run that
+     * grades a missing signature minor on Monday and OK-for-documentation on Tuesday is not two
+     * readings, it is one reading and a coin toss. Whoever has to defend the report cannot say which
+     * one they got.
+     *
+     * A fixed seed at [EXTRACTION_TEMPERATURE], NOT greedy decoding. Greedy would be more
+     * reproducible still and is exactly the mode that cost a section to a repetition loop -- the
+     * reason the temperature was raised from 0.2 in the first place. Fixing the seed removes the
+     * variance between runs without removing the spread within one, which is what breaks a loop.
+     *
+     * Does not override "Reproducible output": that setting already pins a seed and forces argmax,
+     * and a user who asked for it is asking for something stricter than this, not different.
+     */
+    const val EXTRACTION_SEED = 20_260_804
+
+
+    /**
      * The fixed instructions, byte-identical for a given profile, so nothing that varies per chunk
      * (the part number, the text itself) appears above this line. On llama.cpp that stability is
      * load-bearing: nativeIngestPrompt reuses the shared prefix, so the preamble is decoded once per
@@ -75,21 +97,88 @@ object AuditExtractionPrompts {
         profile: AuditPromptProfile,
         format: AuditOutputFormat = OUTPUT_FORMAT,
         draft: Boolean = true,
-    ): String = CACHE.getOrPut(Triple(profile, format, draft)) { buildPreamble(profile, format, draft) }
+        /**
+         * Whether to ask for the per-section facts.
+         *
+         * They feed one thing and one thing only -- the overall summary -- and are rendered nowhere
+         * in the report, so a run that will not write a summary should not pay to extract them. That
+         * cost is not the summary's single turn: it is several lines of output on EVERY section, and
+         * on a long document it is the larger of the two by far.
+         */
+        facts: Boolean = true,
+    ): String = CACHE.getOrPut(Key(profile, format, draft, facts)) {
+        buildPreamble(profile, format, draft, facts)
+    }
+
+    private data class Key(
+        val profile: AuditPromptProfile,
+        val format: AuditOutputFormat,
+        val draft: Boolean,
+        val facts: Boolean,
+    )
 
     // Built once per (profile, format, draft) and reused. The stability matters on llama.cpp, where
     // a byte-identical prefix is what lets the preamble be decoded once per document rather than
     // once per section -- which is also why `draft` is decided once for a whole document rather than
     // per section from measured speed: changing the preamble mid-document would break that reuse.
 
-    private val CACHE =
-        mutableMapOf<Triple<AuditPromptProfile, AuditOutputFormat, Boolean>, String>()
+    private val CACHE = mutableMapOf<Key, String>()
+
+
+    // The vocabularies, spelled by the code that reads them back rather than typed out again here.
+    // A prompt that offers a word the parser does not know produces a value the report cannot show,
+    // and that failure is invisible -- the field simply arrives blank. Deriving both from one list
+    // makes it impossible: correcting AuditProtocolVocabulary against the iOS spec corrects the
+    // prompt in the same edit.
+    /**
+     * The result vocabulary as the prompts spell it, from the enum itself so a name cannot be
+     * taught here and read back differently by [AuditResultType.fromWire].
+     *
+     * Internal rather than private because [AuditQuickPrompts] teaches the same four names: both
+     * modes now state a conclusion in this vocabulary, and two copies of the list is exactly how one
+     * of them ends up a version behind.
+     */
+    internal val RESULT_TYPES_LINE = AuditResultType.entries.joinToString(", ") { it.wireName }
+    private const val MAX_ALSO_STATED = AuditProtocolVocabulary.MAX_ALSO_STATED
+
+    // Example C's protocol half in the JSON shape, shared by both profiles: the two differ only in
+    // whether a finding carries "detail", and duplicating the element and the actions to express
+    // that would be two more places for the same example to drift.
+    private const val ELEMENT_JSON =
+        """"alsoStated":[{"speaker":"Customer","text":"We calibrate every torque wrench """ +
+            """annually"}],""" +
+            """"unresolvedItems":["The calibration certificate is still unsigned"],""" +
+            """"protocolElements":[{"statement":"Calibration was carried out, but the """ +
+            """certificate was not signed off","type":"Result","speaker":"Auditor",""" +
+            """"result":"resultOkForDocumentation","reason":"The work was done on 12 May; only """ +
+            """the approval record is missing","evidence":"The calibration date, the """ +
+            """procedure's sign-off requirement, and the blank line"}],"""
+
+    private const val ACTIONS_JSON =
+        """"actions":[{"title":"Quality manager to sign off the certificate",""" +
+            """"status":"Agreed","accepted":"yes","standards":[]},""" +
+            """{"title":"Check other calibration certificates for the same gap",""" +
+            """"status":"Agreed","accepted":"yes","standards":[]}]}"""
+    /**
+     * The `"facts":[...]` key for a JSON example, or nothing when facts were not asked for.
+     *
+     * A key shown in an example is a key a model will fill in, so an example that kept it while the
+     * instructions dropped it would reinstate the cost the toggle exists to remove -- quietly, and
+     * only in the format nobody reads the logs for.
+     */
+    private fun factsKey(facts: Boolean, values: String): String =
+        if (facts) """"facts":$values,""" else ""
+
+    private val ELEMENT_TYPES_LINE = AuditProtocolVocabulary.ELEMENT_TYPES.joinToString(", ")
+    private val PRIORITIES_LINE = AuditProtocolVocabulary.ACTION_PRIORITIES.joinToString(", ")
+    private val STATUSES_LINE = AuditProtocolVocabulary.ACTION_STATUSES.joinToString(", ")
 
 
     private fun buildPreamble(
         profile: AuditPromptProfile,
         format: AuditOutputFormat,
         draft: Boolean,
+        facts: Boolean,
     ): String = buildString {
         val rich = profile == AuditPromptProfile.RICH
         appendLine("You are auditing one section of a transcript.")
@@ -106,7 +195,10 @@ object AuditExtractionPrompts {
         appendLine("something missing, not done, expired, overdue, skipped, not recorded, not signed,")
         appendLine("not calibrated, not trained, out of date, out of specification, not followed, or")
         appendLine("unauthorised. Do not leave any out -- small and minor issues count too.")
-        appendLine("If the text contains none, use an empty list. Do not invent one to fill the list.")
+        // "Use an empty list" is a JSON-ism, and RECORDS -- the default format -- has no lists to
+        // empty: absence there is an omitted block. Phrased for both, so neither format is told to
+        // write a shape the other cannot hold.
+        appendLine("If the text contains none, report none. Never invent one to fill a gap.")
         appendLine()
 
         // The v2 wording here was "list each one as its own item, do not merge several into one" --
@@ -115,11 +207,10 @@ object AuditExtractionPrompts {
         // the discussion, the evidence list and the closing summary, that reliably tripled the
         // count. Identity is anchored on the object and requirement, NOT on sharing a fix: one
         // remedial act ("retrain all staff") can resolve two genuinely distinct findings.
-        appendLine("Count issues, not mentions. A transcript often raises the same issue several")
-        appendLine("times -- when it is first noticed, when it is discussed, in an evidence list, and")
-        appendLine("again in the closing summary. Those are ONE non-conformity, not several. Two")
-        appendLine("mentions are the same issue when the same record, item, person, or event fails")
-        appendLine("the same requirement; keep one item with the clearest wording. Genuinely")
+        appendLine("Count issues, not mentions. A transcript restates the same issue as it is")
+        appendLine("noticed, discussed and summarised; those are ONE non-conformity, not several.")
+        appendLine("Two mentions are the same issue when the same record, item, person, or event")
+        appendLine("fails the same requirement; keep one item with the clearest wording. Genuinely")
         appendLine("different problems always stay separate items, even if they look alike or would")
         appendLine("be fixed together.")
         appendLine()
@@ -130,17 +221,50 @@ object AuditExtractionPrompts {
         // one structural hint that matters -- they live in the closing exchange.
         appendLine("Also find EVERY action. An action is a step the text itself says will be taken,")
         appendLine("should be taken, or is recommended -- something to be completed, corrected,")
-        appendLine("signed, recorded, reviewed, verified, checked, or followed up elsewhere.")
-        appendLine("Actions usually sit near the end: in what the auditor recommends and in what the")
-        appendLine("audited party commits to in reply. Both count, but a recommendation and the")
-        appendLine("reply accepting it are ONE action, not two. Do not invent an action the text")
-        appendLine("does not state; if it states none, use an empty list.")
+        appendLine("signed, recorded, reviewed, verified, checked, or followed up elsewhere. They")
+        appendLine("usually sit in the closing exchange, where a recommendation and the reply")
+        appendLine("accepting it are ONE action, not two. Do not invent an action the text does")
+        appendLine("not state; if it states none, report none.")
+        appendLine()
+
+        // The protocol element: what the document was audited AGAINST, and what was concluded about
+        // it. One per document, tied to the standard it cites -- so one per section here, and the
+        // sections are collapsed into that one afterwards (AuditChunker.collapseElements).
+        //
+        // Asked for even where the section is clean. The conclusion is the part that says the audit
+        // happened at all, and reading only for non-conformities keeps the failures while throwing
+        // away everything that makes them defensible.
+        appendLine("Also recognise the PROTOCOL ELEMENT this section audits: the requirement or")
+        appendLine("standard it is being judged against, and the ONE conclusion reached about it --")
+        appendLine("whether or not that conclusion is a failure. Give the statement it reached,")
+        appendLine("whose it is, its type, the conclusion, why, and what the conclusion rests on.")
+        appendLine("One element per section, the one the cited standard belongs to.")
+        appendLine()
+
+        // Not a transcript of who said what -- that is what facts and the summary are for. This is
+        // the short list of things a reader would otherwise not learn: kept few and kept brief,
+        // because a section that reproduces the dialogue here buries the two points that mattered.
+        appendLine("Also list, as STATED, at most $MAX_ALSO_STATED short points the summary would")
+        appendLine("otherwise miss -- what a party says they hold, maintain or have done. One line")
+        appendLine("each, and none that merely repeats a fact or a finding above.")
+        appendLine()
+
+        // Distinct from both a non-conformity (a requirement judged unmet) and an action (a step
+        // someone committed to): an unresolved item is a gap the document left open, and it is the
+        // part of a report somebody has to chase.
+        appendLine("Also list anything left UNRESOLVED: a record still missing, an approval never")
+        appendLine("produced, a question the document raised and did not answer.")
         appendLine()
 
         appendLine("Also give:")
-        appendLine("- facts: the concrete factual content of this section -- who, what, equipment,")
-        appendLine("  dates, numbers, locations, decisions. Short lines, specific not general. These")
-        appendLine("  are the raw material for a later overall summary, so do not generalise them away.")
+        // Omitted entirely when no summary will be written. Not trimmed to a shorter instruction --
+        // absent, because an instruction the report has no use for still costs output on every
+        // section, which is the whole reason the toggle exists.
+        if (facts) {
+            appendLine("- facts: the concrete factual content of this section -- who, what, equipment,")
+            appendLine("  dates, numbers, locations, decisions. Short lines, specific not general. These")
+            appendLine("  are the raw material for a later overall summary, so do not generalise them away.")
+        }
         // This line has been written both ways and the literal wins. Saying "use \"\"" gets a model
         // to copy that token an extra time -- "verdict":"","", -- a stray empty string where a key
         // belongs. Saying "leave it empty" instead gets it taken literally -- "verdict":, -- a key
@@ -157,11 +281,23 @@ object AuditExtractionPrompts {
         // verdict above. Asked for here rather than graded in a later turn on purpose: a second
         // pass re-reads a finding with no memory of what was concluded, and can only ever soften
         // it. Severity that moves one way has to be decided once, where the evidence is.
-        appendLine("- resultType: one of resultOK, resultOkForDocumentation, minorNonconformity,")
-        appendLine("  majorNonconformity, resultPotentialImprovement. Omit the key if the text")
+        appendLine("- result: one of $RESULT_TYPES_LINE. There is no name for a plain pass --")
+        appendLine("  an element that simply conformed carries no result line at all.")
+        appendLine("  Give it on every element and on every non-conformity. Omit it if the text")
         appendLine("  supports no clear conclusion -- that is an answer, not a gap to fill. Use")
         appendLine("  resultOkForDocumentation when the work was sound but its records, approval")
         appendLine("  or traceability were weak. If the auditor stated a result, it stands.")
+        appendLine("  An ELEMENT and a NONCONFORMITY under it are graded separately: the element")
+        appendLine("  judges the requirement as a whole and may conclude")
+        appendLine("  resultOkForDocumentation or resultPotentialImprovement, while a")
+        appendLine("  non-conformity names a gap and so is ONLY ever minorNonconformity or")
+        // Named one by one. The rule read "never grade a non-conformity as OK", and a model
+        // obligingly graded them resultPotentialImprovement instead -- which is not OK, and is
+        // equally not a non-conformity. A prohibition has to name what it prohibits.
+        appendLine("  majorNonconformity. Never resultOkForDocumentation or")
+        appendLine("  resultPotentialImprovement on a non-conformity.")
+        appendLine("- verdict is the document's OWN words, never one of the names above. If the text")
+        appendLine("  states no result in its own wording, leave it out.")
         appendLine()
 
         appendLine("Rules:")
@@ -169,10 +305,10 @@ object AuditExtractionPrompts {
         appendLine("- Every non-conformity must include \"evidence\": a word-for-word quote of at most")
         appendLine("  15 words, copied exactly from the text. If you cannot quote it, it is not a")
         appendLine("  finding -- leave it out.")
-        appendLine("- Put a \"standards\" value only if a standard or clause is written in the text")
-        appendLine("  (e.g. \"ISO 9001:2015 §7.2\"). It is often named just once, in a closing")
-        appendLine("  statement far from where the issue is discussed -- check there too, and attach")
-        appendLine("  it to the finding it refers to. Never invent one; use [] if none is named.")
+        appendLine("- Name a standard only if a standard or clause is written in the text (e.g.")
+        appendLine("  \"ISO 9001:2015 §7.2\"). It is often named once, far from the issue it refers")
+        appendLine("  to -- look there too, and attach it to the finding it belongs to. Never")
+        appendLine("  invent one; if the text names none, leave it out.")
         appendLine()
 
         // Draft first, JSON last. Once "nonConformities":[ is emitted the model cannot go
@@ -196,27 +332,50 @@ object AuditExtractionPrompts {
                 if (draft) "2. RECORDS -- then write that list out again in this exact form:"
                 else "Answer with records only, in this exact form:",
             )
+            // The constraints first, then the shape itself with nothing between the blocks. The
+            // blank lines this used to carry were decoration: AuditRecordParser closes a block on
+            // the next header, so it reads either layout, and the worked example below still shows
+            // the spaced-out version a model will actually copy.
+            appendLine("One field per line. No brackets, no braces, no quotation marks around")
+            appendLine("values, no commas between fields.")
             appendLine()
             appendLine("RECORDS")
-            appendLine("FACTS")
-            appendLine("- a short fact")
-            appendLine("- a short fact")
-            appendLine()
+            if (facts) {
+                appendLine("FACTS")
+                appendLine("- a short fact")
+                // Two, not one: a single bullet sets a prior of a single fact, the same way one
+                // worked example sets a prior of one finding.
+                appendLine("- a short fact")
+            }
             appendLine("VERDICT")
-            appendLine("the stated result, word for word -- leave this block out if none is stated")
-            appendLine()
+            appendLine("the stated result, word for word -- omit this block if none is stated")
+            appendLine("STATED")
+            appendLine("- who said it: what they said")
+            appendLine("UNRESOLVED")
+            appendLine("- what is still missing or open")
+            appendLine("ELEMENT")
+            appendLine("statement: what this element of the protocol concluded or asserted")
+            appendLine("type: $ELEMENT_TYPES_LINE")
+            appendLine("speaker: whose element it is")
+            appendLine("result: one of the names above -- omit this line if none is clear")
+            appendLine("reason: why it concluded that")
+            appendLine("evidence: what the conclusion rests on")
             appendLine("NONCONFORMITY")
             appendLine("title: a short title")
             if (rich) appendLine("detail: one short sentence")
             appendLine("quote: the word-for-word quote")
-            appendLine("standard: the clause named in the text -- leave this line out if none is")
-            appendLine()
+            // The records format carried no result line until the protocol arrived, so every report
+            // produced in this format graded nothing at all -- the shared vocabulary existed only on
+            // the JSON path nobody runs. One line closes that.
+            appendLine("result: one of the names above -- omit this line if the text supports none")
+            appendLine("standard: the clause named in the text -- omit this line if none is")
             appendLine("ACTION")
             appendLine("title: a short title")
+            appendLine("priority: $PRIORITIES_LINE -- omit if the text does not say")
+            appendLine("status: $STATUSES_LINE -- omit if the text does not say")
+            appendLine("accepted: yes or no -- omit if the text does not say")
             appendLine()
-            appendLine("Repeat the NONCONFORMITY block for each one, and the ACTION block for each")
-            appendLine("action. One field per line. No brackets, no braces, no quotation marks around")
-            appendLine("values, no commas between fields.")
+            appendLine("Repeat ELEMENT, NONCONFORMITY and ACTION for each one you found.")
         } else {
             appendLine(
                 if (draft) "2. JSON -- then convert that list, unchanged, into one JSON object of this shape:"
@@ -224,15 +383,22 @@ object AuditExtractionPrompts {
             )
             appendLine(
                 if (rich) {
-                    """{"facts":["..."],"verdict":"...",""" +
+                    "{" + factsKey(facts, """["..."]""") + """"verdict":"...",""" +
+                        """"alsoStated":[{"speaker":"...","text":"..."}],"unresolvedItems":["..."],""" +
+                        """"protocolElements":[{"statement":"...","type":"Result","speaker":"...",""" +
+                        """"result":"resultOkForDocumentation","reason":"...","evidence":"..."}],""" +
                         """"nonConformities":[{"title":"...","detail":"...","evidence":"...",""" +
-                        """"standards":["ISO 9001:2015 §7.2"]}],""" +
-                        """"actions":[{"title":"...","detail":"...","standards":[]}]}"""
+                        """"result":"minorNonconformity","standards":["ISO 9001:2015 §7.2"]}],""" +
+                        """"actions":[{"title":"...","detail":"...","status":"Proposed",""" +
+                        """"accepted":"yes","standards":[]}]}"""
                 } else {
-                    """{"facts":["..."],"verdict":"...",""" +
+                    "{" + factsKey(facts, """["..."]""") + """"verdict":"...",""" +
+                        """"alsoStated":[{"speaker":"...","text":"..."}],"unresolvedItems":["..."],""" +
+                        """"protocolElements":[{"statement":"...","type":"Result","speaker":"...",""" +
+                        """"result":"resultOkForDocumentation","reason":"...","evidence":"..."}],""" +
                         """"nonConformities":[{"title":"...","evidence":"...",""" +
-                        """"standards":["ISO 9001:2015 §7.2"]}],""" +
-                        """"actions":[{"title":"...","standards":[]}]}"""
+                        """"result":"minorNonconformity","standards":["ISO 9001:2015 §7.2"]}],""" +
+                        """"actions":[{"title":"...","status":"Proposed","standards":[]}]}"""
                 },
             )
         }
@@ -253,8 +419,8 @@ object AuditExtractionPrompts {
         // demonstrated. The instructions above are still byte-identical in both -- the profiles may
         // differ in text that demonstrates *format*, never in text that decides what counts.
         if (rich) {
-            exampleA(format, draft)
-            exampleB(format, draft)
+            exampleA(format, draft, facts)
+            exampleB(format, draft, facts)
         } else {
             // What examples A and B taught, asserted instead of shown. The known risk of a single
             // worked example is the prior it sets -- one example holding one finding invites one
@@ -265,7 +431,7 @@ object AuditExtractionPrompts {
             appendLine("look. Two distinct problems are always two items, however alike they read.")
             appendLine()
         }
-        exampleC(rich, format, draft)
+        exampleC(rich, format, draft, facts)
 
         appendLine("Now analyse the text below the same way -- find every non-conformity and every")
         appendLine("action in it.")
@@ -279,7 +445,7 @@ object AuditExtractionPrompts {
      *
      * RICH only, so it carries the "detail" fields unconditionally -- LEAN no longer shows it at all.
      */
-    private fun StringBuilder.exampleA(format: AuditOutputFormat, draft: Boolean) {
+    private fun StringBuilder.exampleA(format: AuditOutputFormat, draft: Boolean, facts: Boolean) {
         appendLine("Worked example A -- text that contains issues:")
         appendLine(
             "  \"The extinguisher was last inspected 14 months ago; the annual check was missed. " +
@@ -296,10 +462,12 @@ object AuditExtractionPrompts {
         }
         if (format == AuditOutputFormat.RECORDS) {
             appendLine("RECORDS")
-            appendLine("FACTS")
-            appendLine("- Extinguisher last inspected 14 months ago.")
-            appendLine("- Two new staff had not completed induction training.")
-            appendLine()
+            if (facts) {
+                appendLine("FACTS")
+                appendLine("- Extinguisher last inspected 14 months ago.")
+                appendLine("- Two new staff had not completed induction training.")
+                appendLine()
+            }
             appendLine("NONCONFORMITY")
             appendLine("title: Fire extinguisher inspection overdue")
             appendLine("detail: Last inspected 14 months ago; the annual check was missed.")
@@ -313,8 +481,11 @@ object AuditExtractionPrompts {
         } else {
             appendLine("JSON")
             appendLine(
-                """{"facts":["Extinguisher last inspected 14 months ago.",""" +
-                    """"Two new staff had not completed induction training."],"verdict":"",""" +
+                "{" + factsKey(
+                    facts,
+                    """["Extinguisher last inspected 14 months ago.",""" +
+                        """"Two new staff had not completed induction training."]""",
+                ) + """"verdict":"",""" +
                     """"nonConformities":[{"title":"Fire extinguisher inspection overdue",""" +
                     """"detail":"Last inspected 14 months ago; the annual check was missed.",""" +
                     """"evidence":"last inspected 14 months ago; the annual check was missed",""" +
@@ -335,7 +506,7 @@ object AuditExtractionPrompts {
      * findings are expected, which manufactures false positives on clean text. This shows that an
      * empty list is a correct answer.
      */
-    private fun StringBuilder.exampleB(format: AuditOutputFormat, draft: Boolean) {
+    private fun StringBuilder.exampleB(format: AuditOutputFormat, draft: Boolean, facts: Boolean) {
         appendLine("Worked example B -- text that contains no issues:")
         appendLine(
             "  \"The calibration log was signed on 3 March and all four operators held current " +
@@ -350,18 +521,39 @@ object AuditExtractionPrompts {
         }
         if (format == AuditOutputFormat.RECORDS) {
             appendLine("RECORDS")
-            appendLine("FACTS")
-            appendLine("- Calibration log signed 3 March.")
-            appendLine("- Four operators held current certificates.")
-            appendLine("- Line ran at 22 units per hour.")
+            if (facts) {
+                appendLine("FACTS")
+                appendLine("- Calibration log signed 3 March.")
+                appendLine("- Four operators held current certificates.")
+                appendLine("- Line ran at 22 units per hour.")
+                appendLine()
+            }
+            // The element that PASSED, which is the whole reason this example now carries one: a
+            // section with no findings still has a protocol, and a report that showed nothing for it
+            // would say the section was never read. No speaker line -- the text names none, and
+            // omitting it here is the demonstration.
+            appendLine("ELEMENT")
+            appendLine("statement: Calibration records and operator certification were in order")
+            appendLine("type: Result")
+            // No result line, and that is the demonstration. The vocabulary records what an audit
+            // had to SAY about an element; an element that simply conformed gives it nothing to
+            // say, so the grade is omitted rather than forced onto the mildest of the four.
+            appendLine("reason: The log was signed and all four operators held current certificates")
             // No NONCONFORMITY or ACTION block at all -- which is what "none" looks like in this
             // format, and is the whole point of this example.
         } else {
             appendLine("JSON")
             appendLine(
-                """{"facts":["Calibration log signed 3 March.",""" +
-                    """"Four operators held current certificates.",""" +
-                    """"Line ran at 22 units per hour."],"verdict":"",""" +
+                "{" + factsKey(
+                    facts,
+                    """["Calibration log signed 3 March.",""" +
+                        """"Four operators held current certificates.",""" +
+                        """"Line ran at 22 units per hour."]""",
+                ) + """"verdict":"",""" +
+                    """"protocolElements":[{"statement":"Calibration records and operator """ +
+                    """certification were in order","type":"Result",""" +
+                    """"reason":"The log was signed and all four operators held current """ +
+                    """certificates"}],""" +
                     """"nonConformities":[],"actions":[]}""",
             )
         }
@@ -384,10 +576,16 @@ object AuditExtractionPrompts {
      * must collapse, the verdict and the clause have to sit away from the finding, and the closing
      * pair has to recommend and accept -- so this is the floor, not a first draft.
      */
-    private fun StringBuilder.exampleC(rich: Boolean, format: AuditOutputFormat, draft: Boolean) {
+    private fun StringBuilder.exampleC(
+        rich: Boolean,
+        format: AuditOutputFormat,
+        draft: Boolean,
+        facts: Boolean,
+    ) {
         appendLine("Worked example C -- a dialogue that mentions one issue twice:")
         appendLine(
-            "  \"Customer: The sign-off line on the torque wrench's calibration certificate is " +
+            "  \"Customer: We calibrate every torque wrench annually. The sign-off line on this " +
+                "one's calibration certificate is " +
                 "blank. Auditor: The calibration was done on 12 May, but the certificate was never " +
                 "signed off by the quality manager, as your procedure requires. I am recording the " +
                 "result as OK for documentation. The requirement is ISO 9001:2015 clause 7.1.5. " +
@@ -405,13 +603,32 @@ object AuditExtractionPrompts {
         }
         if (format == AuditOutputFormat.RECORDS) {
             appendLine("RECORDS")
-            appendLine("FACTS")
-            appendLine(
-                "- Torque wrench calibrated 12 May; certificate not signed off by the quality manager.",
-            )
+            if (facts) {
+                appendLine("FACTS")
+                appendLine(
+                    "- Torque wrench calibrated 12 May; certificate not signed off by the quality manager.",
+                )
+                appendLine()
+            }
+            appendLine("STATED")
+            appendLine("- Customer: We calibrate every torque wrench annually")
+            appendLine()
+            appendLine("UNRESOLVED")
+            appendLine("- The calibration certificate is still unsigned")
             appendLine()
             appendLine("VERDICT")
             appendLine("OK for documentation")
+            appendLine()
+            // The element the dialogue is actually about, and the one thing no other example shows:
+            // a conclusion with its reason and its grounds, sitting above the non-conformity that
+            // qualified it rather than being that non-conformity restated.
+            appendLine("ELEMENT")
+            appendLine("statement: Calibration was carried out, but the certificate was not signed off")
+            appendLine("type: Result")
+            appendLine("speaker: Auditor")
+            appendLine("result: resultOkForDocumentation")
+            appendLine("reason: The work was done on 12 May; only the approval record is missing")
+            appendLine("evidence: The calibration date, the procedure's sign-off requirement, and the blank line")
             appendLine()
             appendLine("NONCONFORMITY")
             appendLine("title: Calibration certificate not signed off")
@@ -422,40 +639,62 @@ object AuditExtractionPrompts {
                 )
             }
             appendLine("quote: the certificate was never signed off by the quality manager")
+            // The finding is graded as a finding, and the ELEMENT above it is graded as an element.
+            // They differ on purpose and this example is where that is taught: the requirement was
+            // met in substance -- the calibration happened -- so the element concludes OK for
+            // documentation, while the specific gap it names is still a non-conformity.
+            //
+            // This line read resultOkForDocumentation until a run graded the same missing signature
+            // both ways on two passes of one file. It was the example doing it: the cue list calls
+            // "not signed" a non-conformity, the result rule calls weak approval OK for
+            // documentation, and a finding labelled with the element's conclusion let a model take
+            // either. AuditResultType.isNonconformity is false for resultOkForDocumentation, so the
+            // old line also asked for a NONCONFORMITY block whose grade said it was not one.
+            appendLine("result: minorNonconformity")
             appendLine("standard: ISO 9001:2015 clause 7.1.5")
             appendLine()
+            // No priority line on either action: the dialogue states none, and a field invented to
+            // fill the shape is the failure every other rule here exists to prevent.
             appendLine("ACTION")
             appendLine("title: Quality manager to sign off the certificate")
+            appendLine("status: Agreed")
+            appendLine("accepted: yes")
             appendLine()
             appendLine("ACTION")
             appendLine("title: Check other calibration certificates for the same gap")
+            appendLine("status: Agreed")
+            appendLine("accepted: yes")
         } else {
         appendLine("JSON")
             appendLine(
                 if (rich) {
-                """{"facts":["Torque wrench calibrated 12 May; certificate not signed off by the """ +
-                    """quality manager."],"verdict":"OK for documentation",""" +
+                "{" + factsKey(
+                    facts,
+                    """["Torque wrench calibrated 12 May; certificate not signed off by """ +
+                        """the quality manager."]""",
+                ) + """"verdict":"OK for documentation",""" +
+                    ELEMENT_JSON +
                     """"nonConformities":[{"title":"Calibration certificate not signed off",""" +
                     """"detail":"Calibration done 12 May, but the certificate was never signed """ +
                     """off as the procedure requires.",""" +
                     """"evidence":"the certificate was never signed off by the quality manager",""" +
+                    """"result":"minorNonconformity",""" +
                     """"standards":["ISO 9001:2015 clause 7.1.5"]}],""" +
                     // No empty "detail" fields here: a field shown blank teaches only that it may
                     // be blank, which the schema line above already says.
-                    """"actions":[{"title":"Quality manager to sign off the certificate",""" +
-                    """"standards":[]},""" +
-                    """{"title":"Check other calibration certificates for the same gap",""" +
-                    """"standards":[]}]}"""
+                    ACTIONS_JSON
             } else {
-                """{"facts":["Torque wrench calibrated 12 May; certificate not signed off by the """ +
-                    """quality manager."],"verdict":"OK for documentation",""" +
+                "{" + factsKey(
+                    facts,
+                    """["Torque wrench calibrated 12 May; certificate not signed off by """ +
+                        """the quality manager."]""",
+                ) + """"verdict":"OK for documentation",""" +
+                    ELEMENT_JSON +
                     """"nonConformities":[{"title":"Calibration certificate not signed off",""" +
                     """"evidence":"the certificate was never signed off by the quality manager",""" +
+                    """"result":"minorNonconformity",""" +
                     """"standards":["ISO 9001:2015 clause 7.1.5"]}],""" +
-                    """"actions":[{"title":"Quality manager to sign off the certificate",""" +
-                    """"standards":[]},""" +
-                    """{"title":"Check other calibration certificates for the same gap",""" +
-                    """"standards":[]}]}"""
+                    ACTIONS_JSON
             },
         )
         }
@@ -480,8 +719,9 @@ object AuditExtractionPrompts {
         profile: AuditPromptProfile = AuditPromptProfile.RICH,
         format: AuditOutputFormat = OUTPUT_FORMAT,
         draft: Boolean = true,
+        facts: Boolean = true,
     ): String = buildString {
-        append(preamble(profile, format, draft))
+        append(preamble(profile, format, draft, facts))
         appendLine()
         if (totalParts > 1) {
             appendLine("----- BEGIN TEXT (section $partNumber of $totalParts) -----")

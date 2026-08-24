@@ -1,22 +1,35 @@
 package com.example.aiagenttestapp.prompts.audit
 
-import com.example.aiagent.engine.core.ContextWindow
 import com.example.aiagenttestapp.data.audit.QuickAudit
 
 /**
- * Quick mode: one pass over the document for the headline points, instead of the full extraction.
+ * Quick mode: one pass over the document for the conclusion it reached, instead of the full audit.
  *
  * A separate object rather than a flag on the detailed prompts, because almost nothing is shared --
  * different system prompt, different output shape, different budget. A `if (quick)` running through
  * the extraction prompts would make both harder to read and neither easier to change.
+ *
+ * ## One stage, not two
+ *
+ * There is no quick REDUCE prompt here, and that is the whole difference from what this used to be.
+ * Quick mode once gathered key points per section and spent a second turn condensing them into a
+ * ten-point summary; it now answers one question per section -- what was evaluated, what was
+ * concluded, why, on what evidence -- and the per-section answers are merged and collapsed in code
+ * ([AuditChunker.mergeElements] and [AuditChunker.collapseElements]), exactly as detailed's are.
+ *
+ * That removes a whole model turn from every quick run, and removes with it the failure that turn
+ * owned: a summarising pass reads the notes with no memory of the document and can only ever
+ * generalise them, which on a compliance artefact is the direction that loses information.
  */
 object AuditQuickPrompts {
 
     /**
-     * Quick MAP stage, run once per chunk: the section's key points and any actions it states.
+     * Quick MAP stage, run once per chunk: the section's evaluation, its actions and what it left
+     * open.
      *
-     * Same RECORDS shape detailed uses -- POINTS is read as facts, ACTION as an action -- so the one
-     * existing [AuditRecordParser] reads both modes and there is no second parser to keep in step.
+     * Same RECORDS shape detailed uses -- ELEMENT, ACTION and UNRESOLVED are read by the one
+     * existing [AuditRecordParser], and constrained by the one existing [AuditRecordGrammar] -- so
+     * there is no second parser and no second grammar to keep in step.
      */
     fun quickExtraction(part: String, partNumber: Int, totalParts: Int): String = buildString {
         append(quickPreamble())
@@ -42,44 +55,75 @@ object AuditQuickPrompts {
         appendLine("You are reading one section of a document.")
         appendLine("Report only what appears in the section you are given. Other sections are read separately.")
         appendLine()
-        appendLine("Give two things:")
-        appendLine("- POINTS: the key content of this section -- what it covers, what was checked or")
-        appendLine("  discussed, what happened, and what state things were in. Keep the specifics:")
-        appendLine("  dates, numbers, names, equipment, decisions and any problems noted. Short lines,")
-        appendLine("  specific not general. These are the raw material for a later overall summary,")
-        appendLine("  so do not generalise them away.")
-        appendLine("- ACTIONS: every step the text itself says will be taken, should be taken, or is")
-        appendLine("  recommended -- something to be completed, corrected, signed, recorded, reviewed,")
-        appendLine("  verified, checked, or followed up. Actions usually sit near the end, in what is")
-        appendLine("  recommended and in what the other party commits to in reply. Both count, but a")
-        appendLine("  recommendation and the reply accepting it are ONE action, not two.")
+        appendLine("Give three things:")
+        // The element is asked for even where the section is clean, on the same reasoning detailed
+        // uses: the conclusion is the part that says the document was evaluated at all, and reading
+        // only for problems keeps the failures while throwing away what makes them defensible.
+        appendLine("- ELEMENT: what this section evaluates, and the ONE conclusion it reaches about")
+        appendLine("  it -- whether or not that conclusion is a failure. Give the statement it")
+        appendLine("  reached, the result, why it was reached, and what it rests on. One element for")
+        appendLine("  this section, never several.")
+        appendLine("- ACTIONS: at most ${QuickAudit.MAX_ACTIONS}. Every step the text itself says will be taken, should")
+        appendLine("  be taken, or is recommended -- something to be completed, corrected, signed,")
+        appendLine("  recorded, reviewed, verified, checked, or followed up. Actions usually sit near")
+        appendLine("  the end, in what is recommended and in what the other party commits to in")
+        appendLine("  reply. Both count, but a recommendation and the reply accepting it are ONE")
+        appendLine("  action, not two.")
+        // Distinct from an action, and the distinction is the whole reason the section exists: an
+        // action is a step somebody committed to, an unresolved item is a gap nobody has.
+        appendLine("- UNRESOLVED: at most ${QuickAudit.MAX_UNRESOLVED}. What the section left open -- a record still missing,")
+        appendLine("  an approval never produced, a question raised and not answered. Not the same as")
+        appendLine("  an action, which is a step someone committed to.")
+        appendLine()
+
+        // The shared vocabulary, spelled from the enum so this cannot teach a name the parser will
+        // not read back. Quick mode states a conclusion now, which is the substantive change here:
+        // it used to report content and refuse to judge, and a report with no result was the one
+        // thing the shared vocabulary existed to prevent.
+        appendLine("The result is one of ${AuditExtractionPrompts.RESULT_TYPES_LINE}.")
+        appendLine("There is no name for a plain pass -- a section that simply conformed carries no")
+        appendLine("result line at all. Omit the line if the text supports no clear conclusion: that")
+        appendLine("is an answer, not a gap to fill. Use resultOkForDocumentation when the work was")
+        appendLine("sound but its records, approval or traceability were weak. If the document")
+        appendLine("stated a result itself, it stands.")
         appendLine()
         appendLine("Rules:")
         appendLine("- Use only what the text says. Never add, infer, or generalise beyond it.")
-        appendLine("- Do not invent an action the text does not state. If it states none, write no")
-        appendLine("  ACTION blocks at all -- that is a correct answer, not a failure to look.")
-        appendLine("- Do not grade or judge anything. Report what is there.")
+        appendLine("- Do not invent an action or an unresolved item the text does not state. If it")
+        appendLine("  states none, write no ACTION or UNRESOLVED block at all -- that is a correct")
+        appendLine("  answer, not a failure to look.")
+        // Deliberately NOT a quotation, unlike a detailed finding's. An element's evidence is a
+        // summary of what was produced ("the procedure, the risk register"), and AuditEvidence never
+        // checks it -- asking for a verbatim quote here would promise a check nothing performs.
+        appendLine("- evidence is what the conclusion rests on, said briefly in your own words -- the")
+        appendLine("  records, certificates or checks produced. It is not a quotation.")
         appendLine()
         appendLine("Answer in this exact form, and nothing else:")
         appendLine()
         appendLine("RECORDS")
-        appendLine("POINTS")
-        appendLine("- a short point")
-        appendLine("- a short point")
+        appendLine("ELEMENT")
+        appendLine("statement: what this section evaluated and concluded")
+        appendLine("result: one of the names above -- omit this line if the text supports none")
+        appendLine("reason: why that conclusion, in one short sentence")
+        appendLine("evidence: what the conclusion rests on")
         appendLine()
         appendLine("ACTION")
         appendLine("title: a short title")
         appendLine()
-        appendLine("Repeat the ACTION block for each action. One field per line. No brackets, no")
-        appendLine("braces, no quotation marks around values, no commas between fields.")
+        appendLine("UNRESOLVED")
+        appendLine("- a short line")
+        appendLine()
+        appendLine("Repeat the ACTION block for each action, ${QuickAudit.MAX_ACTIONS} at most. One field per line. No")
+        appendLine("brackets, no braces, no quotation marks around values, no commas between fields.")
         appendLine("Write nothing after the records. No code fences.")
         appendLine()
 
-        // One worked example, carrying the two behaviours that actually go wrong here: an action
-        // that lives in a closing recommend-and-accept exchange counting once rather than twice, and
-        // points that keep their numbers instead of being smoothed into prose. Deliberately not a
-        // second "clean text" example -- quick mode has no empty-list failure mode to counterweight,
-        // since every section has points.
+        // One worked example, carrying the behaviours that actually go wrong here: an element that
+        // concludes resultOkForDocumentation rather than a non-conformity when the work was done and
+        // only its paperwork was not, evidence written as a summary rather than as a quote, and an
+        // unresolved item that is NOT simply a restatement of the action above it. Deliberately not
+        // a second "clean text" example -- the empty-list failure mode is covered by the rule above,
+        // and every token here is a token of transcript the section cannot carry.
         appendLine("Worked example:")
         appendLine(
             "  \"Auditor: The torque wrench was calibrated on 12 May, but the certificate was never " +
@@ -89,9 +133,11 @@ object AuditQuickPrompts {
         )
         appendLine("a correct reply is:")
         appendLine("RECORDS")
-        appendLine("POINTS")
-        appendLine("- Torque wrench calibrated 12 May.")
-        appendLine("- Calibration certificate not signed off by the quality manager.")
+        appendLine("ELEMENT")
+        appendLine("statement: Torque wrench calibration is carried out but its certificate is not signed off.")
+        appendLine("result: resultOkForDocumentation")
+        appendLine("reason: The calibration itself was performed on 12 May; only the sign-off is missing.")
+        appendLine("evidence: Calibration dated 12 May, and the unsigned calibration certificate.")
         appendLine()
         appendLine("ACTION")
         appendLine("title: Quality manager to sign off the certificate")
@@ -99,70 +145,9 @@ object AuditQuickPrompts {
         appendLine("ACTION")
         appendLine("title: Check the other calibration certificates for the same gap")
         appendLine()
+        appendLine("UNRESOLVED")
+        appendLine("- The calibration certificate is still unsigned")
+        appendLine()
         appendLine("Now read the text below the same way.")
     }
-
-
-    /**
-     * Quick REDUCE stage: condense every section's points into at most [QuickAudit.MAX_POINTS].
-     *
-     * Points only. The actions are unioned and deduplicated in code
-     * ([AuditChunker.mergeFindings]), exactly as detailed does with its findings -- handing a small
-     * model the whole action list and asking it to consolidate is where recall silently dies, and
-     * there is no reason to take that risk for a list the code can merge exactly.
-     *
-     * [maxNoteChars] bounds the notes the same way [finalSummary] does and for the same reason: a
-     * document may reach here with up to [AuditQueue.MAX_CHUNKS] sections of points, and an
-     * over-long prompt loses its *start* to eviction rather than its tail.
-     */
-    fun quickSummary(
-        pointsByPart: List<List<String>>,
-        maxPoints: Int = QuickAudit.MAX_POINTS,
-        maxNoteChars: Int = Int.MAX_VALUE,
-    ): String = buildString {
-        appendLine("Below are notes taken from each section of one document, in order.")
-        appendLine()
-        appendLine("Write the overall summary of the document as at most $maxPoints bullet points.")
-        appendLine()
-        appendLine("Rules:")
-        appendLine("- At most $maxPoints points. Fewer is fine if the document does not support more.")
-        appendLine("- Cover the document as a whole, start to end -- not just its opening sections.")
-        appendLine("- Merge notes that repeat the same thing into one point.")
-        appendLine("- Keep the specifics: dates, numbers, names and equipment stay in.")
-        appendLine("- Use only the notes below. Every point must trace back to a note. Do not add")
-        appendLine("  context, do not speculate, do not fill gaps.")
-        appendLine("- One line per point, each starting with \"- \". No headings, no numbering, no")
-        appendLine("  JSON, no code fences, and no text before or after the points.")
-        appendLine()
-        appendLine("----- BEGIN NOTES -----")
-        AuditSummaryPrompts.trimNotes(pointsByPart, maxNoteChars).forEachIndexed { index, points ->
-            append(AuditSummaryPrompts.sectionHeader(index))
-            points.forEach { appendLine("- $it") }
-        }
-        appendLine("----- END NOTES -----")
-    }
-
-
-    /**
-     * Characters of notes [quickSummary] may carry, mirroring [summaryNoteBudget]. Its own function
-     * because the two prompts are different sizes and sharing one number would silently over- or
-     * under-feed whichever mode did not own it.
-     */
-    fun quickSummaryNoteBudget(contextTokens: Int): Int {
-        val free = contextTokens -
-            ContextWindow.estimateTokens(AuditSystemPrompts.QUICK_SYSTEM_PROMPT) -
-            ContextWindow.estimateTokens(quickSummary(emptyList())) -
-            QUICK_SUMMARY_OUTPUT_RESERVE_TOKENS
-        return ContextWindow.estimateChars(free.coerceAtLeast(AuditSummaryPrompts.MIN_SUMMARY_NOTE_TOKENS))
-    }
-
-
-    /**
-     * Tokens held back for the quick summary, and the cap its turn is stopped at.
-     *
-     * Smaller than [SUMMARY_OUTPUT_RESERVE_TOKENS] because the output is bounded by design -- ten
-     * bullet points, not open-ended prose -- but not tiny, since a reasoning model spends part of
-     * the allowance thinking before the first bullet appears.
-     */
-    const val QUICK_SUMMARY_OUTPUT_RESERVE_TOKENS = 1024
 }
