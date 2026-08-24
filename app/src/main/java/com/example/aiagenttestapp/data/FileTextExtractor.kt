@@ -42,7 +42,10 @@ class FileTextExtractor(context: Context) {
                 return@withContext Result.Failure("No text could be extracted from $name.")
             }
             val limit = maxChars.coerceAtLeast(1)
-            Result.Success(name, raw.take(limit).trim(), truncated = raw.length > limit)
+            // Sanitised before it is measured, so the cap counts characters that will actually be
+            // sent rather than ones about to be removed.
+            val text = sanitise(raw)
+            Result.Success(name, text.take(limit).trim(), truncated = text.length > limit)
         } catch (e: Exception) {
             Result.Failure("Could not read $name: ${e.message ?: "unknown error"}")
         }
@@ -73,9 +76,64 @@ class FileTextExtractor(context: Context) {
             mime in TEXT_MIMES ||
             TEXT_EXTENSIONS.any { name.endsWith(it, ignoreCase = true) }
 
-    private companion object {
+    internal companion object {
+        /**
+         * Removes the characters that are wrong in every downstream use, and only those.
+         *
+         * Extraction hands back whatever the file held: a PDF stripper emits a form feed at every page
+         * break, exported transcripts carry stray NULs and vertical tabs, and copy-pasted text arrives
+         * full of zero-width joiners and byte-order marks. Each of those then travels the whole pipeline
+         * -- into the prompt, back out inside a quoted value, and into a report.
+         *
+         * What each one costs:
+         *  - A control character is illegal raw inside a JSON string, so a model copying a quote across
+         *    a page break produces JSON no parser will take.
+         *  - It is equally fatal to the line-oriented records format: a form feed mid-line is not a line
+         *    break to the parser but is one to the model, so a field silently loses its value.
+         *  - A zero-width character is invisible in both the document and the reply, and makes
+         *    [AuditEvidence]'s substring check fail on a quote that looks identical to the source. The
+         *    finding then loses evidence it genuinely had.
+         *
+         * Deliberately NOT normalised: quotation marks, dashes, spacing and case. Straight quotes break
+         * JSON strings and nothing else, and the fix for that is asking for a format that has nothing to
+         * escape, not rewriting the document. An evidence quote is supposed to be word-for-word from the
+         * source, and the more this rewrites the source the less that claim is worth.
+         */
+        internal fun sanitise(raw: String): String = buildString(raw.length) {
+            for (ch in raw) {
+                when {
+                    // The two control characters that carry meaning. \r is dropped rather than kept:
+                    // CRLF becomes LF, and a lone CR would otherwise read as a line break to the model
+                    // and as nothing to the parser.
+                    ch == '\n' || ch == '\t' -> append(ch)
+                    ch == '\r' -> Unit
+                    // A space, not nothing: a form feed at a page break separates two words, and
+                    // deleting it would run the last word of one page into the first of the next.
+                    ch.isISOControl() -> append(' ')
+                    ch in ZERO_WIDTH -> Unit
+                    else -> append(ch)
+                }
+            }
+        }
+
         /** Default cap (~3k tokens) for callers that do not size one to a specific model's context. */
         const val MAX_CHARS = 10_000
+
+        /**
+         * Invisible characters that survive a copy-paste and defeat an exact-match check.
+         *
+         * The BOM (U+FEFF) leads many exported files; the joiners and the soft hyphen come from
+         * word processors. None of them render, so a quote carrying one looks character-for-character
+         * identical to the source and still fails to match it.
+         */
+        val ZERO_WIDTH = setOf(
+            '\uFEFF', // byte-order mark
+            '\u200B', // zero-width space
+            '\u200C', // zero-width non-joiner
+            '\u200D', // zero-width joiner
+            '\u2060', // word joiner
+            '\u00AD', // soft hyphen
+        )
 
         val TEXT_MIMES = setOf(
             "application/json", "application/xml", "application/csv", "application/x-yaml",

@@ -43,6 +43,7 @@ object ModelCatalog {
             minDeviceMemoryGb = 8,
             accelerators = setOf(Accelerator.GPU, Accelerator.CPU),
             multimodal = true,
+            audioInput = true,
             license = "Apache-2.0",
             description = "Google's newest on-device model. Understands images and audio as well " +
                 "as text. Memory-maps its embeddings, so it runs in far less RAM than its file " +
@@ -63,6 +64,7 @@ object ModelCatalog {
             minDeviceMemoryGb = 12,
             accelerators = setOf(Accelerator.GPU, Accelerator.CPU),
             multimodal = true,
+            audioInput = true,
             license = "Apache-2.0",
             description = "The larger Gemma 4. Noticeably stronger reasoning than E2B, and still " +
                 "multimodal, but it wants a flagship phone.",

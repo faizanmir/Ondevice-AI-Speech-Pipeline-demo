@@ -150,8 +150,12 @@ class ModelResidency @Inject constructor(
     /**
      * Runs [block] with exclusive access to the engine, so no [open] can reset or reload it midway.
      * Used for the on-close summary, which generates on the still-resident model.
+     *
+     * Returns whatever [block] returns: some of the calls that need exclusivity also need an answer
+     * -- whether a grammar was accepted, for one -- and a wrapper that swallowed it would push every
+     * such caller into a captured var outside the lock.
      */
-    suspend fun runExclusive(block: suspend () -> Unit) = mutex.withLock { block() }
+    suspend fun <T> runExclusive(block: suspend () -> T): T = mutex.withLock { block() }
 
     // ---- Attachment (whether a chat is on screen) ---------------------------------------------
 
@@ -176,7 +180,7 @@ class ModelResidency @Inject constructor(
     }
 
     /** Unloads the resident model, but only while no chat is using it. */
-    private suspend fun releaseIfIdle() {
+    suspend fun releaseIfIdle() {
         if (isAttached()) return
         mutex.withLock {
             // Re-check under the lock: a chat may have attached while we waited for it.

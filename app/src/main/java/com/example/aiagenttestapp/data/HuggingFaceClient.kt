@@ -1,8 +1,6 @@
 package com.example.aiagenttestapp.data
 
 import com.example.aiagent.engine.core.Accelerator
-import com.example.aiagent.engine.core.DeviceMemoryProfile
-import com.example.aiagent.engine.core.EngineId
 import com.example.aiagent.engine.core.ModelFile
 import com.example.aiagent.engine.core.ModelFormat
 import com.example.aiagent.engine.core.ModelSpec
@@ -315,7 +313,7 @@ internal fun parseParamsFromName(name: String): Double? =
  * hardware the way Google's allowlist tiers were, so it carries no curated tier and the fit check
  * falls through to the computed RAM formula, which is the only honest authority available here.
  */
-fun HfRepoDetail.toModelSpec(file: HfModelFile, device: DeviceMemoryProfile): ModelSpec {
+fun HfRepoDetail.toModelSpec(file: HfModelFile): ModelSpec {
     val name = id.substringAfter('/')
 
     // A missing parameter count only affects the KV-cache term. Infer from file size rather than
@@ -340,17 +338,12 @@ fun HfRepoDetail.toModelSpec(file: HfModelFile, device: DeviceMemoryProfile): Mo
             "${id.replace('/', '_')}/${file.path}"
         },
         sizeBytes = file.sizeBytes,
-        // Context window sized to THIS device, not a flat cap. Honour the length the GGUF
-        // advertises (its real training context) when the KV cache fits the device's RAM budget,
-        // and trim it to what fits when it does not -- so a 128K model runs at 128K on a phone that
-        // can hold the cache and at a smaller window on one that cannot, instead of everything
-        // being pinned to 4096. See [deviceContext].
-        contextTokens = deviceContext(
-            advertised = contextTokens ?: DEFAULT_CONTEXT,
-            file = file,
-            paramsBillions = resolvedParams,
-            device = device,
-        ),
+        // The length the model itself declares -- its real training context -- stored as-is. This
+        // used to be trimmed to a device-derived estimate of what KV cache the phone could hold,
+        // which on a tight device bottomed out at 1024 tokens and was then baked into the saved
+        // entry for good. See [ModelContextDefaults]. A model too large for the device is refused
+        // by ModelFitEvaluator instead, where the user can see it.
+        contextTokens = contextTokens ?: ModelContextDefaults.DEFAULT_TOKENS,
         minDeviceMemoryGb = 0,
         accelerators = when (file.format) {
             ModelFormat.GGUF -> setOf(Accelerator.CPU)
@@ -368,36 +361,3 @@ fun HfRepoDetail.toModelSpec(file: HfModelFile, device: DeviceMemoryProfile): Mo
         files = file.components,
     )
 }
-
-/**
- * The context window to give a HuggingFace model on THIS device: the length it [advertised], capped
- * by the largest KV cache the device's RAM budget can actually hold for a model this size.
- *
- * The cap is computed against CPU -- the most pessimistic accelerator for every engine here, since
- * CPU keeps the weights fully resident and so leaves the least room for KV -- so we never size a
- * cache the device cannot afford. The result is rounded down to a whole [CONTEXT_GRANULARITY] block
- * (the estimate runs high, so under-fill) and floored at [DeviceContextWindow.MIN_CONTEXT] so a tight device still gets
- * a usable window rather than a few hundred tokens; a model that genuinely will not fit is caught
- * separately by ModelFitEvaluator, which reports it as EXCEEDS_MEMORY.
- */
-private fun deviceContext(
-    advertised: Int,
-    file: HfModelFile,
-    paramsBillions: Double,
-    device: DeviceMemoryProfile,
-): Int {
-    val engine = when (file.format) {
-        ModelFormat.GGUF -> EngineId.LLAMA_CPP
-        ModelFormat.LITERTLM -> EngineId.LITE_RT_LM
-    }
-    return DeviceContextWindow.cap(
-        advertised = advertised,
-        weightsBytes = file.sizeBytes,
-        paramsBillions = paramsBillions,
-        engine = engine,
-        device = device,
-    )
-}
-
-/** Fallback context when a GGUF advertises none, and the window a tight device is still given. */
-private const val DEFAULT_CONTEXT = 4096

@@ -1,7 +1,6 @@
 package com.example.aiagenttestapp.data
 
 import com.example.aiagent.engine.core.Accelerator
-import com.example.aiagent.engine.core.DeviceMemoryProfile
 import com.example.aiagent.engine.core.EngineId
 import com.example.aiagent.engine.core.EngineRegistry
 import com.example.aiagent.engine.core.InferenceEngine
@@ -86,7 +85,7 @@ sealed interface ModelLoadPlan {
  * engine when it can load the format, else the first that can; the preferred accelerator when the
  * engine and model both support it, else GPU, else CPU.
  *
- * A type rather than a free function taking the whole container, so it declares the five things it
+ * A type rather than a free function taking the whole container, so it declares the four things it
  * actually reads and can be constructed with fakes in a test.
  */
 @Singleton
@@ -95,7 +94,6 @@ class ModelLoadPlanner @Inject constructor(
     private val settingsStore: SettingsStore,
     private val engines: EngineRegistry,
     private val modelRepository: ModelRepository,
-    private val deviceMemory: DeviceMemoryProfile,
     @param:CacheDirPath private val cacheDirPath: String,
     @param:NativeLibraryDir private val nativeLibraryDir: String,
 ) {
@@ -121,15 +119,12 @@ class ModelLoadPlanner @Inject constructor(
 
         return ModelLoadPlan.Resolved(
             model = model,
-            // Every model, not only the added ones: a curated constant is if anything *more*
-            // likely to be wrong, because nothing has ever checked it against a real device.
-            contextTokens = DeviceContextWindow.cap(
-                advertised = model.contextTokens,
-                weightsBytes = model.sizeBytes,
-                paramsBillions = model.paramsBillions,
-                engine = engine.descriptor.id,
-                device = deviceMemory,
-            ),
+            // What the model declares, verbatim. There is deliberately no device-derived ceiling
+            // over it any more -- see [ModelContextDefaults] for why that cap was worse than the
+            // problem it solved. A model too large for this phone is refused outright by
+            // ModelFitEvaluator, which is a failure the user can see.
+            contextTokens = model.contextTokens.takeIf { it > 0 }
+                ?: ModelContextDefaults.DEFAULT_TOKENS,
             engine = engine,
             accelerator = accelerator,
             file = modelRepository.fileFor(model),

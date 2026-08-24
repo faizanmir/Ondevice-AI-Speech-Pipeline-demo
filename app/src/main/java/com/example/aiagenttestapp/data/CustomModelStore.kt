@@ -47,18 +47,46 @@ class CustomModelStore(context: Context) {
             return emptyList()
         }
 
-        val models = elements.mapNotNull { element ->
+        val parsed = elements.mapNotNull { element ->
             runCatching { json.decodeFromJsonElement(ModelSpec.serializer(), element) }
                 .onFailure { Log.w(TAG, "dropping a custom model this build cannot load", it) }
                 .getOrNull()
         }
-        if (models.size < elements.size) {
-            // Rewrite now rather than on the next add, so the dead entries stop being re-parsed
-            // (and re-logged) on every launch.
+        val models = parsed.map(::unclampContext)
+        if (models.size < elements.size || models != parsed) {
+            // Rewrite now rather than on the next add, so dead entries stop being re-parsed (and
+            // re-logged) on every launch, and a migrated window is not re-migrated.
             persistToDisk(models)
         }
         return models
     }
+
+    /**
+     * Undoes the device-derived context cap that used to be applied when a model was added.
+     *
+     * The cap ran once, at add time, and wrote its result into this file -- so an entry saved on a
+     * memory-tight device carries a window that model never declared, and it stays wrong for the
+     * life of the entry however much RAM the device later has. The declared value was not persisted
+     * beside it, so there is nothing to restore it from; what can be recognised is the cap's own
+     * floor, and an entry sitting on it was clamped rather than declared.
+     *
+     * Deliberately conservative: it only lifts entries at or below that floor. An entry the cap
+     * trimmed to something *above* it -- 3072 from a declared 8192, say -- is indistinguishable
+     * from one that genuinely declares 3072, and inventing a larger number for it would be a guess
+     * that costs the user an over-sized KV allocation. Those need removing and re-adding, which
+     * now stores the declared value.
+     */
+    private fun unclampContext(model: ModelSpec): ModelSpec =
+        if (model.contextTokens in 1..ModelContextDefaults.LEGACY_CLAMP_FLOOR) {
+            Log.i(
+                TAG,
+                "raising '${model.name}' from a clamped ${model.contextTokens}-token window to " +
+                    "${ModelContextDefaults.DEFAULT_TOKENS}",
+            )
+            model.copy(contextTokens = ModelContextDefaults.DEFAULT_TOKENS)
+        } else {
+            model
+        }
 
     private fun persist(models: List<ModelSpec>) {
         _models.value = models
