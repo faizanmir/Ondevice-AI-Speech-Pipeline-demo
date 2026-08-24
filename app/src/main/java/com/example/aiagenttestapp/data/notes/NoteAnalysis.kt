@@ -135,6 +135,57 @@ object NoteAnalysisParser {
 }
 
 /**
+ * Combines the per-section analyses of one chunked transcript into a single analysis.
+ *
+ * The "reduce" half of the map-reduce [NoteChunking] sets up, and it runs in code rather than as a
+ * second model turn for the reason the audit pipeline gives: a second pass over the first pass's
+ * output is another whole inference on a device that is already paying in minutes, and it can
+ * hallucinate over material that was correct when it arrived.
+ *
+ * Sections overlap by design, so the same point is read twice at every boundary and must not appear
+ * twice. Summary lines are deduplicated on their normalised text -- they are single sentences, and two
+ * sentences that differ are two points. Findings go through the same [overlaps] test the tagged floor
+ * uses, so a point restated in different words across a boundary folds together rather than shipping
+ * twice; for a record somebody acts on, three-where-one is a wrong answer rather than an untidy one.
+ *
+ * Order of first appearance is preserved throughout, which is what makes the quick-mode caps
+ * defensible: the items that survive a cap are the ones raised earliest in the note, and that is the
+ * only ordering this pipeline can justify without asking a model to rank them.
+ */
+fun mergeAnalyses(perChunk: List<NoteAnalysis>): NoteAnalysis {
+    if (perChunk.size == 1) return perChunk.first()
+
+    val seenLines = mutableSetOf<String>()
+    val summary = buildString {
+        for (analysis in perChunk) {
+            for (line in analysis.summary.lines()) {
+                val text = line.trim()
+                if (text.isEmpty()) continue
+                if (!seenLines.add(text.lowercase())) continue
+                appendLine(text)
+            }
+        }
+    }.trim()
+
+    val findings = mutableListOf<ParsedFinding>()
+    for (finding in perChunk.flatMap { it.findings }) {
+        if (finding.text.isBlank()) continue
+        val at = findings.indexOfFirst {
+            it.kind == finding.kind && overlaps(it.text, finding.text)
+        }
+        if (at < 0) {
+            findings += finding
+        } else if (findings[at].owner == null && finding.owner != null) {
+            // An owner named in one section and omitted in the overlap is still an owner. Same
+            // first-non-blank rule the audit merge applies field by field.
+            findings[at] = findings[at].copy(owner = finding.owner)
+        }
+    }
+
+    return NoteAnalysis(summary = summary, findings = findings)
+}
+
+/**
  * Puts back any tagged item the model failed to report.
  *
  * The deterministic floor under everything the model does. It matches loosely -- a model that rephrased

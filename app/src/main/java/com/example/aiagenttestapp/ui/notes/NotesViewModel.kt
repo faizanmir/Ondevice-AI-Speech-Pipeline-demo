@@ -49,6 +49,14 @@ class NotesViewModel @Inject constructor(
         // Either way, never left spinning against nothing.
         viewModelScope.launch {
             runCatching { NoteTranscribeWorker.reconcileOrphans(context, noteDao) }
+
+            // The other half of the same debt, and the newer one: audio now streams to disk from the
+            // moment recording starts, so a process death between record and stop leaves a complete
+            // recording with no note at all. Without this it would sit in the cache unreferenced
+            // until the OS cleared it, which is a silent way to lose a walkthrough.
+            runCatching {
+                NoteTranscribeWorker.recoverOrphanedAudio(context, noteDao, context.cacheDir)
+            }
         }
     }
 

@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -53,6 +54,9 @@ import com.example.aiagenttestapp.data.notes.NoteFinding
 import com.example.aiagenttestapp.data.notes.NoteStatus
 import com.example.aiagenttestapp.functions.MarkerKind
 import com.example.aiagenttestapp.ui.components.GridCardMinWidth
+import com.example.aiagenttestapp.ui.components.SwipeAction
+import com.example.aiagenttestapp.ui.components.SwipeActionTone
+import com.example.aiagenttestapp.ui.components.SwipeRevealBox
 import java.text.DateFormat
 import java.util.Date
 
@@ -63,6 +67,8 @@ fun NotesScreen(
     onRecord: () -> Unit,
     /** Opens a note whose transcript is ready but which the user has not reviewed yet. */
     onOpenDraft: (Long) -> Unit,
+    /** Opens the STT benchmark rig -- conceptually downstream of voice notes, so it lives here. */
+    onOpenBenchmark: () -> Unit,
     onBack: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -76,6 +82,11 @@ fun NotesScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onOpenBenchmark) {
+                        Icon(Icons.Default.Speed, contentDescription = "STT benchmark")
                     }
                 },
             )
@@ -151,6 +162,16 @@ private fun NoteCard(
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    SwipeRevealBox(
+        actions = listOf(
+            SwipeAction(
+                label = "Delete",
+                icon = Icons.Default.Delete,
+                tone = SwipeActionTone.Destructive,
+                onClick = onDelete,
+            ),
+        ),
+    ) {
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
@@ -225,6 +246,7 @@ private fun NoteCard(
                 )
             }
         }
+    }
     }
 }
 

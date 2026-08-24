@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
@@ -83,8 +84,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.aiagenttestapp.data.audiomodels.AudioModelState
+import com.example.aiagenttestapp.data.notes.NoteSummaryMode
+import com.example.aiagenttestapp.data.notes.SttBackend
 import com.example.aiagenttestapp.functions.MarkerKind
+import com.example.aiagenttestapp.stt.PlatformSpeech
+import com.example.aiagenttestapp.stt.SpeechModel
 import com.example.aiagenttestapp.stt.SpeechModelState
+import com.example.aiagenttestapp.stt.SttModelPlan
 import com.example.aiagenttestapp.ui.components.formatBytes
 import java.util.Locale
 
@@ -173,12 +180,23 @@ fun RecordScreen(
                 when (stage) {
                     RecordStage.Capture -> CaptureStage(
                         state = state,
-                        onDownloadModel = { viewModel.onIntent(RecordIntent.DownloadSpeechModel) },
+                        onDownloadModel = {
+                            viewModel.onIntent(RecordIntent.DownloadSpeechModel())
+                        },
+                        onSelectSpeechModel = {
+                            viewModel.onIntent(RecordIntent.SelectSpeechModel(it))
+                        },
+                        onDownloadSpeechModel = {
+                            viewModel.onIntent(RecordIntent.DownloadSpeechModel(it))
+                        },
+                        onDownloadPunctuation = {
+                            viewModel.onIntent(RecordIntent.DownloadPunctuation)
+                        },
+                        onSttBackendChange = {
+                            viewModel.onIntent(RecordIntent.SttBackendChanged(it))
+                        },
                         onStart = { micPermission.launch(Manifest.permission.RECORD_AUDIO) },
                         onStop = { viewModel.onIntent(RecordIntent.StopRecording) },
-                        onExpectedSpeakersChange = {
-                            viewModel.onIntent(RecordIntent.ExpectedSpeakersChanged(it))
-                        },
                     )
 
                     RecordStage.ReviewTranscript -> TranscriptStage(
@@ -186,7 +204,11 @@ fun RecordScreen(
                         reader = reader,
                         onTranscriptChange = { viewModel.onIntent(RecordIntent.TranscriptChanged(it)) },
                         onSummarise = { viewModel.onIntent(RecordIntent.Summarise) },
+                        onSummaryModeChange = {
+                            viewModel.onIntent(RecordIntent.SummaryModeChanged(it))
+                        },
                         onDiscard = { viewModel.onIntent(RecordIntent.Discard) },
+                        onRetry = { viewModel.onIntent(RecordIntent.RetryTranscription) },
                     )
 
                     RecordStage.ReviewSummary -> SummaryStage(
@@ -208,149 +230,128 @@ fun RecordScreen(
 private fun CaptureStage(
     state: RecordUiState,
     onDownloadModel: () -> Unit,
+    onSelectSpeechModel: (String) -> Unit,
+    onDownloadSpeechModel: (String) -> Unit,
+    onDownloadPunctuation: () -> Unit,
+    onSttBackendChange: (SttBackend) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
-    onExpectedSpeakersChange: (Int) -> Unit,
 ) {
-    // The speech model is 240 MB and is not in the APK. Say so plainly, once, before the user taps
-    // a record button that could not possibly work.
-    when (val model = state.speechModelState) {
-        is SpeechModelState.NotDownloaded -> {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                ),
-            ) {
-                Column(
-                    Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text(
-                        "Speech recognition model",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        "Transcription runs on your phone, so the speech model has to be " +
-                            "downloaded once. It recognises English, Chinese, Japanese, Korean " +
-                            "and Cantonese, and it works offline afterwards.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Button(onClick = onDownloadModel, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Icons.Default.Download, contentDescription = null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Download ${formatBytes(state.speechModelSizeBytes)}")
-                    }
-                }
-            }
-            return
+    Column(
+        Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        // Only between recordings. The backend decides how the audio is sliced, so it cannot change
+        // under a recording that has already started.
+        if (!state.isRecording && !state.isTranscribing) {
+            SttBackendPicker(
+                state = state,
+                onSelectSpeechModel = onSelectSpeechModel,
+                onSelectGemma = { onSttBackendChange(SttBackend.GEMMA) },
+                onSelectPlatform = { onSttBackendChange(SttBackend.PLATFORM) },
+                onDownloadSpeechModel = onDownloadSpeechModel,
+                onDownloadPunctuation = onDownloadPunctuation,
+            )
         }
 
-        is SpeechModelState.Downloading -> {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Downloading the speech model", style = MaterialTheme.typography.bodyMedium)
-                LinearProgressIndicator(
-                    progress = { model.progress },
-                    modifier = Modifier.fillMaxWidth(),
+        // Neither backend is free: one needs a 240 MB download, the other needs a model that can
+        // listen. Say which is missing, plainly, before the user taps a record button that could not
+        // possibly work. Suppressed while a note is already transcribing in the background, where
+        // the progress underneath is the more useful thing to look at.
+        if (!state.sttReady && !state.isTranscribing) {
+            when (state.sttBackend) {
+                SttBackend.ONNX -> SpeechModelSetup(
+                    state = state,
+                    onDownloadModel = onDownloadModel,
+                    // Offered only when it would actually work. Being told to download 240 MB while
+                    // a model already on the device could do the job is a dead end presented as a
+                    // requirement.
+                    onUseGemma = (state.gemmaSttPlan as? SttModelPlan.Ready)?.let { ready ->
+                        { onSttBackendChange(SttBackend.GEMMA) } to ready.modelName
+                    },
                 )
-                Text(
-                    "${(model.progress * 100).toInt()}%",
-                    style = MaterialTheme.typography.bodySmall,
+
+                SttBackend.GEMMA -> GemmaSetup(state.gemmaSttPlan)
+
+                // Nothing to offer but the reason: this backend has no download this app can
+                // start, so the only route forward is the system's own settings.
+                SttBackend.PLATFORM -> Text(
+                    text = (state.platformSpeech as? PlatformSpeech.Availability.Unsupported)
+                        ?.reason
+                        ?: "The system recogniser is not available on this device.",
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            return
+            return@Column
         }
 
-        is SpeechModelState.Failed -> {
-            Text(model.message, color = MaterialTheme.colorScheme.error)
-            OutlinedButton(onClick = onDownloadModel) { Text("Try again") }
-            return
-        }
-
-        is SpeechModelState.Ready -> Unit
-    }
-
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(24.dp),
-        ) {
-            if (state.isTranscribing) {
-                TranscribingIndicator(
-                    progress = state.transcriptionProgress,
-                    partial = state.partialTranscript,
-                )
-            } else {
-                MicButton(
-                    isRecording = state.isRecording,
-                    level = state.level,
-                    onClick = { if (state.isRecording) onStop() else onStart() },
-                )
-
-                Text(
-                    text = if (state.isRecording) {
-                        formatDuration(state.durationMillis)
-                    } else {
-                        "Tap to record"
-                    },
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Medium,
-                )
-
-                if (!state.isRecording && state.speakerIdActive) {
-                    SpeakerCountPicker(
-                        selected = state.expectedSpeakers,
-                        onSelect = onExpectedSpeakersChange,
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(24.dp),
+            ) {
+                if (state.isTranscribing) {
+                    TranscribingIndicator(
+                        progress = state.transcriptionProgress,
+                        partial = state.partialTranscript,
                     )
-                }
+                } else {
+                    MicButton(
+                        isRecording = state.isRecording,
+                        level = state.level,
+                        onClick = { if (state.isRecording) onStop() else onStart() },
+                    )
 
-                if (state.isRecording) {
                     Text(
-                        text = if (state.keywordsActive) {
-                            "Tap again to stop, or say \"stop recording\". Say \"start non " +
-                                "conformity\" or \"start action item\" to tag what comes next, and " +
-                                "\"end\" it when you are done."
+                        text = if (state.isRecording) {
+                            formatDuration(state.durationMillis)
                         } else {
-                            "Tap again to stop, or say a command like \"stop recording\" or " +
-                                "\"open settings\"."
+                            "Tap to record"
                         },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Medium,
                     )
 
-                    MarkerStatus(
-                        openMarkers = state.openMarkers,
-                        counts = state.markerCounts,
-                    )
-                }
+                    if (state.isRecording) {
+                        Text(
+                            text = recordingHint(state),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
 
-                // The chip that proves the app heard a command. It matters because a spoken command
-                // has no button press to confirm it landed -- without this the user cannot tell a
-                // command that fired from one that was never recognised.
-                state.lastCommandLabel?.let { label ->
-                    Surface(
-                        shape = RoundedCornerShape(percent = 50),
-                        color = MaterialTheme.colorScheme.tertiaryContainer,
-                    ) {
-                        Row(
-                            Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        MarkerStatus(
+                            openMarkers = state.openMarkers,
+                            counts = state.markerCounts,
+                        )
+                    }
+
+                    // The chip that proves the app heard a command. It matters because a spoken command
+                    // has no button press to confirm it landed -- without this the user cannot tell a
+                    // command that fired from one that was never recognised.
+                    state.lastCommandLabel?.let { label ->
+                        Surface(
+                            shape = RoundedCornerShape(percent = 50),
+                            color = MaterialTheme.colorScheme.tertiaryContainer,
                         ) {
-                            Icon(
-                                Icons.Default.Bolt,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.tertiary,
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Text(
-                                "Heard \"$label\"",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer,
-                            )
+                            Row(
+                                Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.Bolt,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Text(
+                                    "Heard \"$label\"",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                )
+                            }
                         }
                     }
                 }
@@ -360,34 +361,324 @@ private fun CaptureStage(
 }
 
 /**
- * How many people are in this recording.
+ * Which recogniser transcribes this recording.
  *
- * Worth asking rather than always inferring. Fixing the number of speakers is a far stronger instruction
- * to the clustering than a similarity threshold, which has to guess how many groups exist and on short or
- * noisy audio habitually splits one person into two. "Auto" stays the default because the user does not
- * always know -- but when they do, they should be able to say so.
+ * Offered here rather than buried in Settings because it is a per-recording decision with visible
+ * consequences, and the right answer changes with what is being recorded: a two-person walkthrough
+ * where it matters who said what wants the speech model, a solo note in a language SenseVoice does
+ * not cover is better served by Gemma. The supporting line under the chips is doing the real work --
+ * without it, "Speech model" and "Gemma" are two words with no way to choose between them.
  */
 @Composable
-private fun SpeakerCountPicker(selected: Int, onSelect: (Int) -> Unit) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
+private fun SttBackendPicker(
+    state: RecordUiState,
+    onSelectSpeechModel: (String) -> Unit,
+    onSelectGemma: () -> Unit,
+    onSelectPlatform: () -> Unit,
+    onDownloadSpeechModel: (String) -> Unit,
+    onDownloadPunctuation: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
-            "How many people?",
+            "Transcribe with",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        // One row per speech model rather than a single "Speech model" chip. The two differ in the
+        // only way that matters when choosing a recogniser for a recording -- which languages they
+        // can hear -- so the choice has to name them. Each row carries its own download, because a
+        // model you have not got is still worth offering; you just have to fetch it first.
+        state.speechModelOptions.forEach { model ->
+            val modelState = state.speechModelStates[model.id] ?: SpeechModelState.NotDownloaded
+            val isSelected = state.sttBackend == SttBackend.ONNX &&
+                state.selectedSpeechModelId == model.id
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { onSelectSpeechModel(model.id) },
+                    label = { Text(model.label) },
+                )
+
+                when (modelState) {
+                    is SpeechModelState.Ready -> Unit
+
+                    is SpeechModelState.Downloading -> Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        LinearProgressIndicator(
+                            progress = { modelState.progress },
+                            modifier = Modifier.width(72.dp),
+                        )
+                        Text(
+                            "${(modelState.progress * 100).toInt()}%",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    // A failure and a fresh start offer the same button; the worker's KEEP policy
+                    // makes a repeat tap the retry path.
+                    is SpeechModelState.NotDownloaded, is SpeechModelState.Failed ->
+                        TextButton(onClick = { onDownloadSpeechModel(model.id) }) {
+                            Icon(
+                                Icons.Default.Download,
+                                contentDescription = null,
+                                Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(formatBytes(model.totalBytes))
+                        }
+                }
+            }
+        }
+
+        FilterChip(
+            selected = state.sttBackend == SttBackend.GEMMA,
+            onClick = onSelectGemma,
+            label = { Text(SttBackend.GEMMA.label) },
+        )
+
+        // Offered even when the device cannot run it, and disabled rather than hidden. A missing
+        // chip reads as "this app has no such option"; a greyed one with the reason underneath says
+        // "your device does not", which is the true statement and the one the user can act on.
+        FilterChip(
+            selected = state.sttBackend == SttBackend.PLATFORM,
+            enabled = state.platformSpeech is PlatformSpeech.Availability.Ready,
+            onClick = onSelectPlatform,
+            label = { Text(SttBackend.PLATFORM.label) },
+        )
+
+        // Both the pitch and the cost, in one line. A user who picks Gemma and then finds the
+        // detected language gone has been misled by an interface that only listed the upside. For the
+        // speech models the blurb is the model's own, because "recognises no German" is exactly the
+        // fact that decides this.
+        Text(
+            text = when (state.sttBackend) {
+                SttBackend.ONNX -> state.speechModelOptions
+                    .firstOrNull { it.id == state.selectedSpeechModelId }
+                    ?.blurb
+                    ?: "A dedicated speech model. Reports the detected language."
+
+                SttBackend.GEMMA -> when (val plan = state.gemmaSttPlan) {
+                    is SttModelPlan.Ready ->
+                        "${plan.modelName} listens to the recording itself — no speech model " +
+                            "to download. Slower, and no language detection."
+
+                    is SttModelPlan.Unavailable -> plan.reason
+                }
+
+                SttBackend.PLATFORM -> when (val availability = state.platformSpeech) {
+                    is PlatformSpeech.Availability.Ready ->
+                        "Android's own recogniser, using the language packs already on this " +
+                            "device — nothing to download here. Add languages under Settings > " +
+                            "System > Languages & input. Untested: this device's speech service " +
+                            "may refuse a saved recording."
+
+                    is PlatformSpeech.Availability.Unsupported -> availability.reason
+                }
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf(0, 1, 2, 3, 4).forEach { count ->
-                FilterChip(
-                    selected = selected == count,
-                    onClick = { onSelect(count) },
-                    label = { Text(if (count == 0) "Auto" else count.toString()) },
+
+        // Offered only where it changes the result. Two backends emit no punctuation of their own:
+        // the streaming transducer returns an unbroken uppercase stream, and Android's recogniser an
+        // unbroken lowercase one. Both feed a summariser and a marker scan that do worse on it, so
+        // this is a dependency rather than a preference, and it belongs next to the choice that
+        // creates it rather than buried in Settings. Whisper and SenseVoice punctuate natively and
+        // are not asked.
+        val needsPunctuation = state.sttBackend == SttBackend.PLATFORM ||
+            (
+                state.sttBackend == SttBackend.ONNX &&
+                    state.speechModelOptions
+                        .firstOrNull { it.id == state.selectedSpeechModelId }
+                        ?.kind?.isStreaming == true
                 )
+
+        if (needsPunctuation) {
+            when (val punct = state.punctuationState) {
+                is AudioModelState.Ready -> Unit
+
+                is AudioModelState.Downloading -> Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    LinearProgressIndicator(
+                        progress = { punct.progress },
+                        modifier = Modifier.width(96.dp),
+                    )
+                    Text(
+                        "Adding punctuation… ${(punct.progress * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                is AudioModelState.NotDownloaded, is AudioModelState.Failed -> Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        "Without this, a live transcript arrives in capitals with no full stops.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(onClick = onDownloadPunctuation) {
+                        Icon(
+                            Icons.Default.Download,
+                            contentDescription = null,
+                            Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Add punctuation · 30 MB")
+                    }
+                }
             }
         }
     }
+}
+
+/**
+ * The one-time speech-model download: 240 MB, not in the APK, and useless to hide.
+ *
+ * [onUseGemma] is the escape hatch, and it is null unless the alternative genuinely works right now:
+ * the callback plus the model's name, so the button can say which model it would use rather than
+ * offering an abstraction.
+ */
+@Composable
+private fun SpeechModelSetup(
+    state: RecordUiState,
+    onDownloadModel: () -> Unit,
+    onUseGemma: Pair<() -> Unit, String>? = null,
+) {
+    when (val model = state.speechModelState) {
+        is SpeechModelState.NotDownloaded -> Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            ),
+        ) {
+            Column(
+                Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    "Speech recognition model",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "Transcription runs on your phone, so the speech model has to be " +
+                        "downloaded once. It recognises English, Chinese, Japanese, Korean " +
+                        "and Cantonese, and it works offline afterwards.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(onClick = onDownloadModel, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.Download, contentDescription = null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Download ${formatBytes(state.speechModelSizeBytes)}")
+                }
+
+                onUseGemma?.let { (switch, modelName) ->
+                    Text(
+                        "You already have $modelName, which can transcribe without this " +
+                            "download — without a detected language.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(onClick = switch, modifier = Modifier.fillMaxWidth()) {
+                        Text("Use $modelName instead")
+                    }
+                }
+            }
+        }
+
+        is SpeechModelState.Downloading -> Column(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Downloading the speech model", style = MaterialTheme.typography.bodyMedium)
+            LinearProgressIndicator(
+                progress = { model.progress },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                "${(model.progress * 100).toInt()}%",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        is SpeechModelState.Failed -> Column(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(model.message, color = MaterialTheme.colorScheme.error)
+            OutlinedButton(onClick = onDownloadModel) { Text("Try again") }
+        }
+
+        is SpeechModelState.Ready -> Unit
+    }
+}
+
+/**
+ * Why Gemma cannot transcribe here.
+ *
+ * No action button, unlike the speech model's: the fix is downloading a language model from the
+ * catalogue, which is a screen away and a different decision (which model, how large) than a single
+ * "download" tap can carry. The reason text names what to do; the picker above lets them go back to
+ * the speech model in the meantime.
+ */
+@Composable
+private fun GemmaSetup(plan: SttModelPlan) {
+    val reason = (plan as? SttModelPlan.Unavailable)?.reason ?: return
+
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                "No model that can listen",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                reason,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * What the user can do while recording -- and only what they can actually do.
+ *
+ * The two ways a spoken command is heard have very different reach, and the difference is invisible
+ * until someone tries. The keyword spotter runs on its own small model and works whichever recogniser
+ * is transcribing; the fallback re-transcribes a rolling window with the speech model, so it exists
+ * on the ONNX path only. Promising "say stop recording" on the Gemma path without the spotter would
+ * leave the user talking at an app that is not listening.
+ */
+private fun recordingHint(state: RecordUiState): String = when {
+    state.keywordsActive ->
+        "Tap again to stop, or say \"stop recording\". Say \"start non conformity\" or " +
+            "\"start action item\" to tag what comes next, and \"end\" it when you are done."
+
+    state.sttBackend == SttBackend.ONNX ->
+        "Tap again to stop, or say a command like \"stop recording\" or \"open settings\"."
+
+    else ->
+        "Tap to stop. Voice commands need the keyword model — turn on spoken markers in Settings " +
+            "to use them here."
 }
 
 /**
@@ -577,7 +868,9 @@ private fun TranscriptStage(
     reader: TextReader,
     onTranscriptChange: (String) -> Unit,
     onSummarise: () -> Unit,
+    onSummaryModeChange: (NoteSummaryMode) -> Unit,
     onDiscard: () -> Unit,
+    onRetry: () -> Unit,
 ) {
     Column(
         Modifier.fillMaxSize(),
@@ -589,8 +882,8 @@ private fun TranscriptStage(
                     "Speech recognition makes mistakes. Fix anything it got wrong before " +
                         "summarising — the summary is only as good as this text.",
                 )
-                // Explained here rather than left to be guessed at: the brackets and name prefixes are
-                // editable, so the user needs to know they mean something before they delete one.
+                // Explained here rather than left to be guessed at: the brackets are editable, so the
+                // user needs to know they mean something before they delete one.
                 if (state.transcript.contains("[NON-CONFORMITY]") ||
                     state.transcript.contains("[ACTION]")
                 ) {
@@ -598,11 +891,6 @@ private fun TranscriptStage(
                         " Text inside [NON-CONFORMITY] or [ACTION] is what you marked out loud, and " +
                             "will be reported as a finding — you can edit or remove the brackets.",
                     )
-                }
-                if (state.knownSpeakers.any { state.transcript.contains("$it:") } ||
-                    state.transcript.contains("Speaker ")
-                ) {
-                    append(" \"Name:\" at the start of a line is who the app thinks was speaking.")
                 }
             },
             style = MaterialTheme.typography.bodySmall,
@@ -643,9 +931,49 @@ private fun TranscriptStage(
             color = MaterialTheme.colorScheme.error,
         )
 
+        // The choice sits beside the button that acts on it rather than in Settings: it changes what
+        // this particular summary will contain, and it is the kind of decision made per note (a long
+        // walkthrough quickly, a short spot-check in full) rather than once for ever.
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                "Summarise",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                NoteSummaryMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = state.summaryMode == mode,
+                        // Disabled mid-run, matching the ViewModel's own refusal: the mode decides
+                        // where the transcript was cut into sections, and those are settled once a
+                        // run starts.
+                        enabled = !state.isSummarising,
+                        onClick = { onSummaryModeChange(mode) },
+                        label = { Text(mode.label) },
+                    )
+                }
+            }
+            Text(
+                state.summaryMode.blurb,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onDiscard, modifier = Modifier.weight(1f)) {
                 Text("Discard")
+            }
+            // Only when the recording is still on disk. A failed transcription leaves a usable WAV
+            // and a checkpoint behind, so this resumes from the last decoded slice rather than
+            // making the user record again -- for a ten-minute walkthrough that is the whole
+            // difference between a retry and a re-recording.
+            if (state.canRetryTranscription) {
+                Button(onClick = onRetry, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Try again")
+                }
             }
             Button(
                 onClick = onSummarise,
@@ -701,6 +1029,8 @@ private fun SummaryStage(
             if (state.isSummarising) {
                 SummarisingIndicator(
                     modelName = state.summariser?.name,
+                    part = state.summaryPart,
+                    totalParts = state.summaryTotalParts,
                     onStop = onStopSummarising,
                 )
             } else {
@@ -749,14 +1079,27 @@ private fun SummaryStage(
 
 /** The "the model is writing the summary" state: the same pulsing dots as transcription, plus a stop. */
 @Composable
-private fun SummarisingIndicator(modelName: String?, onStop: () -> Unit) {
+private fun SummarisingIndicator(
+    modelName: String?,
+    part: Int,
+    totalParts: Int,
+    onStop: () -> Unit,
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         PulsingDots()
         Text(
-            "${modelName ?: "The model"} is writing a summary",
+            // A note too long for one context window is read in sections, each its own inference. On
+            // a 4K window that is minutes of apparently identical screen, and without the count there
+            // is no way to tell a slow run from a stuck one -- the same reason transcription reports
+            // progress rather than just spinning.
+            if (totalParts > 1 && part > 0) {
+                "${modelName ?: "The model"} is reading part $part of $totalParts"
+            } else {
+                "${modelName ?: "The model"} is writing a summary"
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),

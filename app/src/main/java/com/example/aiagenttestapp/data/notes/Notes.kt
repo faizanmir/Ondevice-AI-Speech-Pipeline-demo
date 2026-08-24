@@ -15,8 +15,6 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.aiagenttestapp.functions.MarkerKind
 import kotlinx.coroutines.flow.Flow
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 /**
  * Where a note is in its life.
@@ -148,87 +146,6 @@ data class NoteFinding(
     val orderIndex: Int = 0,
 )
 
-/**
- * An enrolled voice.
- *
- * [embeddingModelId] and [dim] are recorded per speaker so that changing the embedding model is
- * *detectable*. Voiceprints from a different model are not wrong-looking, they simply do not match
- * anything -- so without this the app would silently stop recognising everyone and blame the audio.
- * With it, the mismatch is visible and the fix ("re-enrol") can be offered.
- */
-@Entity(tableName = "speakers", indices = [Index(value = ["name"], unique = true)])
-data class SpeakerRecord(
-    @PrimaryKey(autoGenerate = true)
-    val id: Long = 0,
-
-    val name: String,
-
-    val createdAtMillis: Long,
-
-    val embeddingModelId: String,
-
-    val dim: Int,
-)
-
-/**
- * One recorded voiceprint for a speaker. Several per person, from separate takes.
- *
- * The embedding only -- never the audio it came from. An embedding is not reversible to speech, which
- * makes it the least the app can hold and still do the job. Enrolment recordings are discarded the
- * moment they have been turned into one of these.
- */
-@Entity(
-    tableName = "speaker_samples",
-    foreignKeys = [
-        ForeignKey(
-            entity = SpeakerRecord::class,
-            parentColumns = ["id"],
-            childColumns = ["speakerId"],
-            onDelete = ForeignKey.CASCADE,
-        ),
-    ],
-    indices = [Index("speakerId")],
-)
-data class SpeakerSample(
-    @PrimaryKey(autoGenerate = true)
-    val id: Long = 0,
-
-    val speakerId: Long,
-
-    val embedding: FloatArray,
-
-    val durationMillis: Long,
-
-    val createdAtMillis: Long,
-) {
-    // A FloatArray in a data class gives reference equality through generated equals/hashCode, which
-    // silently breaks any list diffing or set membership this ends up in.
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (other !is SpeakerSample) return false
-        return id == other.id &&
-            speakerId == other.speakerId &&
-            durationMillis == other.durationMillis &&
-            createdAtMillis == other.createdAtMillis &&
-            embedding.contentEquals(other.embedding)
-    }
-
-    override fun hashCode(): Int {
-        var result = id.hashCode()
-        result = 31 * result + speakerId.hashCode()
-        result = 31 * result + durationMillis.hashCode()
-        result = 31 * result + createdAtMillis.hashCode()
-        result = 31 * result + embedding.contentHashCode()
-        return result
-    }
-}
-
-/** A speaker with the voiceprints belonging to them. */
-data class SpeakerWithSamples(
-    val speaker: SpeakerRecord,
-    val samples: List<SpeakerSample>,
-)
-
 @Dao
 interface NoteDao {
 
@@ -267,8 +184,43 @@ interface NoteDao {
     @Query("UPDATE notes SET transcribeProgress = :progress WHERE id = :id")
     suspend fun updateProgress(id: Long, progress: Float)
 
-    @Query("UPDATE notes SET status = :status, error = :error, audioPath = NULL WHERE id = :id")
+    /**
+     * Every recording some note still points at.
+     *
+     * The complement of this set is what
+     * [NoteTranscribeWorker.recoverOrphanedAudio][com.example.aiagenttestapp.data.notes.NoteTranscribeWorker.Companion.recoverOrphanedAudio]
+     * adopts: a WAV nothing references is a recording that never reached the row that would have
+     * given it a name.
+     */
+    @Query("SELECT audioPath FROM notes WHERE audioPath IS NOT NULL")
+    suspend fun allAudioPaths(): List<String>
+
+    /**
+     * Records a transcription failure, **keeping** `audioPath`.
+     *
+     * It used to null the path, which quietly made every failure terminal: the WAV and its
+     * checkpoint were both still on disk (`doWork` deletes them only on success) but nothing pointed
+     * at them any more, so the resume machinery could never engage, [retryTranscription] had nothing
+     * to work with, and the file was orphaned until the OS cleared the cache. Keeping the path is
+     * what makes a failure recoverable -- and it also lets `delete` take the audio with the note.
+     */
+    @Query("UPDATE notes SET status = :status, error = :error WHERE id = :id")
     suspend fun failTranscription(id: Long, error: String, status: NoteStatus = NoteStatus.Draft)
+
+    /**
+     * Puts a failed note back in the queue. No-op unless its audio is still on disk.
+     *
+     * The `audioPath IS NOT NULL` guard is the whole safety story: a note whose recording is gone
+     * would otherwise flip to "Transcribing…" and stick there, which the codebase already treats as
+     * worse than an error the user can see.
+     */
+    @Query(
+        """
+        UPDATE notes SET status = :status, error = NULL, transcribeProgress = 0.0
+        WHERE id = :id AND audioPath IS NOT NULL
+        """,
+    )
+    suspend fun retryTranscription(id: Long, status: NoteStatus = NoteStatus.Transcribing)
 
     /** Commits the user's reviewed note. */
     @Query(
@@ -317,35 +269,7 @@ interface NoteFindingDao {
     suspend fun deleteForNote(noteId: Long)
 }
 
-@Dao
-interface SpeakerDao {
-
-    @Query("SELECT * FROM speakers ORDER BY name COLLATE NOCASE ASC")
-    fun observeAll(): Flow<List<SpeakerRecord>>
-
-    @Query("SELECT * FROM speakers ORDER BY name COLLATE NOCASE ASC")
-    suspend fun all(): List<SpeakerRecord>
-
-    @Query("SELECT * FROM speakers WHERE name = :name COLLATE NOCASE LIMIT 1")
-    suspend fun byName(name: String): SpeakerRecord?
-
-    @Insert
-    suspend fun insert(speaker: SpeakerRecord): Long
-
-    @Query("DELETE FROM speakers WHERE id = :id")
-    suspend fun delete(id: Long)
-
-    @Insert
-    suspend fun insertSamples(samples: List<SpeakerSample>)
-
-    @Query("SELECT * FROM speaker_samples WHERE speakerId = :speakerId")
-    suspend fun samplesFor(speakerId: Long): List<SpeakerSample>
-
-    @Query("SELECT * FROM speaker_samples")
-    suspend fun allSamples(): List<SpeakerSample>
-}
-
-/** Stores enums as their name and float vectors as little-endian blobs. */
+/** Stores enums as their name. */
 object NotesConverters {
 
     @TypeConverter
@@ -368,40 +292,17 @@ object NotesConverters {
     @TypeConverter
     fun stringToSource(value: String): FindingSource =
         FindingSource.entries.firstOrNull { it.name == value } ?: FindingSource.Inferred
-
-    /**
-     * Explicit little-endian, not the platform default.
-     *
-     * The byte order is pinned because these blobs outlive the process that wrote them. Relying on the
-     * platform's order would make a database written on one architecture unreadable on another -- the
-     * floats would come back byte-swapped, which is not an error, just a voiceprint that matches
-     * nobody.
-     */
-    @TypeConverter
-    fun embeddingToBytes(value: FloatArray): ByteArray {
-        val buffer = ByteBuffer.allocate(value.size * Float.SIZE_BYTES)
-            .order(ByteOrder.LITTLE_ENDIAN)
-        value.forEach(buffer::putFloat)
-        return buffer.array()
-    }
-
-    @TypeConverter
-    fun bytesToEmbedding(value: ByteArray): FloatArray {
-        val buffer = ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN)
-        return FloatArray(value.size / Float.SIZE_BYTES) { buffer.float }
-    }
 }
 
 @Database(
-    entities = [Note::class, NoteFinding::class, SpeakerRecord::class, SpeakerSample::class],
-    version = 3,
+    entities = [Note::class, NoteFinding::class],
+    version = 4,
     exportSchema = true,
 )
 @TypeConverters(NotesConverters::class)
 abstract class NotesDatabase : RoomDatabase() {
     abstract fun noteDao(): NoteDao
     abstract fun noteFindingDao(): NoteFindingDao
-    abstract fun speakerDao(): SpeakerDao
 
     companion object {
         /** v1 -> v2: notes gained the detected-language column. Nullable, so old rows read null. */
@@ -414,9 +315,10 @@ abstract class NotesDatabase : RoomDatabase() {
         /**
          * v2 -> v3: speakers, findings, and the lifecycle columns background transcription needs.
          *
-         * One migration for all four rather than three separate ones. The speaker tables are unused
-         * until enrolment ships, but an empty table costs nothing and three chained migrations are
-         * three chances to get a schema hash wrong.
+         * Left exactly as it shipped, including the two speaker tables that [MIGRATION_3_4] goes on
+         * to drop. A migration describes a step that already happened on real devices; rewriting one
+         * to match the current schema is how a device that is actually on v2 ends up taking a path
+         * nobody ever tested.
          */
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -482,6 +384,21 @@ abstract class NotesDatabase : RoomDatabase() {
                     "CREATE INDEX IF NOT EXISTS `index_speaker_samples_speakerId` " +
                         "ON `speaker_samples` (`speakerId`)",
                 )
+            }
+        }
+
+        /**
+         * v3 -> v4: drops the speaker tables along with speaker identification itself.
+         *
+         * Enrolled voiceprints go with them, and there is nothing to preserve them into -- nothing
+         * reads an embedding any more. `IF EXISTS` because a device coming from v2 runs
+         * [MIGRATION_2_3] first and one coming from a fresh install never had them.
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Samples first: they carry the foreign key into `speakers`.
+                db.execSQL("DROP TABLE IF EXISTS `speaker_samples`")
+                db.execSQL("DROP TABLE IF EXISTS `speakers`")
             }
         }
     }

@@ -12,21 +12,19 @@ import org.junit.Test
  */
 class TranscriptMarkupTest {
 
-    private val known = setOf("Alice", "Bob")
-
     // -------- render / parse round trip --------
 
     @Test
-    fun `round trips speakers and tags`() {
+    fun `round trips tags`() {
         val blocks = listOf(
-            TranscriptBlock("Alice", "Checked bay 3 this morning."),
-            TranscriptBlock("Alice", "the extinguisher expired last month", setOf(MarkerKind.NonConformity)),
-            TranscriptBlock("Bob", "I'll order a replacement today."),
-            TranscriptBlock("Bob", "Bob orders a replacement before Friday", setOf(MarkerKind.Action)),
+            TranscriptBlock("Checked bay 3 this morning."),
+            TranscriptBlock("the extinguisher expired last month", setOf(MarkerKind.NonConformity)),
+            TranscriptBlock("I'll order a replacement today."),
+            TranscriptBlock("order a replacement before Friday", setOf(MarkerKind.Action)),
         )
 
         val rendered = TranscriptMarkup.render(blocks)
-        val parsed = TranscriptMarkup.parse(rendered, known)
+        val parsed = TranscriptMarkup.parse(rendered)
 
         assertEquals(blocks.map { it.text }, parsed.map { it.text })
         assertEquals(blocks.map { it.tags }, parsed.map { it.tags })
@@ -35,68 +33,62 @@ class TranscriptMarkupTest {
     }
 
     @Test
-    fun `consecutive blocks from one speaker merge into a paragraph`() {
+    fun `consecutive untagged blocks merge into one paragraph`() {
         val rendered = TranscriptMarkup.render(
             listOf(
-                TranscriptBlock("Alice", "First slice."),
-                TranscriptBlock("Alice", "Second slice."),
-                TranscriptBlock("Bob", "A reply."),
+                TranscriptBlock("First slice."),
+                TranscriptBlock("Second slice."),
+                TranscriptBlock("A reply."),
             ),
         )
 
-        assertEquals("Alice: First slice. Second slice.\n\nBob: A reply.", rendered)
+        assertEquals("First slice. Second slice. A reply.", rendered)
     }
 
     @Test
-    fun `renders without speakers when diarisation did not run`() {
+    fun `a tagged block breaks the run, and the text after it starts a new one`() {
         val rendered = TranscriptMarkup.render(
             listOf(
-                TranscriptBlock(null, "Checked bay 3."),
-                TranscriptBlock(null, "the extinguisher expired", setOf(MarkerKind.NonConformity)),
+                TranscriptBlock("Checked bay 3."),
+                TranscriptBlock("the extinguisher expired", setOf(MarkerKind.NonConformity)),
+                TranscriptBlock("Moving on."),
             ),
         )
 
         assertEquals(
-            "Checked bay 3.\n\n[NON-CONFORMITY] the extinguisher expired [/NON-CONFORMITY]",
+            "Checked bay 3.\n\n[NON-CONFORMITY] the extinguisher expired [/NON-CONFORMITY]" +
+                "\n\nMoving on.",
             rendered,
         )
-        assertEquals(listOf(null, null), TranscriptMarkup.parse(rendered).map { it.speaker })
     }
 
     // -------- hostile input --------
 
     @Test
-    fun `a sentence containing a colon is not mistaken for a speaker`() {
-        val parsed = TranscriptMarkup.parse("So the issue is: the valve leaks.", known)
+    fun `a sentence containing a colon survives intact`() {
+        val parsed = TranscriptMarkup.parse("So the issue is: the valve leaks.")
 
         assertEquals(1, parsed.size)
-        assertEquals(null, parsed[0].speaker)
-        // The whole sentence survives, colon included -- no invented speaker, no truncation.
         assertEquals("So the issue is: the valve leaks.", parsed[0].text)
     }
 
     @Test
-    fun `an unknown name is not treated as a speaker`() {
-        val parsed = TranscriptMarkup.parse("Charlie: hello there", known)
+    fun `a leading name prefix from an older note is kept as ordinary text`() {
+        // Notes written while speaker identification existed still carry "Alice: " prefixes. Nothing
+        // treats them as structure any more, so the requirement is only that they survive a
+        // parse/render round trip rather than being stripped out of somebody's saved note.
+        val text = "Alice: hello there"
 
-        assertEquals(null, parsed[0].speaker)
-        assertEquals("Charlie: hello there", parsed[0].text)
-    }
+        val parsed = TranscriptMarkup.parse(text)
 
-    @Test
-    fun `numbered unknown speakers are recognised without being enrolled`() {
-        val parsed = TranscriptMarkup.parse("Speaker 2: over here", emptySet())
-
-        assertEquals("Speaker 2", parsed[0].speaker)
-        assertEquals("over here", parsed[0].text)
+        assertEquals(1, parsed.size)
+        assertEquals(text, parsed[0].text)
+        assertEquals(text, TranscriptMarkup.render(parsed))
     }
 
     @Test
     fun `a tag the user failed to close still yields the tagged text`() {
-        val parsed = TranscriptMarkup.parse(
-            "Alice: [NON-CONFORMITY] the extinguisher expired last month",
-            known,
-        )
+        val parsed = TranscriptMarkup.parse("[NON-CONFORMITY] the extinguisher expired last month")
 
         assertEquals(1, parsed.size)
         assertEquals(setOf(MarkerKind.NonConformity), parsed[0].tags)
@@ -105,25 +97,20 @@ class TranscriptMarkupTest {
 
     @Test
     fun `text before and after a tag is kept as its own blocks`() {
-        val parsed = TranscriptMarkup.parse(
-            "Alice: before [ACTION] do the thing [/ACTION] after",
-            known,
-        )
+        val parsed = TranscriptMarkup.parse("before [ACTION] do the thing [/ACTION] after")
 
         assertEquals(listOf("before", "do the thing", "after"), parsed.map { it.text })
         assertEquals(
             listOf(emptySet(), setOf(MarkerKind.Action), emptySet<MarkerKind>()),
             parsed.map { it.tags },
         )
-        // The speaker carries across the tag rather than being lost at it.
-        assertTrue(parsed.all { it.speaker == "Alice" })
     }
 
     @Test
     fun `parsing junk never throws and never loses the text`() {
         val junk = "[/ACTION] stray close [NON-CONFORMITY][ACTION] nested-ish [/NON-CONFORMITY]"
 
-        val parsed = TranscriptMarkup.parse(junk, known)
+        val parsed = TranscriptMarkup.parse(junk)
 
         assertTrue(parsed.isNotEmpty())
         assertTrue(parsed.any { it.text.contains("stray close") })
@@ -131,8 +118,8 @@ class TranscriptMarkupTest {
 
     @Test
     fun `blank and whitespace-only input parse to nothing`() {
-        assertEquals(emptyList<TranscriptBlock>(), TranscriptMarkup.parse("", known))
-        assertEquals(emptyList<TranscriptBlock>(), TranscriptMarkup.parse("   \n\n  \n ", known))
+        assertEquals(emptyList<TranscriptBlock>(), TranscriptMarkup.parse(""))
+        assertEquals(emptyList<TranscriptBlock>(), TranscriptMarkup.parse("   \n\n  \n "))
     }
 
     // -------- tagged item extraction --------
@@ -140,16 +127,16 @@ class TranscriptMarkupTest {
     @Test
     fun `tagged items are lifted out in order with their kind`() {
         val text = """
-            Alice: Checked bay 3.
+            Checked bay 3.
 
             [NON-CONFORMITY] the extinguisher expired [/NON-CONFORMITY]
 
-            Bob: Noted.
+            Noted.
 
             [ACTION] order a replacement [/ACTION]
         """.trimIndent()
 
-        val items = TranscriptMarkup.taggedItems(text, known)
+        val items = TranscriptMarkup.taggedItems(text)
 
         assertEquals(
             listOf(
@@ -158,13 +145,6 @@ class TranscriptMarkupTest {
             ),
             items,
         )
-    }
-
-    @Test
-    fun `speakers in a transcript are listed once each in order`() {
-        val text = "Alice: one\n\nBob: two\n\nAlice: three"
-
-        assertEquals(listOf("Alice", "Bob"), TranscriptMarkup.speakersIn(text, known))
     }
 
     // -------- the fallback path: markers found in already-transcribed text --------

@@ -15,31 +15,22 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
-import com.example.aiagenttestapp.data.SettingsStore
-import com.example.aiagenttestapp.data.audiomodels.AudioModelCatalog
-import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
-import com.example.aiagenttestapp.data.speakers.SpeakerRepository
 import com.example.aiagenttestapp.stt.AudioRecorder
-import com.example.aiagenttestapp.stt.SpeakerDiarizer
-import com.example.aiagenttestapp.stt.SpeechModelRepository
-import com.example.aiagenttestapp.stt.SpeechRecognizer
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.absoluteValue
 
 /**
- * Transcribes one recording in a foreground job: diarise, label the speakers, slice, transcribe.
+ * Transcribes one recording in a foreground job: find the speech, slice it, transcribe each slice.
  *
- * Why a worker rather than the ViewModel that used to do this. Diarising and then transcribing a
- * meeting-length recording per speaker turn is minutes of work, and in a ViewModel all of it died the
- * moment the user left the screen -- on a long walkthrough, quite possibly every time. It also had to
- * hold the whole recording on the heap, ~115 MB for half an hour, doubled while copying it. Here the
- * audio is read back from a file and each stage is checkpointed, so a process death costs the current
- * slice rather than the entire run.
+ * Why a worker rather than the ViewModel that used to do this. Transcribing a meeting-length
+ * recording is minutes of work, and in a ViewModel all of it died the moment the user left the
+ * screen -- on a long walkthrough, quite possibly every time. It also had to hold the whole recording
+ * on the heap, ~115 MB for half an hour, doubled while copying it. Here the audio is read back from a
+ * file and each stage is checkpointed, so a process death costs the current slice rather than the
+ * entire run.
  *
  * The note row exists before this starts and is updated as it goes, which is what lets the user leave,
  * come back, and find either a finished transcript or an honest error.
@@ -49,11 +40,8 @@ class NoteTranscribeWorker @AssistedInject constructor(
     @Assisted private val context: Context,
     @Assisted params: WorkerParameters,
     private val noteDao: NoteDao,
-    private val speechModels: SpeechModelRepository,
-    private val speechRecognizer: SpeechRecognizer,
-    private val audioModels: AudioModelRepository,
-    private val speakers: SpeakerRepository,
-    private val settings: SettingsStore,
+    /** The whole transcription lives here, shared with the benchmark runner -- see its KDoc. */
+    private val transcriptionRun: TranscriptionRun,
 ) : CoroutineWorker(context, params) {
 
     /** WorkManager asks for this before `doWork` in some paths, so it must not depend on any state. */
@@ -80,7 +68,7 @@ class NoteTranscribeWorker @AssistedInject constructor(
         val request = checkpoint.requestOrNull()
         val markers = request?.markers.orEmpty()
         val excluded = request?.excludedRanges.orEmpty()
-        val expectedSpeakers = request?.expectedSpeakers ?: 0
+        val backend = request?.sttBackend ?: SttBackend.DEFAULT
 
         // Android 12+ can refuse a foreground start when the app is in the background. Refusing to
         // transcribe over it would be the wrong call -- the work is still worth doing, it just loses the
@@ -88,9 +76,38 @@ class NoteTranscribeWorker @AssistedInject constructor(
         runCatching { setForeground(foregroundInfo(noteId, 0f)) }
 
         return try {
-            transcribe(noteId, audio, markers, excluded, expectedSpeakers, checkpoint)
-            checkpoint.delete()
-            audio.delete()
+            val outcome = transcriptionRun.transcribe(
+                audio = audio,
+                markers = markers,
+                excluded = excluded,
+                backend = backend,
+                preferredModelId = request?.sttModelId,
+                checkpoint = checkpoint,
+            ) { progress ->
+                noteDao.updateProgress(noteId, progress)
+                runCatching { setForeground(foregroundInfo(noteId, progress)) }
+            }
+
+            when (outcome) {
+                is TranscriptionRun.Outcome.Done -> {
+                    noteDao.finishTranscription(
+                        id = noteId,
+                        transcript = outcome.transcript,
+                        durationMillis = outcome.durationMillis,
+                        language = outcome.language,
+                    )
+                    checkpoint.delete()
+                    audio.delete()
+                }
+
+                is TranscriptionRun.Outcome.NothingRecognised -> {
+                    // The audio and checkpoint deliberately survive this branch. It used to fall
+                    // through to the deletes above, which destroyed the very file "Try again"
+                    // needs: the button still showed (the note row keeps its audioPath), and every
+                    // retry then failed with "the recording is no longer available".
+                    noteDao.failTranscription(noteId, outcome.message)
+                }
+            }
             Result.success()
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Cancelled, not failed. The checkpoint and the audio stay so a retry resumes.
@@ -104,163 +121,6 @@ class NoteTranscribeWorker @AssistedInject constructor(
             // Success: the *work* is finished and must not be retried, and the note carries the error.
             Result.success()
         }
-    }
-
-    private suspend fun transcribe(
-        noteId: Long,
-        audio: File,
-        markers: List<SpokenMarker>,
-        excluded: List<IntRange>,
-        expectedSpeakers: Int,
-        checkpoint: TranscriptionCheckpoint,
-    ) = withContext(Dispatchers.Default) {
-        val samples = WavFile.read(audio)
-        if (samples.isEmpty()) {
-            noteDao.failTranscription(noteId, "The recording was empty.")
-            return@withContext
-        }
-
-        // Marker edges must survive turn merging: inside a tagged span, who is speaking is the point.
-        val protectedBoundaries = markers
-            .flatMap { listOf(it.startSample, it.endSample) }
-            .toSet()
-
-        val speakerWork = resolveSpeakers(samples, expectedSpeakers, protectedBoundaries, checkpoint)
-
-        val slices = SpokenMarkers.slice(
-            totalSamples = samples.size,
-            markers = markers,
-            turns = speakerWork.turns,
-            excludedRanges = excluded,
-            maxSliceSamples = SpeechRecognizer.MAX_SEGMENT_SAMPLES,
-            cutLongSlice = { from, until ->
-                speechRecognizer.quietestCutBetween(samples, from, until)
-            },
-        )
-
-        val spoken = slices.filter { !it.isTriggerPhrase }
-        if (spoken.isEmpty()) {
-            noteDao.failTranscription(noteId, "Nothing was recognised. Try again.")
-            return@withContext
-        }
-
-        val paths = speechModels.selectedPaths()
-        if (speechRecognizer.loadedModelId != paths.id) speechRecognizer.load(paths)
-
-        val texts = mutableListOf<String?>()
-        var language: String? = null
-
-        spoken.forEachIndexed { index, slice ->
-            // Resume rather than redo: on a long recording this is the difference between a process
-            // death costing one slice and costing the whole run.
-            val cached = checkpoint.textFor(slice.range)
-            if (cached != null) {
-                texts += cached.text
-                if (language == null) language = cached.language
-            } else {
-                val piece = speechRecognizer
-                    .transcribeSegments(samples, listOf(slice.range))
-                    .firstOrNull()
-
-                texts += piece?.text
-                if (language == null) language = piece?.language
-                checkpoint.record(slice.range, piece?.text.orEmpty(), piece?.language)
-            }
-
-            val progress = (index + 1).toFloat() / spoken.size
-            noteDao.updateProgress(noteId, progress)
-            runCatching { setForeground(foregroundInfo(noteId, progress)) }
-        }
-
-        val blocks = spoken.zip(texts) { slice, text ->
-            TranscriptBlock(
-                speaker = slice.cluster?.let { speakerWork.labels[it] },
-                text = text.orEmpty(),
-                tags = slice.tags,
-            )
-        }.filter { it.text.isNotBlank() }
-
-        val rendered = TranscriptMarkup.render(blocks)
-
-        // No marker was heard acoustically -- either the keyword spotter is off, or the user was
-        // dictating in a language it has no model for. The marker words are in the recognised text
-        // instead, so look for them there.
-        val text = if (markers.isEmpty()) {
-            TranscriptMarkup.wrapSpokenMarkers(rendered)
-        } else {
-            rendered
-        }
-
-        noteDao.finishTranscription(
-            id = noteId,
-            transcript = text,
-            durationMillis = samples.size * 1000L / AudioRecorder.SAMPLE_RATE,
-            language = language,
-        )
-    }
-
-    private data class SpeakerWork(
-        val turns: List<SpeakerTurn>,
-        val labels: Map<Int, String>,
-    )
-
-    /**
-     * Diarises and names the speakers, or returns nothing when the feature is off or unavailable.
-     *
-     * Checkpointed as a unit because it is the slow, all-or-nothing half: repeating a two-minute
-     * diarisation after a process death would often mean never getting past it.
-     *
-     * The diarizer is released before the naming step. It carries its own copy of the 29 MB embedding
-     * model internally, and holding both open at once would double that for no reason on a device that
-     * is about to load an ASR model too.
-     */
-    private suspend fun resolveSpeakers(
-        samples: FloatArray,
-        expectedSpeakers: Int,
-        protectedBoundaries: Set<Int>,
-        checkpoint: TranscriptionCheckpoint,
-    ): SpeakerWork {
-        if (!settings.settings.value.speakerIdEnabled) return SpeakerWork(emptyList(), emptyMap())
-        if (!audioModels.isReady(audioModels.speaker)) return SpeakerWork(emptyList(), emptyMap())
-
-        checkpoint.diarisationResult()?.let { done ->
-            return SpeakerWork(done.turns, done.labels)
-        }
-
-        val diarizer = SpeakerDiarizer()
-        val segments = try {
-            diarizer.load(
-                segmentationModel = audioModels.fileFor(
-                    audioModels.speaker,
-                    AudioModelCatalog.SEGMENTATION,
-                ),
-                embeddingModel = audioModels.fileFor(
-                    audioModels.speaker,
-                    AudioModelCatalog.EMBEDDING,
-                ),
-                expectedSpeakers = expectedSpeakers,
-            )
-            diarizer.diarize(samples)
-        } catch (e: Exception) {
-            Log.w(TAG, "diarisation unavailable; transcribing without speaker labels", e)
-            emptyList()
-        } finally {
-            diarizer.release()
-        }
-
-        if (segments.isEmpty()) return SpeakerWork(emptyList(), emptyMap())
-
-        val turns = SpeakerTurns.build(
-            segments = segments.map { DiarizedRange(it.startSample, it.endSample, it.cluster) },
-            totalSamples = samples.size,
-            minTurnSamples = MIN_TURN_SAMPLES,
-            protectedBoundaries = protectedBoundaries,
-        )
-
-        val labels = speakers.labelClusters(samples, turns)
-        checkpoint.recordDiarisation(turns, labels)
-
-        return SpeakerWork(turns, labels)
     }
 
     private fun foregroundInfo(noteId: Long, progress: Float): ForegroundInfo {
@@ -311,16 +171,6 @@ class NoteTranscribeWorker @AssistedInject constructor(
 
         const val WORK_TAG = "note-transcription"
 
-        /**
-         * The absorption floor: speaker turns shorter than four seconds are folded into a neighbour.
-         *
-         * Whisper's encoder pads every input to 30 s no matter how short it is, so cost scales with the
-         * *number* of turns rather than their length. Without a floor, a lively conversation becomes a
-         * hundred-odd full encoder runs. Four seconds keeps that in hand at the cost of attributing
-         * brief interjections to whoever was speaking around them.
-         */
-        val MIN_TURN_SAMPLES = AudioRecorder.SAMPLE_RATE * 4
-
         fun uniqueName(noteId: Long) = "note-transcription:$noteId"
 
         /**
@@ -348,6 +198,135 @@ class NoteTranscribeWorker @AssistedInject constructor(
          * again -- the checkpoint means it picks up where it stopped rather than starting over. Where it
          * does not, the note is marked failed so at least it says so.
          */
+        /**
+         * The directory recordings are captured into, under the app's cache.
+         *
+         * Named here as well as in the recorder because the sweep has to look in it without the
+         * recorder existing -- after a process death there is no ViewModel to ask.
+         */
+        fun audioDir(cacheDir: File) = File(cacheDir, "note-audio")
+
+        /**
+         * How recently a file may have been written and still be treated as finished.
+         *
+         * The one real hazard in this sweep is adopting a recording that is *currently being made*:
+         * audio streams to disk from the moment the user presses record, but the note row is only
+         * inserted when they press stop, so a live recording looks exactly like an orphan. A file
+         * still being appended to has a fresh mtime, and the writer's buffer flushes every couple of
+         * seconds, so a minute of quiet is a wide margin. A recording interrupted inside this window
+         * is simply picked up by the next sweep instead.
+         */
+        private const val SETTLED_MILLIS = 60_000L
+
+        /**
+         * Adopts recordings that no note points at, so a process death costs a name rather than the
+         * audio.
+         *
+         * Recordings stream to disk as they are captured, but the note row that owns one is written
+         * only when the user stops. Anything that kills the app in between -- a crash, a low-memory
+         * kill, the user swiping it away -- therefore used to leave a complete WAV on disk that
+         * nothing referenced and nothing would ever read again. This gives those files a note and
+         * queues them, which is the whole point of having written them out in the first place.
+         *
+         * Deliberately conservative about what it deletes: only a file with no audio in it at all,
+         * and a `.progress` checkpoint whose recording is already gone. Anything else is somebody's
+         * walkthrough.
+         */
+        suspend fun recoverOrphanedAudio(context: Context, noteDao: NoteDao, cacheDir: File) {
+            val files = audioDir(cacheDir).listFiles()?.toList() ?: return
+
+            val plan = planOrphanSweep(
+                files = files,
+                referenced = noteDao.allAudioPaths().toSet(),
+                now = System.currentTimeMillis(),
+                sampleCountOf = WavFile::sampleCount,
+            )
+
+            plan.delete.forEach { file ->
+                file.delete()
+                if (file.name.endsWith(".wav")) TranscriptionCheckpoint.forAudio(file).delete()
+            }
+
+            for (audio in plan.adopt) {
+                val samples = WavFile.sampleCount(audio)
+                // The backend comes from the checkpoint the recorder writes when recording starts.
+                // Without it this would fall back to ONNX and a Gemma-only device would end up with
+                // a note it can never transcribe.
+                val request = TranscriptionCheckpoint.forAudio(audio).apply { load() }.requestOrNull()
+
+                val noteId = noteDao.insert(
+                    Note(
+                        title = RECOVERED_TITLE,
+                        transcript = "",
+                        summary = "",
+                        createdAtMillis = audio.lastModified(),
+                        summarisedBy = "none",
+                        durationMillis = samples * 1000L / AudioRecorder.SAMPLE_RATE,
+                        status = NoteStatus.Transcribing,
+                        audioPath = audio.absolutePath,
+                    ),
+                )
+
+                Log.i(
+                    TAG,
+                    "recovered an orphaned recording: ${audio.name}, " +
+                        "${samples / AudioRecorder.SAMPLE_RATE}s, backend=${request?.sttBackend}",
+                )
+                enqueue(context, noteId)
+            }
+        }
+
+        /** What a sweep decided to do, separated from doing it so the rules can be tested. */
+        internal data class OrphanSweep(
+            /** Recordings to give a note and queue. */
+            val adopt: List<File> = emptyList(),
+            /** Files worth removing: empty recordings, and checkpoints with no recording left. */
+            val delete: List<File> = emptyList(),
+        )
+
+        /**
+         * Decides what to adopt and what to bin. Pure, because every rule here is a judgement about
+         * an ambiguous file on disk and those are miserable to reproduce on a device.
+         *
+         * The rule that matters most is the one that does nothing: a file written within
+         * [SETTLED_MILLIS] is assumed to be a recording still in progress and is left alone.
+         * Adopting one would hand the user's live recording to a transcription worker while the
+         * recorder was still appending to it.
+         */
+        internal fun planOrphanSweep(
+            files: List<File>,
+            referenced: Set<String>,
+            now: Long,
+            sampleCountOf: (File) -> Int,
+        ): OrphanSweep {
+            val names = files.map { it.name }.toSet()
+
+            // A checkpoint whose audio has gone is dead weight: the worker only ever opens one by
+            // its recording's name, so nothing will read it again.
+            val strayCheckpoints = files.filter {
+                it.name.endsWith(".progress") && it.name.removeSuffix(".progress") !in names
+            }
+
+            val orphans = files
+                .filter { it.name.endsWith(".wav") }
+                .filter { it.absolutePath !in referenced }
+                .filter { now - it.lastModified() >= SETTLED_MILLIS }
+
+            // Nothing was ever captured -- a recording that died before its first chunk landed.
+            val (empty, real) = orphans.partition { sampleCountOf(it) <= 0 }
+
+            return OrphanSweep(adopt = real, delete = strayCheckpoints + empty)
+        }
+
+        /**
+         * Title for a note the sweep rescued.
+         *
+         * Distinct from the recorder's "Voice note" on purpose: the user never pressed stop on this
+         * one, so finding it in the list is a surprise, and the title is the only place to explain
+         * why it is there.
+         */
+        const val RECOVERED_TITLE = "Recovered recording"
+
         suspend fun reconcileOrphans(context: Context, noteDao: NoteDao) {
             val stuck = noteDao.withStatus(NoteStatus.Transcribing)
             if (stuck.isEmpty()) return

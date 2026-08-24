@@ -5,10 +5,8 @@ import com.example.aiagenttestapp.functions.MarkerEdge
 import com.example.aiagenttestapp.functions.MarkerKind
 import com.example.aiagenttestapp.functions.SpokenKeywords
 
-/** One attributed, possibly tagged piece of a transcript. */
+/** One possibly tagged piece of a transcript. */
 data class TranscriptBlock(
-    /** Speaker label as it will be shown, or null when speaker identification did not run. */
-    val speaker: String?,
     val text: String,
     val tags: Set<MarkerKind> = emptySet(),
 )
@@ -20,7 +18,7 @@ data class TaggedItem(
 )
 
 /**
- * The on-disk and on-screen form of a transcript that carries speakers and tags.
+ * The on-disk and on-screen form of a transcript that carries tags.
  *
  * A strict, re-parsable plain-text format rather than a structured column, for one reason: the review
  * screen hands the user an editable text field, and they *must* be able to fix what the recogniser got
@@ -28,18 +26,19 @@ data class TaggedItem(
  * a parallel structured editor. Text they can correct, and this parser reads their corrections back.
  *
  * ```
- * Alice: Checked bay 3 this morning.
+ * Checked bay 3 this morning.
  *
  * [NON-CONFORMITY] the extinguisher expired last month [/NON-CONFORMITY]
  *
- * Bob: I'll order a replacement today.
+ * I'll order a replacement today.
  *
- * [ACTION] Bob orders a replacement extinguisher before Friday [/ACTION]
+ * [ACTION] order a replacement extinguisher before Friday [/ACTION]
  * ```
  *
- * Parsing never throws. Everything it cannot make sense of degrades to plain text on the previous
- * speaker, because the input is a text box a human has been typing in and losing their note to a
- * format error would be indefensible.
+ * Parsing never throws. Everything it cannot make sense of degrades to plain text, because the input
+ * is a text box a human has been typing in and losing their note to a format error would be
+ * indefensible. That also covers notes written before speaker identification was removed: a leftover
+ * `Alice: ` prefix is no longer structural, so it simply stays in the text it was already part of.
  */
 object TranscriptMarkup {
 
@@ -47,9 +46,6 @@ object TranscriptMarkup {
     private const val NC_CLOSE = "[/NON-CONFORMITY]"
     private const val ACTION_OPEN = "[ACTION]"
     private const val ACTION_CLOSE = "[/ACTION]"
-
-    /** Prefix used for speakers diarisation found but could not put a name to. */
-    const val UNKNOWN_SPEAKER_PREFIX = "Speaker"
 
     private fun openTag(kind: MarkerKind) =
         if (kind == MarkerKind.NonConformity) NC_OPEN else ACTION_OPEN
@@ -60,67 +56,31 @@ object TranscriptMarkup {
     /**
      * Renders blocks to the text the user will see and edit.
      *
-     * Consecutive blocks from the same speaker with the same tags are merged, so a speaker who talked
-     * across three recogniser slices reads as one paragraph instead of three stuttered ones.
+     * Consecutive blocks with the same tags are merged, so speech that ran across three recogniser
+     * slices reads as one paragraph instead of three stuttered ones.
      */
     fun render(blocks: List<TranscriptBlock>): String {
         val merged = mergeAdjacent(blocks)
 
         return merged.joinToString("\n\n") { block ->
-            val body = block.tags.fold(block.text.trim()) { text, kind ->
+            block.tags.fold(block.text.trim()) { text, kind ->
                 "${openTag(kind)} $text ${closeTag(kind)}"
-            }
-            // A tagged block deliberately carries no speaker prefix: the tag is the salient thing, and
-            // the span's owner is recorded on the finding itself rather than repeated in the text.
-            if (block.speaker != null && block.tags.isEmpty()) {
-                "${block.speaker}: $body"
-            } else {
-                body
             }
         }.trim()
     }
 
-    /**
-     * Reads a transcript back, including one a user has edited by hand.
-     *
-     * [knownSpeakers] restricts what may be treated as a speaker prefix. Without that restriction an
-     * ordinary sentence such as "So the issue is: the valve leaks" would be read as a speaker called
-     * "So the issue is", quietly inventing a person and mangling the text.
-     */
-    fun parse(text: String, knownSpeakers: Set<String> = emptySet()): List<TranscriptBlock> {
+    /** Reads a transcript back, including one a user has edited by hand. */
+    fun parse(text: String): List<TranscriptBlock> {
         val blocks = mutableListOf<TranscriptBlock>()
-        var speaker: String? = null
 
         for (paragraph in text.split(Regex("\n\\s*\n"))) {
             val trimmed = paragraph.trim()
             if (trimmed.isEmpty()) continue
 
-            val (foundSpeaker, remainder) = splitSpeaker(trimmed, knownSpeakers)
-            if (foundSpeaker != null) speaker = foundSpeaker
-
-            blocks += readTags(remainder, speaker)
+            blocks += readTags(trimmed)
         }
 
         return blocks.filter { it.text.isNotBlank() }
-    }
-
-    /** Extracts a `Name: ` prefix when the name is one we actually know. */
-    private fun splitSpeaker(
-        paragraph: String,
-        knownSpeakers: Set<String>,
-    ): Pair<String?, String> {
-        val colon = paragraph.indexOf(':')
-        if (colon <= 0 || colon > MAX_SPEAKER_LENGTH) return null to paragraph
-
-        val candidate = paragraph.take(colon).trim()
-        val isKnown = knownSpeakers.any { it.equals(candidate, ignoreCase = true) } ||
-            candidate.matches(UNKNOWN_SPEAKER_PATTERN)
-
-        return if (isKnown) {
-            candidate to paragraph.substring(colon + 1).trim()
-        } else {
-            null to paragraph
-        }
     }
 
     /**
@@ -129,7 +89,7 @@ object TranscriptMarkup {
      * Handles a user who deleted a closing bracket: an unclosed tag simply runs to the end of the
      * paragraph rather than swallowing the rest of the note or dropping the text.
      */
-    private fun readTags(paragraph: String, speaker: String?): List<TranscriptBlock> {
+    private fun readTags(paragraph: String): List<TranscriptBlock> {
         val blocks = mutableListOf<TranscriptBlock>()
         var rest = paragraph
 
@@ -141,24 +101,24 @@ object TranscriptMarkup {
                 .minByOrNull { it.second }
 
             if (next == null) {
-                blocks += TranscriptBlock(speaker, rest.trim())
+                blocks += TranscriptBlock(rest.trim())
                 break
             }
 
             val (kind, at) = next
             val before = rest.take(at).trim()
-            if (before.isNotEmpty()) blocks += TranscriptBlock(speaker, before)
+            if (before.isNotEmpty()) blocks += TranscriptBlock(before)
 
             val afterOpen = rest.substring(at + openTag(kind).length)
             val closeAt = afterOpen.indexOf(closeTag(kind))
 
             if (closeAt < 0) {
                 // No closing bracket: take the remainder as the tagged text and stop.
-                blocks += TranscriptBlock(speaker, afterOpen.trim(), setOf(kind))
+                blocks += TranscriptBlock(afterOpen.trim(), setOf(kind))
                 break
             }
 
-            blocks += TranscriptBlock(speaker, afterOpen.take(closeAt).trim(), setOf(kind))
+            blocks += TranscriptBlock(afterOpen.take(closeAt).trim(), setOf(kind))
             rest = afterOpen.substring(closeAt + closeTag(kind).length)
         }
 
@@ -173,14 +133,10 @@ object TranscriptMarkup {
      * extract and classify will drop some of them, and a marker the user deliberately spoke is a
      * contract, not a suggestion.
      */
-    fun taggedItems(text: String, knownSpeakers: Set<String> = emptySet()): List<TaggedItem> =
-        parse(text, knownSpeakers)
+    fun taggedItems(text: String): List<TaggedItem> =
+        parse(text)
             .flatMap { block -> block.tags.map { kind -> TaggedItem(kind, block.text) } }
             .filter { it.text.isNotBlank() }
-
-    /** Speaker labels appearing in a transcript, so the notes list can show who was in a recording. */
-    fun speakersIn(text: String, knownSpeakers: Set<String> = emptySet()): List<String> =
-        parse(text, knownSpeakers).mapNotNull { it.speaker }.distinct()
 
     /**
      * Wraps spoken markers found in already-transcribed text.
@@ -305,12 +261,7 @@ object TranscriptMarkup {
         return cursor
     }
 
-    private const val MAX_SPEAKER_LENGTH = 40
-
-    /** "Speaker 2" and friends, the label used when diarisation found someone unrecognised. */
-    private val UNKNOWN_SPEAKER_PATTERN = Regex("^$UNKNOWN_SPEAKER_PREFIX \\d+$")
-
-    /** Collapses runs of same-speaker, same-tag blocks so a paragraph reads as one. */
+    /** Collapses runs of same-tag blocks so a paragraph reads as one. */
     private fun mergeAdjacent(blocks: List<TranscriptBlock>): List<TranscriptBlock> {
         val merged = mutableListOf<TranscriptBlock>()
 
@@ -318,7 +269,7 @@ object TranscriptMarkup {
             if (block.text.isBlank()) continue
             val last = merged.lastOrNull()
 
-            if (last != null && last.speaker == block.speaker && last.tags == block.tags) {
+            if (last != null && last.tags == block.tags) {
                 merged[merged.lastIndex] = last.copy(
                     text = "${last.text.trim()} ${block.text.trim()}".trim(),
                 )

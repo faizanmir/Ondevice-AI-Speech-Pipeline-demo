@@ -75,8 +75,20 @@ class TranscriptionCheckpoint(private val file: File) {
         val language: String?,
     )
 
-    /** Diarisation result, if it ran. Kept so a restart never repeats it -- it is the slow half. */
-    data class Diarisation(val turns: List<SpeakerTurn>, val labels: Map<Int, String>)
+    /**
+     * Where speech was found, if voice-activity detection ran.
+     *
+     * Kept for correctness rather than for speed -- the VAD is only a couple of seconds even on a
+     * long recording. Speech regions decide slice boundaries, and the checkpoint resumes by matching
+     * a slice's exact sample range against what was already transcribed. A restart that recomputed
+     * even slightly different regions would shift every boundary, match nothing, and re-transcribe a
+     * recording that was nearly finished.
+     *
+     * [ran] distinguishes "the VAD ran and found these regions" from "it never ran", which an empty
+     * list alone cannot: one means skip everything outside them, the other means transcribe
+     * everything.
+     */
+    data class SpeechActivity(val ran: Boolean, val regions: List<IntRange>?)
 
     /**
      * Everything the worker needs to know that is not in the audio itself.
@@ -90,17 +102,49 @@ class TranscriptionCheckpoint(private val file: File) {
     data class Request(
         val markers: List<SpokenMarker>,
         val excludedRanges: List<IntRange>,
-        val expectedSpeakers: Int,
+        /**
+         * Which recogniser this recording was made for.
+         *
+         * Here rather than only in the job's input data for the same reason the markers are, and the
+         * consequence of leaving it out would be subtler than a lost tag: [reconcileOrphans]
+         * re-enqueues with nothing but a note id, so an interrupted Gemma transcription would quietly
+         * finish on the ONNX model -- possibly with a different slicing granularity, and certainly
+         * with half the note transcribed by each.
+         */
+        val sttBackend: SttBackend = SttBackend.DEFAULT,
+        /**
+         * The model the Gemma path resolved to when the recording was made, so a resume prefers the
+         * same one. Null for the ONNX path, which picks its model from Settings on every run.
+         */
+        val sttModelId: String? = null,
     )
 
     private var done = mutableListOf<Done>()
-    private var diarisation: Diarisation? = null
+    private var speech: SpeechActivity? = null
     private var request: Request? = null
+
+    /**
+     * Whether what is on disk has been read into memory yet.
+     *
+     * Every mutator checks this and loads first, because [persist] rewrites the whole file from
+     * memory and this class is constructed freshly at several sites that each own one section of
+     * it. Without the guard, those writers destroyed each other's work in sequence: the record
+     * screen's stop handler wrote its request through a fresh instance and wiped every slice the
+     * pipeline had pre-decoded during the recording -- so the worker missed on all of them and the
+     * user waited out the full transcription the pre-decoding existed to remove. Nothing reported
+     * a problem; the transcript was simply slow.
+     */
+    private var loaded = false
+
+    private fun ensureLoaded() {
+        if (!loaded) load()
+    }
 
     /** Reads whatever a previous attempt left. A corrupt or absent file simply means "start over". */
     fun load() {
+        loaded = true
         done = mutableListOf()
-        diarisation = null
+        speech = null
         request = null
 
         if (!file.exists()) return
@@ -112,7 +156,10 @@ class TranscriptionCheckpoint(private val file: File) {
                 request = Request(
                     markers = MarkerCodec.decodeMarkers(r.optString("markers")),
                     excludedRanges = MarkerCodec.decodeRanges(r.optString("excluded")),
-                    expectedSpeakers = r.optInt("expectedSpeakers", 0),
+                    // Absent in checkpoints written before the backend was a choice, and absent is
+                    // exactly right for them: those recordings were all made on the ONNX path.
+                    sttBackend = SttBackend.fromSlug(r.optString("sttBackend").ifBlank { null }),
+                    sttModelId = r.optString("sttModelId").ifBlank { null },
                 )
             }
 
@@ -127,52 +174,70 @@ class TranscriptionCheckpoint(private val file: File) {
                 )
             }
 
-            root.optJSONObject("diarisation")?.let { d ->
-                val turns = mutableListOf<SpeakerTurn>()
-                val turnsJson = d.optJSONArray("turns") ?: JSONArray()
-                for (i in 0 until turnsJson.length()) {
-                    val t = turnsJson.getJSONObject(i)
-                    turns += SpeakerTurn(
-                        range = t.getInt("from") until t.getInt("until"),
-                        cluster = t.getInt("cluster"),
-                    )
-                }
-
-                val labels = mutableMapOf<Int, String>()
-                val labelsJson = d.optJSONObject("labels") ?: JSONObject()
-                labelsJson.keys().forEach { key ->
-                    key.toIntOrNull()?.let { labels[it] = labelsJson.getString(key) }
-                }
-
-                diarisation = Diarisation(turns, labels)
+            root.optJSONObject("speech")?.let { s ->
+                speech = SpeechActivity(
+                    ran = s.optBoolean("ran", false),
+                    // Absent means "ran, but found no useful restriction" -- transcribe everything.
+                    regions = if (s.has("regions")) {
+                        MarkerCodec.decodeRanges(s.optString("regions"))
+                    } else {
+                        null
+                    },
+                )
             }
         }.onFailure {
             // A half-written checkpoint is worth exactly nothing and must not be trusted.
             done = mutableListOf()
-            diarisation = null
+            speech = null
         }
     }
 
-    fun requestOrNull(): Request? = request
+    fun requestOrNull(): Request? {
+        ensureLoaded()
+        return request
+    }
 
     /** Written by the recorder before the job is enqueued, so the job never owns the only copy. */
     fun recordRequest(request: Request) {
+        ensureLoaded()
         this.request = request
         persist()
     }
 
-    fun diarisationResult(): Diarisation? = diarisation
+    fun speechActivity(): SpeechActivity? {
+        ensureLoaded()
+        return speech
+    }
 
-    fun recordDiarisation(turns: List<SpeakerTurn>, labels: Map<Int, String>) {
-        diarisation = Diarisation(turns, labels)
+    fun recordSpeechActivity(regions: List<IntRange>?) {
+        ensureLoaded()
+        speech = SpeechActivity(ran = true, regions = regions)
+        persist()
+    }
+
+    /**
+     * Forgets the speech-activity result while keeping everything else.
+     *
+     * Exists for the retry path. The regions are checkpointed for resume-correctness, but that
+     * makes a *wrong* VAD verdict permanent: a quiet recording judged all-silence fails with
+     * "Nothing was recognised. Try again", and the retry loaded the very regions that produced the
+     * failure -- so the button could never succeed. Clearing only this entry lets the retry hear
+     * the audio afresh while the slices already transcribed still resume.
+     */
+    fun clearSpeechActivity() {
+        ensureLoaded()
+        speech = null
         persist()
     }
 
     /** The transcription already done for this exact slice, if any. */
-    fun textFor(range: IntRange): Done? =
-        done.firstOrNull { it.from == range.first && it.until == range.last + 1 }
+    fun textFor(range: IntRange): Done? {
+        ensureLoaded()
+        return done.firstOrNull { it.from == range.first && it.until == range.last + 1 }
+    }
 
     fun record(range: IntRange, text: String, language: String?) {
+        ensureLoaded()
         done.removeAll { it.from == range.first && it.until == range.last + 1 }
         done += Done(range.first, range.last + 1, text, language)
         persist()
@@ -192,7 +257,8 @@ class TranscriptionCheckpoint(private val file: File) {
                     JSONObject()
                         .put("markers", MarkerCodec.encodeMarkers(r.markers))
                         .put("excluded", MarkerCodec.encodeRanges(r.excludedRanges))
-                        .put("expectedSpeakers", r.expectedSpeakers),
+                        .put("sttBackend", r.sttBackend.slug)
+                        .put("sttModelId", r.sttModelId ?: ""),
                 )
             }
 
@@ -211,29 +277,16 @@ class TranscriptionCheckpoint(private val file: File) {
                 },
             )
 
-            diarisation?.let { d ->
+            speech?.let { s ->
                 root.put(
-                    "diarisation",
+                    "speech",
                     JSONObject()
-                        .put(
-                            "turns",
-                            JSONArray().apply {
-                                d.turns.forEach { turn ->
-                                    put(
-                                        JSONObject()
-                                            .put("from", turn.range.first)
-                                            .put("until", turn.range.last + 1)
-                                            .put("cluster", turn.cluster),
-                                    )
-                                }
-                            },
-                        )
-                        .put(
-                            "labels",
-                            JSONObject().apply {
-                                d.labels.forEach { (cluster, name) -> put(cluster.toString(), name) }
-                            },
-                        ),
+                        .put("ran", s.ran)
+                        .apply {
+                            // Only written when there is a restriction. Absent is meaningful --
+                            // see [SpeechActivity] -- so an empty string must not stand in for it.
+                            s.regions?.let { put("regions", MarkerCodec.encodeRanges(it)) }
+                        },
                 )
             }
 
