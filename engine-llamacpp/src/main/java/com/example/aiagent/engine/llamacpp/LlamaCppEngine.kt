@@ -84,13 +84,17 @@ class LlamaCppEngine : InferenceEngine {
         val accelerator: Accelerator,
         val sampling: SamplingParams,
     ) {
-        constructor(request: LoadRequest, accelerator: Accelerator) : this(
+        constructor(request: LoadRequest) : this(
             modelPath = request.modelPath,
             contextTokens = request.contextTokens,
             threadCount = request.threadCount,
-            // What was actually used: a GPU request that fell back to the CPU is served by the
-            // resident CPU session, and re-running the ladder would only fall back again.
-            accelerator = accelerator,
+            // What was ASKED FOR, not what the ladder settled on. Both readings serve a GPU request
+            // that fell back to the CPU -- the next GPU request builds the same key and reuses the
+            // resident CPU session -- but only this one still notices the user changing the setting.
+            // Keying on the accelerator in use made the field self-comparing: it was read off the
+            // resident session on both sides, so it always matched, and switching GPU to CPU
+            // silently kept the GPU session.
+            accelerator = request.accelerator,
             // Sampling is baked into the session here, unlike LiteRT-LM where it is per
             // conversation -- so a changed temperature really does need a new one.
             sampling = request.sampling.copy(maxOutputTokens = 0, stopSequences = emptyList()),
@@ -136,8 +140,8 @@ class LlamaCppEngine : InferenceEngine {
      */
     private fun reuseResidentSession(request: LoadRequest): Boolean {
         if (handle == 0L) return false
-        val accelerator = activeAccelerator ?: return false
-        if (residentKey != SessionKey(request, accelerator)) return false
+        if (activeAccelerator == null) return false
+        if (residentKey != SessionKey(request)) return false
 
         systemPrompt = request.systemPrompt
         maxOutputTokens = request.sampling.maxOutputTokens
@@ -157,7 +161,6 @@ class LlamaCppEngine : InferenceEngine {
 
         lifecycleLock.withLock {
             if (reuseResidentSession(request)) return@withLock
-
             unloadLocked()
 
             // Only try the GPU if one was actually enumerated. NPU falls to GPU, GPU falls to CPU:
@@ -203,7 +206,7 @@ class LlamaCppEngine : InferenceEngine {
                     request.initialHistory.forEach { transcript += ChatTurn(it.role, it.content) }
                     loadedModelPath = request.modelPath
                     activeAccelerator = accelerator
-                    residentKey = SessionKey(request, accelerator)
+                    residentKey = SessionKey(request)
                     if (accelerator == Accelerator.CPU && wantsGpu) {
                         Log.w(TAG, "GPU offload failed for this model, fell back to CPU")
                     }
@@ -302,6 +305,28 @@ class LlamaCppEngine : InferenceEngine {
      * loop ends the turn the same way an end-of-sequence token would. Nothing throws.
      */
     override val supportsMidTurnCancel: Boolean get() = true
+
+    override val supportsGrammar: Boolean get() = true
+
+    /**
+     * Rebuilds the sampler chain with (or without) the grammar at its head.
+     *
+     * Under [lifecycleLock] like every other native call that mutates the session: the chain is
+     * swapped out from under whatever might be decoding, and a decode loop holding a freed sampler
+     * is a crash rather than a wrong answer.
+     */
+    override suspend fun setGrammar(grammar: String?, triggerPattern: String?): Boolean =
+        withContext(Dispatchers.IO) {
+            lifecycleLock.withLock {
+                val session = handle
+                if (session == 0L) return@withLock false
+                LlamaNative.nativeSetGrammar(session, grammar, triggerPattern).also { applied ->
+                    if (grammar != null && !applied) {
+                        Log.w(TAG, "grammar rejected; this turn decodes unconstrained")
+                    }
+                }
+            }
+        }
 
     override suspend fun resetConversation() = withContext(Dispatchers.IO) {
         lifecycleLock.withLock {

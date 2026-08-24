@@ -112,8 +112,9 @@ class VoiceCommandMatcherTest {
 
     @Test
     fun `strips a german command with umlauts`() {
-        // \b in Java regex is ASCII unless (?U) is set; without it the boundary misfires on "Öffne"
-        // and the spoken command would stay in the saved note.
+        // \b in Java regex is ASCII unless (?U) is set; Android's ICU regex engine does not
+        // support that flag, so we use lookarounds over a Unicode character class to ensure
+        // the boundary does not misfire on "Öffne".
         val result = stripCommandPhrases(
             "Notiere Milch kaufen. Öffne Einstellungen.",
             listOf("öffne einstellungen"),

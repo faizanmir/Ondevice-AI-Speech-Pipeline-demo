@@ -25,6 +25,14 @@ data class EngineDescriptor(
      * it must not do both, or the model is told about its tools twice in two different languages.
      */
     val supportsNativeTools: Boolean = false,
+    /**
+     * The runtime can be handed audio as well as text, through [AudioInputEngine].
+     *
+     * Distinct from [supportsVision]: they are separate encoders in the model and separate call
+     * paths in the runtime, and a build can have one without the other. Whether a *model* can hear
+     * is a separate question again -- see `ModelSpec.audioInput`. Both have to be true.
+     */
+    val supportsAudioInput: Boolean = false,
     val blurb: String,
 ) {
     fun canLoad(format: ModelFormat): Boolean = format in supportedFormats
@@ -120,6 +128,20 @@ data class LoadRequest(
      * same model loaded without them, and the warm-handoff comparison should say so.
      */
     val tools: List<ToolDefinition> = emptyList(),
+    /**
+     * Load the model's audio encoder as well as its text decoder.
+     *
+     * Off by default because it is not free: it is a second executor with its own weights, and a
+     * chat that will only ever send text should not pay for it. But it has to be decided *here*,
+     * at load time -- LiteRT-LM builds its audio executor from the engine config, and a model
+     * loaded without one rejects audio at generation time with "Audio executor should not be null"
+     * rather than loading it on demand.
+     *
+     * Part of the request, so it takes part in request equality: a model resident for chat is
+     * genuinely not interchangeable with the same model resident for transcription, and the warm
+     * handoff has to reload rather than hand back an engine that cannot hear.
+     */
+    val audioInput: Boolean = false,
 ) {
     companion object {
         /** Sentinel for [threadCount]: let the engine decide. */
@@ -146,6 +168,11 @@ data class GenerationStats(
      * wall-clock timing wrongly attributes to the model.
      */
     val reportedTokensPerSecond: Double? = null,
+    /**
+     * Prefill speed as measured by the runtime itself, on the same terms as
+     * [reportedTokensPerSecond]: LiteRT-LM reports it, llama.cpp does not.
+     */
+    val reportedPrefillTokensPerSecond: Double? = null,
 ) {
     /** Decode speed, excluding prefill -- the number users actually compare between models. */
     val tokensPerSecond: Double
@@ -153,6 +180,23 @@ data class GenerationStats(
             val decodeMs = totalMs - timeToFirstTokenMs
             if (decodeMs <= 0 || generatedTokens <= 0) 0.0
             else generatedTokens * 1000.0 / decodeMs
+        }
+
+    /**
+     * Prefill speed: how fast the prompt was read before the first token came back. The other half
+     * of [tokensPerSecond], and the half that decides what a long fixed preamble costs -- decode
+     * scales with what the model says, prefill with what it is handed.
+     *
+     * The wall-clock fallback divides the WHOLE prompt by time to first token, which is the true
+     * rate on an engine that decodes every prompt from scratch and a flattering one on an engine
+     * that reuses a shared prefix (llama.cpp reports the prompt's full length, not the suffix it
+     * actually ingested). That is deliberate: read as an effective rate, a jump between the first
+     * turn and the rest is exactly the signal that prefix reuse is live.
+     */
+    val prefillTokensPerSecond: Double
+        get() = reportedPrefillTokensPerSecond ?: run {
+            if (timeToFirstTokenMs <= 0 || promptTokens <= 0) 0.0
+            else promptTokens * 1000.0 / timeToFirstTokenMs
         }
 }
 
@@ -222,6 +266,78 @@ interface InferenceEngine {
      * runtime has no safe interruptible cancel" is the assumption that cannot break anything.
      */
     val supportsMidTurnCancel: Boolean get() = false
+
+    /**
+     * Whether [setGrammar] does anything on this engine.
+     *
+     * llama.cpp can: a GBNF grammar is a sampler in its decode chain.
+     *
+     * LiteRT-LM answers false, and the reason is narrower than "it cannot constrain output" -- it
+     * very much can. The runtime embeds LLGuidance, which takes a Lark grammar, a JSON Schema or a
+     * regex, and `ExperimentalFlags.enableConversationConstrainedDecoding` switches it on. What 0.14
+     * does not expose is a way to hand it a grammar *directly*: the only public route is a tool
+     * description, so the constraint arrives as a JSON Schema on a declared tool rather than as a
+     * grammar over free text. That is a different shape of answer, not a different amount of
+     * enforcement, so it belongs behind its own call and not behind this one. See
+     * AuditRecordGrammar for what a GBNF path buys and what it does not.
+     */
+    val supportsGrammar: Boolean get() = false
+
+    /**
+     * Constrains decoding to [grammar] (GBNF), or lifts the constraint when it is null. Returns
+     * false when the engine cannot do it or the grammar does not parse; the caller's prompt has to
+     * stand on its own either way.
+     *
+     * A grammar costs nothing in the prompt -- it is a decoder constraint, not text -- so it is the
+     * one way to make output *shape* free. It says nothing about content: a constrained model can
+     * still report no findings, so the instructions that decide what gets found stay where they are.
+     *
+     * [triggerPattern] leaves generation unconstrained until the regex matches, then applies the
+     * grammar from its first capture group. Without one the very first token is constrained, which
+     * forbids a reasoning block and any plain-text working the prompt asked for.
+     *
+     * Outlives a turn: it stays in force until changed, so a caller that sets one is responsible for
+     * clearing it before asking the same engine for prose.
+     */
+    suspend fun setGrammar(grammar: String?, triggerPattern: String? = null): Boolean = false
+
+    /**
+     * Whether [setResponseSchema] does anything. LiteRT-LM only: see [supportsGrammar] for why the
+     * two capabilities are separate rather than one.
+     */
+    val supportsResponseSchema: Boolean get() = false
+
+    /**
+     * Constrains the next replies to a JSON Schema, or lifts the constraint when [schema] is null.
+     * Returns false when the engine cannot do it.
+     *
+     * The reply arrives as ordinary text: whatever shape the runtime uses to carry a schema-bound
+     * answer, the engine renders its arguments back into the JSON object the schema describes, so a
+     * caller collects a JSON document exactly as it would collect prose.
+     *
+     * Unlike [setGrammar] this changes the *shape* of the answer, not just its guarantees -- a
+     * caller must ask for JSON in its prompt to match. The two are therefore never both in force,
+     * and a caller picks whichever its engine supports.
+     *
+     * Not free, unlike a grammar: the schema is prefilled with the prompt, so it is charged against
+     * the context window of every turn it applies to.
+     */
+    suspend fun setResponseSchema(schema: String?): Boolean = false
+
+    /**
+     * Whether the LAST reply actually came back through the schema machinery, rather than as
+     * ordinary text a model happened to write.
+     *
+     * [setResponseSchema] can only report that the schema was *declared*. Whether it then binds is
+     * decided inside the runtime and can fail silently -- LiteRT-LM supports constrained decoding
+     * for SentencePiece tokenizers only, and on a BPE model it accepts the schema and enforces
+     * nothing. A caller that trusted the declaration would be asking for the format with the least
+     * tolerance for a mistake while getting none of the enforcement that justified it.
+     *
+     * So this reports what was observed, not what was requested, and is only meaningful after a turn
+     * has completed.
+     */
+    val lastReplyWasSchemaBound: Boolean get() = false
 
     /** Drops conversation history but keeps the model resident. */
     suspend fun resetConversation()

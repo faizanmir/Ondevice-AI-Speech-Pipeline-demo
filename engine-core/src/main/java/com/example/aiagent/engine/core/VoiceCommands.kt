@@ -1,5 +1,7 @@
 package com.example.aiagent.engine.core
 
+import java.util.regex.Pattern
+
 /**
  * Lowercase, drop everything but letters/digits/spaces, collapse runs of space.
  *
@@ -119,9 +121,25 @@ fun stripCommandPhrases(transcript: String, phrases: Collection<String>): String
     for (phrase in phrases) {
         if (phrase.isBlank()) continue
         // Optional leading space and trailing punctuation are consumed with the phrase, so removing
-        // it does not leave "Sam.  ." behind. (?U) makes \b Unicode-aware; without it the boundary
-        // misfires on phrases that start or end with a non-ASCII letter, like "öffne".
-        val pattern = Regex("(?iU)\\s*\\b" + Regex.escape(phrase) + "\\b[.,!?;:]*")
+        // it does not leave "Sam.  ." behind.
+        //
+        // Everything Unicode-related here is expressed as lookarounds and *flag constants*, never
+        // as inline flag syntax, and that is a portability rule learned the hard way: `(?U)` is a
+        // JVM-only extension, and Android's regex engine is ICU, which throws
+        // PatternSyntaxException on it when the pattern compiles. The same mistake in the benchmark
+        // scorer killed a device run while every JVM test passed, because the JVM accepts it.
+        //
+        // The two things `(?U)` was doing both have to be replaced, not just the first:
+        //  - Unicode word boundaries, so `\b` does not misfire on a phrase starting or ending with
+        //    a non-ASCII letter like "öffne" -- hence the explicit word class below.
+        //  - Unicode *case* folding, which UNICODE_CHARACTER_CLASS implies. Plain CASE_INSENSITIVE
+        //    is ASCII-only on the JVM, so without UNICODE_CASE the spoken "öffne einstellungen"
+        //    fails to match the transcript's "Öffne Einstellungen" and the command stays in the note.
+        val wordChar = """[\p{L}\p{N}_]"""
+        val pattern = Pattern.compile(
+            """\s*(?<!$wordChar)""" + Regex.escape(phrase) + """(?!$wordChar)[.,!?;:]*""",
+            Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE,
+        ).toRegex()
         result = result.replace(pattern, "")
     }
 

@@ -49,6 +49,14 @@ struct LlamaSession {
     // cache is still valid -- decode only ever runs on the suffix that actually changed.
     std::vector<llama_token> cache_tokens;
 
+    // The sampling settings the chain was built from, kept so it can be rebuilt when a grammar is
+    // set or cleared. A chain cannot have a sampler inserted at its head after the fact, and the
+    // grammar has to sit there -- see build_sampler.
+    float temperature = 0.0f;
+    int32_t top_k = 0;
+    float top_p = 0.0f;
+    uint32_t seed = 0;
+
     std::atomic<bool> cancelled{false};
 
     // llama.cpp emits pieces as raw bytes, and one multi-byte UTF-8 codepoint (an emoji, a CJK
@@ -59,6 +67,40 @@ struct LlamaSession {
 
 LlamaSession *as_session(jlong handle) {
     return reinterpret_cast<LlamaSession *>(handle);
+}
+
+/**
+ * Builds the sampler chain from a session's settings, optionally constrained by `grammar`.
+ *
+ * Order matters, and the grammar's place in it is the whole point: it goes FIRST, so it masks every
+ * token the format forbids and everything after it -- penalties, truncation, temperature -- chooses
+ * among what is left. The other way round, a top-k cut or a repetition penalty would be spending its
+ * decision on tokens the grammar was about to reject anyway, and on a narrow rule (a field name, one
+ * of five result words) that is most of the candidate set.
+ *
+ * The chain takes ownership of `grammar`, as it does of every sampler added to it.
+ */
+llama_sampler *build_sampler(const LlamaSession *session, llama_sampler *grammar) {
+    llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
+    sparams.no_perf = true;
+    llama_sampler *chain = llama_sampler_chain_init(sparams);
+    if (chain == nullptr) return nullptr;
+
+    if (grammar != nullptr) llama_sampler_chain_add(chain, grammar);
+
+    llama_sampler_chain_add(chain, llama_sampler_init_penalties(
+            /*penalty_last_n=*/64, /*penalty_repeat=*/1.1f,
+            /*penalty_freq=*/0.0f, /*penalty_present=*/0.0f));
+
+    if (session->temperature <= 0.0f) {
+        llama_sampler_chain_add(chain, llama_sampler_init_greedy());
+    } else {
+        llama_sampler_chain_add(chain, llama_sampler_init_top_k(session->top_k));
+        llama_sampler_chain_add(chain, llama_sampler_init_top_p(session->top_p, /*min_keep=*/1));
+        llama_sampler_chain_add(chain, llama_sampler_init_temp(session->temperature));
+        llama_sampler_chain_add(chain, llama_sampler_init_dist(session->seed));
+    }
+    return chain;
 }
 
 /**
@@ -234,30 +276,18 @@ Java_com_example_aiagent_engine_llamacpp_LlamaNative_nativeCreateSession(
         return 0;
     }
 
-    llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
-    sparams.no_perf = true;
-    llama_sampler *sampler = llama_sampler_chain_init(sparams);
-
-    // Order matters: penalties and truncation first, then temperature, then exactly one selector
-    // at the tail. llama_sampler_sample() runs the chain and accepts the winning token itself.
-    llama_sampler_chain_add(sampler, llama_sampler_init_penalties(
-            /*penalty_last_n=*/64, /*penalty_repeat=*/1.1f,
-            /*penalty_freq=*/0.0f, /*penalty_present=*/0.0f));
-
-    if (temperature <= 0.0f) {
-        llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
-    } else {
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(top_k));
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(top_p, /*min_keep=*/1));
-        llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
-        llama_sampler_chain_add(sampler, llama_sampler_init_dist(static_cast<uint32_t>(seed)));
-    }
-
     auto *session = new LlamaSession();
     session->model = model;
     session->ctx = ctx;
-    session->sampler = sampler;
     session->vocab = llama_model_get_vocab(model);
+    // Recorded before the chain is built, because build_sampler reads them -- and because
+    // nativeSetGrammar rebuilds the chain later from these same values.
+    session->temperature = temperature;
+    session->top_k = top_k;
+    session->top_p = top_p;
+    session->seed = static_cast<uint32_t>(seed);
+    // llama_sampler_sample() runs the chain and accepts the winning token itself.
+    session->sampler = build_sampler(session, /*grammar=*/nullptr);
     session->n_ctx = static_cast<int32_t>(llama_n_ctx(ctx));
     session->n_batch = static_cast<int32_t>(cparams.n_batch);
 
@@ -461,6 +491,64 @@ Java_com_example_aiagent_engine_llamacpp_LlamaNative_nativeNextToken(
     session->cache_tokens.push_back(token);
 
     return emit;
+}
+
+/**
+ * Constrains decoding to a GBNF grammar, or lifts the constraint when `grammar` is null.
+ *
+ * A grammar costs nothing in the prompt -- it is a sampler, not text -- which is the whole reason to
+ * prefer it to teaching a format by example. What it buys is that a malformed reply becomes
+ * impossible rather than unlikely. It does NOT bound length: a grammar with a repeated rule still
+ * lets a model repeat that rule forever, so the caller's token and time caps are still the only
+ * thing standing between this and a runaway. What changes is what a runaway leaves behind -- output
+ * that is still well-formed up to the cut, rather than garbage.
+ *
+ * `trigger_pattern` makes the grammar LAZY: generation runs free until the pattern matches, and the
+ * grammar takes over from the start of the pattern's first capture group. That is what lets a model
+ * think and draft in plain text before it answers -- constraining from the first token would forbid
+ * the reasoning block and the findings draft, both of which exist to protect recall.
+ *
+ * Returns false and leaves the sampler exactly as it was if the grammar does not parse. A build that
+ * silently dropped a malformed grammar would look like it was constraining output when it was not,
+ * and the difference is invisible until a section comes back unreadable.
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_example_aiagent_engine_llamacpp_LlamaNative_nativeSetGrammar(
+        JNIEnv *env, jobject, jlong handle, jstring grammar, jstring trigger_pattern) {
+
+    LlamaSession *session = as_session(handle);
+    if (session == nullptr) return JNI_FALSE;
+
+    llama_sampler *constraint = nullptr;
+    if (grammar != nullptr) {
+        const std::string source = jstring_to_std(env, grammar);
+        if (!source.empty()) {
+            if (trigger_pattern != nullptr) {
+                const std::string pattern = jstring_to_std(env, trigger_pattern);
+                const char *patterns[] = {pattern.c_str()};
+                constraint = llama_sampler_init_grammar_lazy_patterns(
+                        session->vocab, source.c_str(), "root",
+                        patterns, 1, /*trigger_tokens=*/nullptr, 0);
+            } else {
+                constraint = llama_sampler_init_grammar(session->vocab, source.c_str(), "root");
+            }
+            if (constraint == nullptr) {
+                LOGE("grammar failed to parse; sampler left unconstrained");
+                return JNI_FALSE;
+            }
+        }
+    }
+
+    llama_sampler *chain = build_sampler(session, constraint);
+    if (chain == nullptr) {
+        if (constraint != nullptr) llama_sampler_free(constraint);
+        return JNI_FALSE;
+    }
+    // Only now is the old chain released: until the replacement exists there is nothing to fall
+    // back to, and a session without a sampler cannot decode at all.
+    if (session->sampler != nullptr) llama_sampler_free(session->sampler);
+    session->sampler = chain;
+    return JNI_TRUE;
 }
 
 JNIEXPORT void JNICALL

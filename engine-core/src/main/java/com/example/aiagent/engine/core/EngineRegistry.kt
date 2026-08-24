@@ -20,6 +20,18 @@ class EngineRegistry(private val engines: List<InferenceEngine>) {
             "${unrunnable.joinToString { it.descriptor.displayName }} declares native tool " +
                 "support but does not implement NativeToolEngine, so its tool calls could never run"
         }
+
+        // The same trap one modality over, and a worse one to debug: an engine that advertises audio
+        // but cannot be given any would be picked to transcribe a recording, hear nothing, and
+        // return whatever a model says when asked to transcribe silence -- a plausible-looking
+        // transcript of an empty room. Caught here rather than in a voice note.
+        val deaf = engines.filter {
+            it.descriptor.supportsAudioInput && it !is AudioInputEngine
+        }
+        require(deaf.isEmpty()) {
+            "${deaf.joinToString { it.descriptor.displayName }} declares audio input but does not " +
+                "implement AudioInputEngine, so audio handed to it would be silently dropped"
+        }
     }
 
     val all: List<InferenceEngine> get() = engines

@@ -121,6 +121,20 @@ data class ModelSpec(
     val minDeviceMemoryGb: Int,
     val accelerators: Set<Accelerator>,
     val multimodal: Boolean = false,
+    /**
+     * The model has an audio encoder, so it can be handed a recording and asked about it.
+     *
+     * Narrower than [multimodal], which in this catalogue has always meant "sees images" and is
+     * rendered as a Vision tag. The two are separate encoders and a model can ship one without the
+     * other, so transcription asks this question rather than reading across from that one.
+     *
+     * Null means "work it out from the name" ([AudioSupport]), exactly as [supportsToolCalling]
+     * does, and for the same reason: it is the only option for a model the user added from
+     * HuggingFace. This was a plain `false` default at first, which quietly made every
+     * user-added model text-only forever -- including the audio-capable Gemma build that a device
+     * already had on disk while the record screen insisted nothing could listen.
+     */
+    val audioInput: Boolean? = null,
     val license: String,
     val description: String,
     /** True for models the user added themselves, as opposed to the built-in catalogue. */
@@ -164,6 +178,13 @@ data class ModelSpec(
     /** Can this model actually run app functions? */
     val canCallTools: Boolean
         get() = supportsToolCalling ?: ToolCallingSupport.infer(name, id, paramsBillions)
+
+    /**
+     * Can this model be handed a recording? Read this rather than [audioInput], which is only the
+     * curated answer and is null for everything the user added themselves.
+     */
+    val hearsAudio: Boolean
+        get() = audioInput ?: AudioSupport.infer(name, id, repoId)
     val sizeGb: Double get() = sizeBytes / BYTES_PER_GB
 
     /**
