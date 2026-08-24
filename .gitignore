@@ -1,12 +1,6 @@
 *.iml
 .gradle
 /local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
 .DS_Store
 build/
 /captures
@@ -21,12 +15,15 @@ local.properties
 
 # Generated knowledge graph (~99 MB); rebuilt by /graphify, never reviewed as source.
 graphify-out/
-/.idea/appInsightsSettings.xml
-/.idea/markdown.xml
-/.idea/planningMode.xml
 
 # Per-developer Claude Code permission state.
 /.claude/settings.local.json
 
 __pycache__/
 *.pyc
+
+# Android Studio's project files. Nine of these were ignored piecemeal and twelve more were
+# tracked, which is the worst of both: every developer's device selection, inspection profile and
+# bot settings arrived as a diff, and the ignore list still needed a new line each time the IDE
+# invented a file. The whole directory is IDE state, regenerated on any checkout.
+.idea/
