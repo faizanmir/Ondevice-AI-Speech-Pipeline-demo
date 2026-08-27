@@ -202,7 +202,7 @@
         </tr>
       </tbody>
     </table>
-    <p style="margin-top:1.4mm"><b>Everything runs on the CPU.</b> The speech library ships prebuilt with ONNX Runtime compiled in, and the copy shipped for 64-bit ARM contains 172 references to the CPU execution provider and none at all to XNNPACK, NNAPI or QNN.</p>
+    <p style="margin-top:1.4mm"><b>The CPU, now through XNNPACK.</b> No GPU or NPU path &mdash; the models are dynamically int8-quantised, a CPU strength. XNNPACK, ONNX Runtime's ARM int8 kernels, is compiled in alongside NNAPI and QNN and is now the default provider: faster on the recogniser, about 3% on the embeddings. An earlier note read the library as CPU-only; running provider=xnnpack on both tablets showed otherwise.</p>
   </div>
 
   <div class="col">
@@ -313,6 +313,14 @@
   <div class="note">
     <h3>Reading the mean</h3>
     <p>The mean is unweighted across ten runs differing in device, language and purpose, so it summarises this table rather than stating a headline figure. Turn accuracy is pooled, 254 correct of 336.</p>
+  </div>
+  <div class="note">
+    <h3>Added: a faster recogniser (27 Aug)</h3>
+    <p>NeMo FastConformer, 105 MB, en/de/es/fr, same word timings as Parakeet. On the German file it scored 2.47% WER against Parakeet's 2.5% and transcribed about 3&times; faster (114.7&rarr;38.9 s on 20 min). With the two branches run at once, folding and naming sharing one embedding pass, two chunks diarised in parallel and the XNNPACK default, the whole speaker job on 20 min fell from ~115 s to 55, every accuracy figure unchanged.</p>
+  </div>
+  <div class="note">
+    <h3>CAM++, and the ceiling that holds</h3>
+    <p>A faster voiceprint model (CAM++, 192-dim vs ERes2Net's 512, ~2.8&times; quicker) was added. It separates the two men <i>less</i> well: enrolled from their own voices they scored 0.932 and 0.929 against one cluster, so only one was named &mdash; 59%, where ERes2Net reaches the 98.2% in the table. A man&ndash;woman pair separates under either: both named, 0.5 margin, 99.8%. Enrolment names; it cannot separate what clustering could not.</p>
   </div>
 </div>
 

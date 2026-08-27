@@ -2,582 +2,450 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<title>Diarisation Pipeline</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Who Said What — the speaker attribution pipeline</title>
-<meta name="description" content="Step-by-step reference for the on-device speaker attribution pipeline, with file:line anchors and real benchmark data.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=JetBrains+Mono:wght@400;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 
 <style>
   :root {
-    --paper:      #f6f7f4;
-    --raise:      #ffffff;
-    --ink:        #151a1f;
-    --ink-soft:   #4c565e;
-    --ink-faint:  #79848b;
-    --rule:       #d8ded9;
-    --rule-soft:  #e8ece7;
-    --voice-a:    #226354;
-    --voice-a-bg: #dfeee9;
-    --voice-b:    #6d3a63;
-    --voice-b-bg: #eee0ec;
-    --signal:     #9a6a12;
-    --signal-bg:  #f6ebd5;
-    --unattr:     #79848b;
+    --bg: #e9edf1;
+    --surface: #ffffff;
+    --surface-2: #f3f6f8;
+    --ink: #111820;
+    --ink-2: #4a5763;
+    --ink-3: #74828e;
+    --line: #d4dce2;
+    --line-strong: #bcc7cf;
 
-    --display: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
-    --body:    "Newsreader", Georgia, "Times New Roman", serif;
-    --mono:    "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    --accent: #c9761f;
+    --accent-ink: #1d1305;
 
-    --measure: 66ch;
-    --step:    clamp(1rem, 0.6rem + 1.2vw, 1.5rem);
+    --diar-line: #5b63d3;
+    --diar-fill: #edeffb;
+    --tx-line: #0d8f83;
+    --tx-fill: #e4f2f0;
+
+    --box-fill: var(--surface-2);
+    --box-line: var(--line-strong);
+
+    --font-display: 'Archivo', system-ui, -apple-system, sans-serif;
+    --font-body: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+    --maxw: 1080px;
   }
 
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --paper:      #10141a;
-      --raise:      #171d25;
-      --ink:        #e6eae8;
-      --ink-soft:   #a3aeb5;
-      --ink-faint:  #74808a;
-      --rule:       #2a333d;
-      --rule-soft:  #1e262f;
-      --voice-a:    #5fbfa6;
-      --voice-a-bg: #17322c;
-      --voice-b:    #c58ab8;
-      --voice-b-bg: #2f2130;
-      --signal:     #d9a850;
-      --signal-bg:  #322817;
-      --unattr:     #74808a;
+      --bg: #0c1116;
+      --surface: #131b22;
+      --surface-2: #18222b;
+      --ink: #e8eef3;
+      --ink-2: #98a8b5;
+      --ink-3: #6d7d8a;
+      --line: #26313b;
+      --line-strong: #33404b;
+      --accent: #eba24e;
+      --accent-ink: #1a1204;
+      --diar-line: #8f97ee;
+      --diar-fill: #1a2042;
+      --tx-line: #2bb8a8;
+      --tx-fill: #0f2f2c;
+      --box-fill: #18222b;
+      --box-line: #33404b;
     }
   }
+
   :root[data-theme="dark"] {
-    --paper:      #10141a;
-    --raise:      #171d25;
-    --ink:        #e6eae8;
-    --ink-soft:   #a3aeb5;
-    --ink-faint:  #74808a;
-    --rule:       #2a333d;
-    --rule-soft:  #1e262f;
-    --voice-a:    #5fbfa6;
-    --voice-a-bg: #17322c;
-    --voice-b:    #c58ab8;
-    --voice-b-bg: #2f2130;
-    --signal:     #d9a850;
-    --signal-bg:  #322817;
-    --unattr:     #74808a;
+    --bg: #0c1116;
+    --surface: #131b22;
+    --surface-2: #18222b;
+    --ink: #e8eef3;
+    --ink-2: #98a8b5;
+    --ink-3: #6d7d8a;
+    --line: #26313b;
+    --line-strong: #33404b;
+
+    --accent: #eba24e;
+    --accent-ink: #1a1204;
+
+    --diar-line: #8f97ee;
+    --diar-fill: #1a2042;
+    --tx-line: #2bb8a8;
+    --tx-fill: #0f2f2c;
+
+    --box-fill: #18222b;
+    --box-line: #33404b;
   }
 
   * { box-sizing: border-box; }
 
   body {
     margin: 0;
-    background: var(--paper);
+    background: var(--bg);
     color: var(--ink);
-    font-family: var(--body);
-    font-size: 1.0625rem;
-    line-height: 1.62;
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.6;
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
 
   .wrap {
-    max-width: 78rem;
+    max-width: var(--maxw);
     margin: 0 auto;
-    padding: clamp(2rem, 5vw, 4.5rem) clamp(1.1rem, 4vw, 3rem) 6rem;
+    padding: clamp(28px, 5vw, 64px) clamp(18px, 4vw, 40px) 72px;
   }
 
-  /* ---- masthead ---------------------------------------------------- */
-  .mast { display: flex; flex-direction: column; gap: 1.1rem; padding-bottom: 2.2rem;
-          border-bottom: 2px solid var(--ink); }
-  .eyebrow { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.16em;
-             text-transform: uppercase; color: var(--ink-faint); }
-  h1 { font-family: var(--display); font-weight: 700; font-size: clamp(2.6rem, 7vw, 5rem);
-       line-height: 0.98; letter-spacing: -0.025em; margin: 0; text-wrap: balance; }
-  .standfirst { font-size: clamp(1.05rem, 0.95rem + 0.5vw, 1.3rem); color: var(--ink-soft);
-                max-width: var(--measure); margin: 0; }
-  .standfirst em { font-style: italic; color: var(--ink); }
-
-  /* ---- sections ---------------------------------------------------- */
-  section { margin-top: clamp(3rem, 7vw, 5rem); }
-  h2 { font-family: var(--display); font-weight: 700; font-size: clamp(1.5rem, 1.1rem + 1.4vw, 2.1rem);
-       letter-spacing: -0.018em; margin: 0 0 0.5rem; text-wrap: balance; }
-  h3 { font-family: var(--display); font-weight: 600; font-size: 1.05rem; letter-spacing: -0.005em;
-       margin: 0; }
-  .lede { color: var(--ink-soft); max-width: var(--measure); margin: 0 0 1.6rem; }
-  p { max-width: var(--measure); }
-
-  /* ---- pipeline spine ---------------------------------------------- */
-  .spine { display: flex; flex-direction: column; gap: 1.1rem; margin-top: 2rem; }
-
-  .stage {
-    display: grid;
-    grid-template-columns: 3.4rem minmax(0, 1fr);
-    gap: 0 1.3rem;
-    background: var(--raise);
-    border: 1px solid var(--rule);
-    border-left: 3px solid var(--ink);
-    padding: 1.3rem 1.4rem;
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 14px;
   }
-  .stage[data-lane="diarise"]   { border-left-color: var(--voice-a); }
-  .stage[data-lane="transcribe"]{ border-left-color: var(--voice-b); }
-  .stage[data-lane="join"]      { border-left-color: var(--ink); }
 
-  .num { font-family: var(--mono); font-size: 1.5rem; font-weight: 600; color: var(--ink-faint);
-         line-height: 1; font-variant-numeric: tabular-nums; }
-  .stage-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 0.8rem;
-                margin-bottom: 0.55rem; }
-  .where { font-family: var(--mono); font-size: 0.76rem; color: var(--ink-faint); }
-  .where a { color: inherit; text-decoration-color: var(--rule); }
-  .stage p { margin: 0 0 0.7rem; }
-  .stage p:last-child { margin-bottom: 0; }
+  h1 {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: clamp(30px, 5.4vw, 50px);
+    line-height: 1.04;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+    margin: 0 0 16px;
+  }
 
-  .sig { font-family: var(--mono); font-size: 0.78rem; line-height: 1.75; background: var(--rule-soft);
-         border: 1px solid var(--rule); padding: 0.6rem 0.8rem; margin: 0 0 0.8rem;
-         overflow-x: auto; white-space: pre; color: var(--ink-soft); }
-  .sig b { color: var(--ink); font-weight: 600; }
+  .lede {
+    font-size: clamp(16px, 2vw, 19px);
+    color: var(--ink-2);
+    max-width: 60ch;
+    margin: 0;
+  }
 
-  .lane-tag { font-family: var(--mono); font-size: 0.63rem; letter-spacing: 0.12em;
-              text-transform: uppercase; padding: 0.15rem 0.45rem; border: 1px solid currentColor; }
-  .lane-a { color: var(--voice-a); }
-  .lane-b { color: var(--voice-b); }
-  .lane-j { color: var(--ink-soft); }
+  /* headline stat */
+  .stat {
+    margin: 30px 0 8px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px 18px;
+    padding: 20px 22px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+  }
+  .stat .from, .stat .to {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+  .stat .from { font-size: clamp(22px, 3.4vw, 30px); color: var(--ink-3); text-decoration: line-through; text-decoration-thickness: 1px; }
+  .stat .arrow { color: var(--accent); font-size: 22px; }
+  .stat .to { font-size: clamp(30px, 5vw, 46px); color: var(--ink); }
+  .stat .cap { font-size: 14px; color: var(--ink-2); flex-basis: 100%; margin-top: 2px; }
+  .stat .cap b { color: var(--ink); font-weight: 600; }
 
-  /* ---- figures ------------------------------------------------------ */
-  figure { margin: 2rem 0 0; }
-  .figbox { background: var(--raise); border: 1px solid var(--rule); padding: 1.2rem;
-            overflow-x: auto; }
-  svg { display: block; max-width: 100%; height: auto; }
-  figcaption { color: var(--ink-soft); font-size: 0.94rem; margin-top: 0.75rem;
-               max-width: var(--measure); }
+  section { margin-top: 56px; }
 
-  .s-box   { fill: var(--raise); stroke: currentColor; stroke-width: 1.3; }
-  .s-lab   { font-family: "JetBrains Mono", monospace; font-size: 12px; fill: var(--ink); }
-  .s-sub   { font-family: "JetBrains Mono", monospace; font-size: 10.5px; fill: var(--ink-faint); }
-  .s-line  { stroke: currentColor; stroke-width: 1.3; fill: none; }
-  .s-a     { stroke: var(--voice-a); }
-  .s-b     { stroke: var(--voice-b); }
-  .f-a     { fill: var(--voice-a); }
-  .f-b     { fill: var(--voice-b); }
-  .f-sig   { fill: var(--signal); }
-  .f-un    { fill: var(--unattr); }
-  .r-a     { fill: var(--voice-a-bg); stroke: var(--voice-a); stroke-width: 1.2; }
-  .r-b     { fill: var(--voice-b-bg); stroke: var(--voice-b); stroke-width: 1.2; }
-  .r-un    { fill: none; stroke: var(--unattr); stroke-width: 1.2; stroke-dasharray: 3 3; }
-  .tick    { stroke: var(--rule); stroke-width: 1; }
+  h2 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(19px, 2.6vw, 24px);
+    letter-spacing: -0.01em;
+    margin: 0 0 6px;
+  }
+  .sub {
+    color: var(--ink-2);
+    font-size: 15px;
+    margin: 0 0 22px;
+    max-width: 66ch;
+  }
 
-  /* ---- tables -------------------------------------------------------- */
-  .tablewrap { overflow-x: auto; margin-top: 1.4rem; border: 1px solid var(--rule); }
-  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; background: var(--raise); }
-  th, td { text-align: left; padding: 0.6rem 0.85rem; border-bottom: 1px solid var(--rule-soft);
-           vertical-align: top; }
-  thead th { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.11em;
-             text-transform: uppercase; color: var(--ink-faint); background: var(--rule-soft);
-             border-bottom: 1px solid var(--rule); white-space: nowrap; }
-  tbody tr:last-child td { border-bottom: none; }
-  td.num-col { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  code { font-family: var(--mono); font-size: 0.86em; background: var(--rule-soft);
-         padding: 0.08em 0.32em; border-radius: 2px; }
-  td code, th code { background: none; padding: 0; }
+  /* figure */
+  figure { margin: 0; }
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: clamp(14px, 2.4vw, 26px);
+    overflow-x: auto;
+  }
+  .diagram svg { display: block; width: 100%; min-width: 720px; height: auto; color: var(--ink); }
+  figcaption {
+    color: var(--ink-2);
+    font-size: 13.5px;
+    margin-top: 12px;
+    max-width: 74ch;
+  }
+  figcaption .k { color: var(--accent); font-weight: 600; }
 
-  .good { color: var(--voice-a); font-weight: 600; }
-  .bad  { color: var(--signal); font-weight: 600; }
+  /* svg element styles (theme via tokens) */
+  .box-neutral rect { fill: var(--box-fill); stroke: var(--box-line); }
+  .lane-diar rect { fill: var(--diar-fill); stroke: var(--diar-line); }
+  .lane-tx rect { fill: var(--tx-fill); stroke: var(--tx-line); }
+  .box rect { stroke-width: 1.5; }
+  .box .lbl { font-family: var(--font-body); font-weight: 600; font-size: 15px; fill: var(--ink); }
+  .box .sub-lbl { font-family: var(--font-mono); font-weight: 400; font-size: 11.5px; fill: var(--ink-3); letter-spacing: .02em; }
+  .flow { fill: none; stroke: var(--ink-3); stroke-width: 1.6; }
+  #ah path { fill: var(--ink-3); }
+  .band { fill: none; stroke: var(--line-strong); stroke-width: 1.4; stroke-dasharray: 5 5; }
+  .band-lbl { font-family: var(--font-mono); font-size: 12px; letter-spacing: .04em; fill: var(--ink-2); }
+  .lane-tag { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; }
+  .tag-diar { fill: var(--diar-line); }
+  .tag-tx { fill: var(--tx-line); }
+  .pin circle { fill: var(--accent); }
+  .pin text { fill: var(--accent-ink); font-family: var(--font-display); font-weight: 800; font-size: 14px; }
+  .out-lbl { font-family: var(--font-body); font-size: 13px; fill: var(--ink-2); font-style: italic; }
 
-  /* ---- callout ------------------------------------------------------- */
-  .callout { border: 1px solid var(--signal); border-left: 3px solid var(--signal);
-             background: var(--signal-bg); padding: 1.1rem 1.3rem; margin-top: 1.8rem; }
-  .callout h3 { color: var(--signal); margin-bottom: 0.4rem; }
-  .callout p { margin: 0; }
+  /* change cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 18px 18px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .card .head { display: flex; align-items: center; gap: 12px; }
+  .badge {
+    flex: none;
+    width: 30px; height: 30px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--accent); color: var(--accent-ink);
+    font-family: var(--font-display); font-weight: 800; font-size: 16px;
+  }
+  .card h3 { font-family: var(--font-display); font-weight: 700; font-size: 16.5px; margin: 0; letter-spacing: -0.01em; line-height: 1.2; }
+  .where {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .card .num {
+    font-family: var(--font-mono); font-weight: 500; font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    display: inline-flex; align-items: baseline; gap: 8px;
+    color: var(--ink-2);
+  }
+  .card .num .b { color: var(--ink-3); text-decoration: line-through; text-decoration-thickness: 1px; }
+  .card .num .a { color: var(--ink); font-weight: 600; }
+  .card .why { font-size: 14px; color: var(--ink-2); margin: 2px 0 0; }
 
-  .rule-note { border-left: 3px solid var(--rule); padding-left: 1rem; color: var(--ink-soft);
-               font-style: italic; margin: 1.3rem 0 0; }
+  /* table */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  thead th { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; vertical-align: bottom; }
+  tbody th { text-align: left; font-weight: 500; color: var(--ink-2); font-family: var(--font-body); font-size: 14.5px; }
+  tbody td { font-family: var(--font-mono); font-size: 15px; color: var(--ink); }
+  tr:last-child td, tr:last-child th { border-bottom: none; }
+  .wallrow th, .wallrow td { border-top: 1.5px solid var(--line-strong); font-weight: 600; }
+  .wallrow td:last-child { color: var(--accent); }
+  .cell-dim { color: var(--ink-3) !important; }
 
-  footer { margin-top: 5rem; padding-top: 1.5rem; border-top: 1px solid var(--rule);
-           color: var(--ink-faint); font-size: 0.85rem; font-family: var(--mono); }
-
-  a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--voice-a); outline-offset: 2px; }
-  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+  .foot {
+    margin-top: 44px; padding-top: 20px; border-top: 1px solid var(--line);
+    color: var(--ink-3); font-size: 13.5px; max-width: 74ch;
+  }
+  .foot b { color: var(--ink-2); font-weight: 600; }
 </style>
 </head>
 <body>
-
 <div class="wrap">
+  <header>
+    <p class="eyebrow">On-device · two concurrent branches</p>
+    <h1>Who spoke, what they said</h1>
+    <p class="lede">The speaker-transcript job answers two independent questions about a recording and joins them at the end. Because the two halves share no data until then, they run at the same time — and the wall clock is the longer branch, not the sum.</p>
 
-  <header class="mast">
-    <div class="eyebrow">On-device diarisation · app/src/main/java/…/data/speakers</div>
-    <h1>Who Said What</h1>
-    <p class="standfirst">Two models run over the same audio and never speak to each other. One
-      returns words with no speaker; the other returns speakers with no words. Everything below is
-      the machinery that puts them back together — and <em>the one place it reliably fails</em>.</p>
+    <div class="stat" role="group" aria-label="Wall clock for a 20-minute recording went from about 115 seconds to 55.5 seconds">
+      <span class="from">~115s</span>
+      <span class="arrow" aria-hidden="true">→</span>
+      <span class="to">55.5s</span>
+      <span class="cap">wall clock for a <b>20-minute recording</b> · roughly <b>2× faster</b> · the speedups are <b>output-neutral</b> (WER and speaker accuracy unchanged)</span>
+    </div>
   </header>
 
-  <!-- ================= OVERVIEW ================= -->
   <section>
-    <h2>The shape of it</h2>
-    <p class="lede">Diarisation and recognition are deliberately independent. They meet exactly once,
-      in <code>SpeakerAlignment.blocks</code>, and everything after that is cleanup.</p>
+    <h2>The pipeline</h2>
+    <p class="sub">Read once into memory, split into two branches that run concurrently, join at alignment. The five amber marks are where the speedups act.</p>
 
     <figure>
-      <div class="figbox">
-        <svg viewBox="0 0 980 340" role="img"
-             aria-label="Audio splits into two independent passes — diarisation producing clusters and recognition producing timed words — which meet only at SpeakerAlignment, then pass through naming and smoothing to become stored blocks.">
-          <defs>
-            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
-            </marker>
-            <marker id="ar-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--voice-a)"/>
-            </marker>
-            <marker id="ar-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--voice-b)"/>
-            </marker>
-          </defs>
+      <div class="diagram">
+        <svg viewBox="0 0 1130 468" role="img" aria-label="Data-flow diagram. The recording is read into memory, then forks into two concurrent branches. The diarise branch runs chunk, then segment-embed-cluster, then fold-and-name. The transcribe branch runs slice, then decode into words with timings. Both join at an alignment stage that attributes words to speakers and saves. Five amber markers show where the speedups act: FastConformer on decode, embed-once and per-chunk naming on fold-and-name, XNNPACK on segment-embed-cluster, the recogniser-aware thread split at the fork, and two parallel chunk lanes on chunk.">
 
-          <!-- source -->
-          <rect class="s-box" x="20" y="140" width="132" height="52"/>
-          <text class="s-lab" x="86" y="163" text-anchor="middle">16 kHz mono WAV</text>
-          <text class="s-sub" x="86" y="180" text-anchor="middle">whole recording</text>
+          <!-- concurrency enclosure -->
+          <rect class="band" x="208" y="78" width="636" height="316" rx="14"></rect>
+          <text class="band-lbl" x="526" y="66" text-anchor="middle">running at the same time · wall = the longer branch</text>
 
-          <!-- split -->
-          <path class="s-line s-a" d="M 152 166 C 180 166 180 70 208 70" marker-end="url(#ar-a)"/>
-          <path class="s-line s-b" d="M 152 166 C 180 166 180 262 208 262" marker-end="url(#ar-b)"/>
+          <!-- lane tags -->
+          <text class="lane-tag tag-diar" x="222" y="108" text-anchor="start">diarise — who spoke when</text>
+          <text class="lane-tag tag-tx" x="222" y="392" text-anchor="start">transcribe — what they said</text>
 
-          <!-- diarise lane -->
-          <rect class="s-box" x="212" y="44" width="180" height="52"/>
-          <text class="s-lab" x="302" y="66" text-anchor="middle">SpeakerDiarizer</text>
-          <text class="s-sub" x="302" y="83" text-anchor="middle">.diarize() → clusters</text>
+          <!-- flows -->
+          <!-- read to fork -->
+          <path class="flow" d="M165 230 H190"></path>
+          <path class="flow" d="M190 134 V338"></path>
+          <path class="flow" d="M190 134 H220" marker-end="url(#ah)"></path>
+          <path class="flow" d="M190 338 H220" marker-end="url(#ah)"></path>
+          <!-- diarise lane arrows -->
+          <path class="flow" d="M340 134 H370" marker-end="url(#ah)"></path>
+          <path class="flow" d="M624 134 H654" marker-end="url(#ah)"></path>
+          <!-- transcribe lane arrows -->
+          <path class="flow" d="M340 338 H370" marker-end="url(#ah)"></path>
+          <!-- join merge -->
+          <path class="flow" d="M828 134 H848 V226"></path>
+          <path class="flow" d="M624 338 H848 V238"></path>
+          <path class="flow" d="M848 230 H860" marker-end="url(#ah)"></path>
+          <!-- out -->
+          <path class="flow" d="M1052 230 H1088" marker-end="url(#ah)"></path>
+          <text class="out-lbl" x="1088" y="256" text-anchor="end">labelled transcript</text>
 
-          <path class="s-line s-a" d="M 392 70 H 440" marker-end="url(#ar-a)"/>
-          <rect class="s-box" x="444" y="44" width="168" height="52"/>
-          <text class="s-lab" x="528" y="66" text-anchor="middle">labelClusters</text>
-          <text class="s-sub" x="528" y="83" text-anchor="middle">cluster → name</text>
-
-          <!-- transcribe lane -->
-          <rect class="s-box" x="212" y="236" width="180" height="52"/>
-          <text class="s-lab" x="302" y="258" text-anchor="middle">SpeechRecognizer</text>
-          <text class="s-sub" x="302" y="275" text-anchor="middle">→ TimedWord</text>
-
-          <!-- join -->
-          <path class="s-line s-a" d="M 612 70 C 660 70 660 158 700 158" marker-end="url(#ar-a)"/>
-          <path class="s-line s-b" d="M 392 262 C 600 262 620 174 700 166" marker-end="url(#ar-b)"/>
-
-          <rect class="s-box" x="704" y="132" width="150" height="56" stroke-width="2.2"/>
-          <text class="s-lab" x="779" y="155" text-anchor="middle">SpeakerAlignment</text>
-          <text class="s-sub" x="779" y="172" text-anchor="middle">.blocks()</text>
-
-          <path class="s-line" d="M 854 160 H 900" marker-end="url(#ar)"/>
-          <rect class="s-box" x="904" y="134" width="62" height="52"/>
-          <text class="s-sub" x="935" y="156" text-anchor="middle">name</text>
-          <text class="s-sub" x="935" y="171" text-anchor="middle">smooth</text>
-
-          <!-- lane captions -->
-          <text class="s-sub f-a" x="212" y="30">DIARISE — who, when. no words.</text>
-          <text class="s-sub f-b" x="212" y="312">TRANSCRIBE — words, when. no speaker.</text>
-
-          <!-- barrier note -->
-          <line class="tick" x1="660" y1="20" x2="660" y2="320" stroke-dasharray="4 5"/>
-          <text class="s-sub" x="668" y="326">the only meeting point →</text>
-        </svg>
-      </div>
-      <figcaption>The two passes run concurrently and share nothing. Diarisation must see the whole
-        recording at once — deciding how many voices exist means comparing every stretch against
-        every other, which cannot be done a slice at a time.</figcaption>
-    </figure>
-  </section>
-
-  <!-- ================= STAGES ================= -->
-  <section>
-    <h2>Five stages</h2>
-    <p class="lede">Numbered because the order is load-bearing, not for decoration. Each entry names
-      the file and line you'd open to change it.</p>
-
-    <div class="spine">
-
-      <article class="stage" data-lane="diarise">
-        <div class="num">01</div>
-        <div>
-          <div class="stage-head">
-            <h3>Split the audio by voice</h3>
-            <span class="lane-tag lane-a">diarise</span>
-            <span class="where">SpeakerDiarizer.kt:169 → :176</span>
-          </div>
-          <p class="sig"><b>fun</b> diarize(samples: FloatArray): List&lt;<b>DiarizedSegment</b>&gt;</p>
-          <p>A thin wrapper around one native call. Segmentation, an embedding per window, and
-            clustering all happen inside <code>active.process(samples)</code> — nothing in Kotlin
-            makes the "same voice" judgement. The wrapper converts sherpa's <em>seconds</em> into
-            sample indices, drops zero-length segments, sorts by start, and logs per-cluster totals.</p>
-          <p>A cluster is an arbitrary integer, <strong>not a person</strong>. Clustering fails by
-            over-segmenting: one speaker routinely becomes several clusters.</p>
-          <p class="sig">minDurationOn = 0.2f     <span style="color:var(--ink-faint)">— nothing shorter becomes a turn (SpeakerDiarizer.kt:38)</span>
-windowShiftRatio = 0.25f <span style="color:var(--ink-faint)">— accuracy/time knob; 0.10 costs 2.5× the runtime for +0.5%</span></p>
-        </div>
-      </article>
-
-      <article class="stage" data-lane="diarise">
-        <div class="num">02</div>
-        <div>
-          <div class="stage-head">
-            <h3>Fold fragments, then put names on clusters</h3>
-            <span class="lane-tag lane-a">diarise</span>
-            <span class="where">SpeakerRepository.kt:398 · :320</span>
-          </div>
-          <p class="sig"><b>suspend fun</b> mergeSmallClusters(samples, turns): List&lt;DiarizedSegment&gt;
-<b>suspend fun</b> labelClusters(samples, turns): Map&lt;<b>Int</b>, <b>String</b>&gt;</p>
-          <p>Fragments too short to be a speaker are folded into whichever cluster they
-            <em>sound</em> like — before anything downstream inherits their ids. Then each surviving
-            cluster has up to 30 s of its longest turns concatenated, embedded as one voiceprint, and
-            matched against the enrolled set.</p>
-          <p>No match becomes <code>Unknown Speaker N</code>, numbered by <strong>first
-            appearance</strong> — so "Speaker 2" is the second person heard, not cluster index 2.</p>
-          <p class="sig">MATCH_THRESHOLD = 0.6f  MATCH_MARGIN = 0.05f  LABEL_SAMPLE_SECONDS = 30</p>
-        </div>
-      </article>
-
-      <article class="stage" data-lane="transcribe">
-        <div class="num">03</div>
-        <div>
-          <div class="stage-head">
-            <h3>Get words and their times</h3>
-            <span class="lane-tag lane-b">transcribe</span>
-            <span class="where">DiarizeWorker.kt:168 · TimedWords.kt:4</span>
-          </div>
-          <p class="sig"><b>data class</b> TimedWord(text: String, startSeconds: Float, endSeconds: Float)</p>
-          <p>Runs on its own slicing, chosen for whatever decodes best — the recogniser is never cut
-            at speaker boundaries. sherpa returns one timestamp per <em>token</em>, and a token is a
-            BPE piece; <code>TimedWords</code> assembles them into whole words, because half a word
-            has no answer to "who was speaking when this was said".</p>
-          <p>This stage owns the progress bar outright. Diarisation cannot report progress —
-            <code>processWithCallback</code> aborts the process on this toolchain.</p>
-        </div>
-      </article>
-
-      <article class="stage" data-lane="join">
-        <div class="num">04</div>
-        <div>
-          <div class="stage-head">
-            <h3>The join — one word at a time</h3>
-            <span class="lane-tag lane-j">meet</span>
-            <span class="where">SpeakerAlignment.kt:53</span>
-          </div>
-          <p class="sig"><b>fun</b> blocks(words, turns, sampleRate): List&lt;<b>SpeakerBlock</b>&gt;</p>
-          <p>For each word it computes an <strong>evidence sample</strong> — not the midpoint.
-            <code>TimedWords</code> closes each word at the next word's start, so a pause makes a
-            one-syllable word look seconds long and the midpoint drifts into silence or the next
-            speaker.</p>
-          <p class="sig">evidence = start + min(duration / 2, <b>0.2s</b>)   <span style="color:var(--ink-faint)">MAX_WORD_EVIDENCE_OFFSET_SECONDS, :146</span></p>
-          <p>Consecutive words sharing a cluster become one <code>SpeakerBlock</code>. See the
-            decision table below for the four cases.</p>
-        </div>
-      </article>
-
-      <article class="stage" data-lane="join">
-        <div class="num">05</div>
-        <div>
-          <div class="stage-head">
-            <h3>Name, merge, and absorb fragments</h3>
-            <span class="lane-tag lane-j">cleanup</span>
-            <span class="where">SpeakerBlockNaming.kt:39 · :114</span>
-          </div>
-          <p class="sig"><b>fun</b> nameBlocks(blocks, names, unknownLabel): List&lt;<b>NamedBlock</b>&gt;
-<b>fun</b> smoothShortBlocks(blocks, unknownPrefix, minSamples): List&lt;<b>NamedBlock</b>&gt;</p>
-          <p>Adjacent blocks merge on the <strong>name</strong>, never the cluster id — one person is
-            routinely several clusters all correctly given the same name, and cutting on the id split
-            continuous speech at every hop between them.</p>
-          <p>Then anything under <strong>2 seconds</strong> adopts a neighbour's name — but only when
-            <em>both</em> sides already agree, so nothing is claimed that the surrounding audio does
-            not already say. A fragment between two <em>different</em> named people is left alone.
-            Runs to a fixed point, because absorbing one fragment can make its neighbours agree.</p>
-          <p class="sig">SHORT_BLOCK_SECONDS = 2   MAX_SMOOTHING_PASSES = 4</p>
-        </div>
-      </article>
-
-    </div>
-
-    <p class="rule-note">The name is then written down on the row, not re-resolved on read. A block
-      records who the app believed was speaking <em>at the time it decided</em> — so enrolling
-      someone next week cannot silently rewrite last week's transcript.</p>
-  </section>
-
-  <!-- ================= THE DECISION ================= -->
-  <section>
-    <h2>How one word picks a speaker</h2>
-    <p class="lede">Four cases, in order. The third and fourth are where the design refuses to guess.</p>
-
-    <div class="tablewrap">
-      <table>
-        <thead>
-          <tr><th>Turns covering the evidence sample</th><th>Result</th><th>Why</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td class="num-col">exactly one</td>
-            <td>that cluster</td>
-            <td>The ordinary case.</td>
-          </tr>
-          <tr>
-            <td class="num-col">several, incl. current speaker</td>
-            <td>keep current speaker</td>
-            <td>pyannote reports overlapping speech. Continuity is better evidence than picking whichever segment started first.</td>
-          </tr>
-          <tr>
-            <td class="num-col">several, excl. current speaker</td>
-            <td><code>UNATTRIBUTED</code> (−1)</td>
-            <td>An overlap with no established speaker is honestly unknown. Choosing one would invent certainty the model did not provide.</td>
-          </tr>
-          <tr>
-            <td class="num-col">none (a gap)</td>
-            <td>inherit <strong>only if</strong> the turns either side agree</td>
-            <td>Diarisation reports confident speech, not continuous coverage. This keeps a breath inside someone's paragraph without carrying them across a gap into another person's turn.</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <p class="rule-note">Why align afterwards at all? The earlier design cut the <em>audio</em> at
-      every speaker change and transcribed each turn separately. That made diarisation quality
-      control transcription quality — a boundary off by a second sliced a word in half and both
-      sides lost it. Aligning after the fact means a misplaced boundary merely moves a word between
-      speakers: visible, and correctable.</p>
-  </section>
-
-  <!-- ================= REAL DATA ================= -->
-  <section>
-    <h2>Where it breaks, in real data</h2>
-    <p class="lede">The first 50 seconds of <code>eleven_two_voice.wav</code> — ground truth against
-      what the pipeline actually produced on the tablet.</p>
-
-    <figure>
-      <div class="figbox">
-        <svg viewBox="0 0 980 250" role="img"
-             aria-label="Two timelines compared. Ground truth contains a 0.6 second backchannel from speaker one at 24.2 seconds; the pipeline output covers that moment with a single 30-second block attributed entirely to speaker two.">
-          <defs>
-            <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--signal)"/>
-            </marker>
-          </defs>
-
-          <!-- axis -->
-          <line class="tick" x1="60" y1="196" x2="920" y2="196"/>
-          <g class="s-sub" text-anchor="middle">
-            <line class="tick" x1="60"  y1="196" x2="60"  y2="202"/><text x="60"  y="216">0s</text>
-            <line class="tick" x1="232" y1="196" x2="232" y2="202"/><text x="232" y="216">10s</text>
-            <line class="tick" x1="404" y1="196" x2="404" y2="202"/><text x="404" y="216">20s</text>
-            <line class="tick" x1="576" y1="196" x2="576" y2="202"/><text x="576" y="216">30s</text>
-            <line class="tick" x1="748" y1="196" x2="748" y2="202"/><text x="748" y="216">40s</text>
-            <line class="tick" x1="920" y1="196" x2="920" y2="202"/><text x="920" y="216">50s</text>
+          <!-- READ -->
+          <g class="box box-neutral">
+            <rect x="30" y="192" width="135" height="76" rx="9"></rect>
+            <text class="lbl" x="97" y="226" text-anchor="middle">Read WAV</text>
+            <text class="sub-lbl" x="97" y="245" text-anchor="middle">whole recording</text>
           </g>
 
-          <!-- truth -->
-          <text class="s-sub" x="8" y="60">truth</text>
-          <rect class="r-a" x="68"  y="44" width="86"  height="26"/>
-          <rect class="r-b" x="160" y="44" width="311" height="26"/>
-          <rect class="r-a" x="476" y="44" width="11"  height="26"/>
-          <rect class="r-b" x="492" y="44" width="189" height="26"/>
-          <rect class="r-a" x="684" y="44" width="234" height="26"/>
-          <text class="s-sub f-a" x="111" y="61" text-anchor="middle">Bob</text>
-          <text class="s-sub f-b" x="315" y="61" text-anchor="middle">Tim</text>
-          <text class="s-sub f-b" x="586" y="61" text-anchor="middle">Tim</text>
-          <text class="s-sub f-a" x="801" y="61" text-anchor="middle">Bob</text>
+          <!-- DIARISE lane -->
+          <g class="box lane-diar">
+            <rect x="222" y="118" width="118" height="72" rx="9"></rect>
+            <text class="lbl" x="281" y="151" text-anchor="middle">chunk</text>
+            <text class="sub-lbl" x="281" y="169" text-anchor="middle">if enrolled</text>
+          </g>
+          <g class="box lane-diar">
+            <rect x="370" y="118" width="254" height="72" rx="9"></rect>
+            <text class="lbl" x="497" y="151" text-anchor="middle">segment · embed · cluster</text>
+            <text class="sub-lbl" x="497" y="169" text-anchor="middle">sherpa · pyannote + CAM++</text>
+          </g>
+          <g class="box lane-diar">
+            <rect x="654" y="118" width="174" height="72" rx="9"></rect>
+            <text class="lbl" x="741" y="151" text-anchor="middle">fold + name</text>
+            <text class="sub-lbl" x="741" y="169" text-anchor="middle">match enrolled voices</text>
+          </g>
 
-          <!-- callout on the sliver -->
-          <path class="s-line" stroke="var(--signal)" d="M 481 100 V 76" marker-end="url(#ar2)"/>
-          <text class="s-sub f-sig" x="481" y="118" text-anchor="middle">Bob, 0.6s: “Mhm.”</text>
+          <!-- TRANSCRIBE lane -->
+          <g class="box lane-tx">
+            <rect x="222" y="322" width="118" height="72" rx="9"></rect>
+            <text class="lbl" x="281" y="355" text-anchor="middle">slice</text>
+          </g>
+          <g class="box lane-tx">
+            <rect x="370" y="322" width="254" height="72" rx="9"></rect>
+            <text class="lbl" x="497" y="355" text-anchor="middle">decode → words + timings</text>
+            <text class="sub-lbl" x="497" y="373" text-anchor="middle">recogniser</text>
+          </g>
 
-          <!-- output -->
-          <text class="s-sub" x="8" y="160">output</text>
-          <rect class="r-un" x="65"  y="144" width="95"  height="26"/>
-          <rect class="r-b"  x="160" y="144" width="524" height="26"/>
-          <rect class="r-a"  x="684" y="144" width="236" height="26"/>
-          <text class="s-sub f-un" x="112" y="161" text-anchor="middle">Bob</text>
-          <text class="s-sub f-b"  x="422" y="161" text-anchor="middle">Tim — one block, 5.8s → 36.3s</text>
-          <text class="s-sub f-a"  x="802" y="161" text-anchor="middle">Bob</text>
+          <!-- ALIGN -->
+          <g class="box box-neutral">
+            <rect x="860" y="192" width="192" height="76" rx="9"></rect>
+            <text class="lbl" x="956" y="222" text-anchor="middle">align + attribute</text>
+            <text class="sub-lbl" x="956" y="243" text-anchor="middle">cut on speaker change · save</text>
+          </g>
 
-          <text class="s-sub" x="60" y="242">dashed = cluster −1, UNATTRIBUTED at the recording's first words</text>
+          <!-- change pins -->
+          <g class="pin"><circle cx="190" cy="230" r="13"></circle><text x="190" y="235" text-anchor="middle">4</text></g>
+          <g class="pin"><circle cx="337" cy="118" r="13"></circle><text x="337" y="123" text-anchor="middle">5</text></g>
+          <g class="pin"><circle cx="373" cy="118" r="13"></circle><text x="373" y="123" text-anchor="middle">3</text></g>
+          <g class="pin"><circle cx="825" cy="118" r="13"></circle><text x="825" y="123" text-anchor="middle">2</text></g>
+          <g class="pin"><circle cx="621" cy="322" r="13"></circle><text x="621" y="327" text-anchor="middle">1</text></g>
+
+          <!-- arrowhead -->
+          <defs>
+            <marker id="ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z"></path>
+            </marker>
+          </defs>
         </svg>
       </div>
-      <figcaption>Bob's 0.6-second backchannel at 24.2 s is swallowed whole. Stage 05 is doing
-        exactly what it was built to do: the fragment is under two seconds and Tim is on both sides,
-        so it is absorbed.</figcaption>
+      <figcaption>The two branches are data-independent, so they run concurrently and the wall clock is whichever is longer. <span class="k">Amber marks 1–5</span> flag where each change below acts — they are five independent changes, not ordered steps. <em>Chunking</em> only runs when speakers are enrolled, because cluster IDs are meaningless across chunks and only naming can stitch a person back together across them. VAD silence-trimming (off by default) sits just before the diarise branch and touches diarisation only.</figcaption>
     </figure>
-
-    <div class="callout">
-      <h3>Everything ≥ 2 s is correct. Everything wrong is a backchannel.</h3>
-      <p>Across all three benchmark files, <strong>not one turn of two seconds or longer went to the
-        wrong person</strong>. Every error is a one-word "Mhm.", "Yeah.", "Okay." The 2-second floor
-        that fixes fragmentation is the same rule that erases genuine short turns — and the
-        embedding model has no margin to separate two same-gender voices anyway (0.73 cosine between
-        speakers, against 0.91 within one speaker's own takes).</p>
-    </div>
-
-    <div class="tablewrap">
-      <table>
-        <thead>
-          <tr><th>Turn length</th><th>identifiable_fm</th><th>eleven_two_voice</th><th>eleven_ota</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>under 2 s</td><td class="num-col bad">9/16</td><td class="num-col bad">5/14</td><td class="num-col bad">4/14</td></tr>
-          <tr><td>2–5 s</td><td class="num-col">—</td><td class="num-col good">2/2</td><td class="num-col good">2/2</td></tr>
-          <tr><td>5–15 s</td><td class="num-col good">14/14</td><td class="num-col good">14/14</td><td class="num-col good">14/14</td></tr>
-          <tr><td>over 15 s</td><td class="num-col good">6/6</td><td class="num-col good">6/6</td><td class="num-col good">6/6</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <p class="rule-note">This is why the benchmark reports three denominators. The same run reads
-      98.6% by word, 96.0% by frame, and 27/36 by turn — word and frame accuracy weight a turn by
-      how much of it there is, so fourteen wrong backchannels barely move them.</p>
   </section>
 
-  <!-- ================= TYPES ================= -->
   <section>
-    <h2>What flows through</h2>
-    <p class="lede">The five shapes the audio takes on its way to a labelled transcript.</p>
+    <h2>The five changes</h2>
+    <p class="sub">Transcription was the pole at the start (114.7s vs a 73.7s speaker branch), so the recogniser swap moved the wall the most — and moved the pole to diarisation, which the last two changes then attack.</p>
 
+    <div class="cards">
+      <article class="card">
+        <div class="head"><span class="badge">1</span><h3>FastConformer recogniser</h3></div>
+        <span class="where">Transcribe branch</span>
+        <span class="num"><span class="b">114.7s</span>→<span class="a">38.9s</span></span>
+        <p class="why">A 17-layer / 512-dim encoder in place of Parakeet's 24 / 1024 — about 5.6× less compute per frame, same word-timing path. Costs ~1.3 points of WER on English; German is unchanged.</p>
+      </article>
+
+      <article class="card">
+        <div class="head"><span class="badge">2</span><h3>Embed each cluster once</h3></div>
+        <span class="where">Diarise · fold + name</span>
+        <span class="num"><span class="b">19s</span>→<span class="a">9.8s</span></span>
+        <p class="why">Folding fragments and naming speakers each embedded the same longest turns — identical audio, computed twice. Now computed once and shared, with naming moved inside the chunk loop.</p>
+      </article>
+
+      <article class="card">
+        <div class="head"><span class="badge">3</span><h3>XNNPACK provider</h3></div>
+        <span class="where">Both branches</span>
+        <span class="num"><span class="a">int8 ARM kernels</span></span>
+        <p class="why">Every model is int8; XNNPACK has the kernels for it. Big on the recogniser, only ~3% on diarisation — which was the clue for change 5. Now one provider for every sherpa model.</p>
+      </article>
+
+      <article class="card">
+        <div class="head"><span class="badge">4</span><h3>Recogniser-aware threads</h3></div>
+        <span class="where">The fork</span>
+        <span class="num"><span class="b">3 / 4</span>→<span class="a">4 / 3</span></span>
+        <p class="why">The diarise/transcribe thread budget was tuned for Parakeet, when transcription was the big job. FastConformer made diarisation the pole, so the spare thread flips to it.</p>
+      </article>
+
+      <article class="card">
+        <div class="head"><span class="badge">5</span><h3>Two chunks in parallel</h3></div>
+        <span class="where">Diarise · chunk</span>
+        <span class="num"><span class="b">53s</span>→<span class="a">45s</span></span>
+        <p class="why">sherpa runs one un-batched pass per analysis window, so a single chunk on four threads starves the cores. Two diarizers on two chunks use the same budget far better.</p>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where the seconds went</h2>
+    <p class="sub">A 20-minute recording, measured per phase on the device. Diarise branch = segment/embed/cluster + fold + name; the two branches overlap, so the wall is the longer one, not the row sum.</p>
     <div class="tablewrap">
       <table>
         <thead>
-          <tr><th>Type</th><th>Carries</th><th>Made by</th></tr>
+          <tr>
+            <th scope="col" style="text-align:left">phase</th>
+            <th scope="col">Parakeet · CPU<br><span style="font-weight:400;text-transform:none;letter-spacing:0">the start</span></th>
+            <th scope="col">+ FastConformer<br><span style="font-weight:400;text-transform:none;letter-spacing:0">cache · XNNPACK</span></th>
+            <th scope="col">+ threads<br><span style="font-weight:400;text-transform:none;letter-spacing:0">+ parallel lanes</span></th>
+          </tr>
         </thead>
         <tbody>
           <tr>
-            <td><code>FloatArray</code></td>
-            <td class="num-col">the whole recording</td>
-            <td>WavFile.read — 3.8 MB/min at 16 kHz</td>
+            <th scope="row">diarise branch</th>
+            <td class="cell-dim">73.7s</td>
+            <td class="cell-dim">62.9s</td>
+            <td>55.2s</td>
           </tr>
           <tr>
-            <td><code>DiarizedSegment</code></td>
-            <td class="num-col">startSample, endSample, cluster</td>
-            <td>SpeakerDiarizer.kt:169 — no text</td>
+            <th scope="row">transcribe</th>
+            <td class="cell-dim">114.7s</td>
+            <td>38.9s</td>
+            <td>43.7s</td>
           </tr>
-          <tr>
-            <td><code>TimedWord</code></td>
-            <td class="num-col">text, startSeconds, endSeconds</td>
-            <td>TimedWords.kt:4 — no speaker</td>
-          </tr>
-          <tr>
-            <td><code>SpeakerBlock</code></td>
-            <td class="num-col">cluster, range, text</td>
-            <td>SpeakerAlignment.kt:53 — first time both exist</td>
-          </tr>
-          <tr>
-            <td><code>NamedBlock</code></td>
-            <td class="num-col">name, range, text</td>
-            <td>SpeakerBlockNaming.kt:39 → stored as <code>DiarizedBlock</code></td>
+          <tr class="wallrow">
+            <th scope="row">wall clock</th>
+            <td class="cell-dim">~115s</td>
+            <td>63.9s</td>
+            <td>55.5s</td>
           </tr>
         </tbody>
       </table>
     </div>
-
-    <p class="rule-note">Three different things get called a "turn" in this codebase, and they do not
-      correspond one to one: a <code>DiarizedSegment</code> (machine output), a truth turn in
-      <code>.truth.json</code> (a real conversational turn), and a <code>DialogTurn</code> (display
-      grouping). One run gave 22 blocks against 36 truth turns.</p>
   </section>
 
-  <footer>
-    DiarizeWorker.kt:63 — doWork() · measured on Lenovo TB336FU, Parakeet TDT v3 int8 / XNNPACK
-  </footer>
-
+  <p class="foot">Measured on a <b>Xiaomi Pad 8</b> (SM8735P), 20-minute English recording, CAM++ embedder. Transcription reads the whole recording; only diarisation sees the optionally silence-trimmed audio. The concurrency and parallel-lane changes are <b>output-neutral</b> — WER and speaker accuracy came back byte-identical before and after — which is the property worth verifying whenever concurrency is added to native code.</p>
 </div>
 </body>
 </html>
