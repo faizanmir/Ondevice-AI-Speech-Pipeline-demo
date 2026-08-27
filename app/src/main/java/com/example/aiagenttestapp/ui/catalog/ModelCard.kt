@@ -2,6 +2,7 @@ package com.example.aiagenttestapp.ui.catalog
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -106,7 +107,19 @@ fun ModelCard(
         onClick = onClick,
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            containerColor = if (entry.isReadyToChat) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.48f)
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            },
+        ),
+        border = BorderStroke(
+            1.dp,
+            if (entry.isReadyToChat) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+            else MaterialTheme.colorScheme.outlineVariant,
+        ),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = if (entry.isReadyToChat) 2.dp else 0.dp,
         ),
     ) {
         Column(

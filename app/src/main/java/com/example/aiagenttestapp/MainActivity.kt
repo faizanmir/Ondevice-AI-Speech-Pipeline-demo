@@ -226,6 +226,9 @@ private fun AppNavHost(
             CatalogScreen(
                 viewModel = catalogViewModel,
                 hubViewModel = hubViewModel,
+                settingsStore = settingsStore,
+                speechModels = speechModels,
+                audioModels = audioModels,
                 // Chatting from Manage models also makes that model the active one for new chats.
                 onOpenChat = {
                     settingsStore.update { s -> s.copy(activeModelId = it.id) }
@@ -381,7 +384,7 @@ private fun AppNavHost(
                 // Enrolment is one tap further in rather than the landing screen: you enrol once,
                 // and you come back to attribute recordings many times.
                 onOpenSpeakers = { navController.navigate(Routes.SPEAKERS) },
-                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                onOpenModels = { navController.navigate(Routes.CATALOG) },
                 onBack = { navController.popBackStack() },
             )
         }
@@ -390,10 +393,9 @@ private fun AppNavHost(
             val speakersViewModel: SpeakersViewModel = hiltViewModel()
             SpeakersScreen(
                 viewModel = speakersViewModel,
-                // Enrolment cannot start until the speaker models are on the device, and the only
-                // place to fetch them is Settings -- so the screen needs a way there rather than a
-                // dead end telling the user to go and find it.
-                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                // Enrolment cannot start until the speaker models are on the device, so recovery
+                // lands in the model inventory rather than asking the user to hunt through Settings.
+                onOpenModels = { navController.navigate(Routes.CATALOG) },
                 onBack = { navController.popBackStack() },
             )
         }

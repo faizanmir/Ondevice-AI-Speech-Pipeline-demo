@@ -503,6 +503,8 @@ private fun RecordingRow(
                 }
             }
 
+            PhaseLine(recording)
+
             ScoreLine(recording)
 
             // Progress and failure belong on the row, not only in the detail: a run takes minutes
@@ -550,6 +552,35 @@ private fun RecordingRow(
  * the right word to the wrong person are different failures with different fixes -- a worse
  * recogniser against a worse embedding model -- and a single figure would hide which one a run has.
  */
+/**
+ * Where a run's minutes went: working out who spoke, against writing down what they said.
+ *
+ * Shown apart from the total because the two are the pipeline's two independent costs and they
+ * respond to different fixes -- one to the diarisation window shift and chunking, the other to the
+ * choice of recogniser. The total alone cannot say which one to reach for.
+ *
+ * "run together" is not decoration. The branches are concurrent, so these two do not sum to the
+ * total, and a reader who tries to add them up should be told why the sum overshoots before they
+ * conclude the numbers are wrong.
+ */
+@Composable
+private fun PhaseLine(recording: DiarizedRecording) {
+    val diarise = recording.diariseMillis
+    val transcribe = recording.transcribeMillis
+    if (diarise == null && transcribe == null) return
+
+    Text(
+        buildString {
+            diarise?.let { append("speakers ${formatDuration(it)}") }
+            if (diarise != null && transcribe != null) append(" · ")
+            transcribe?.let { append("words ${formatDuration(it)}") }
+            if (diarise != null && transcribe != null) append(", run together")
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
 @Composable
 private fun ScoreLine(recording: DiarizedRecording) {
     val wer = recording.werPercent ?: return

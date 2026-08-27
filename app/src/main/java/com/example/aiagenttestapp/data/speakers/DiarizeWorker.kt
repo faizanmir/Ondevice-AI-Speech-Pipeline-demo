@@ -28,12 +28,14 @@ import com.example.aiagenttestapp.stt.SpeakerDiarizer
 import com.example.aiagenttestapp.stt.SpeechEngineKind
 import com.example.aiagenttestapp.stt.SpeechModelRepository
 import com.example.aiagenttestapp.stt.SpeechRecognizer
+import com.example.aiagenttestapp.stt.ThreadBudget
 import com.example.aiagenttestapp.stt.TimedWord
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -47,11 +49,14 @@ import kotlin.math.absoluteValue
  * recording takes minutes to get through two models, and a user who backs out of the screen or takes
  * a call should come back to a finished transcript rather than to nothing.
  *
- * The order matters and is not interchangeable. Diarisation runs **first and over the whole
- * recording**, because clustering is a global judgement -- it decides how many voices exist by
- * comparing every stretch against every other, and cannot be done a slice at a time without
- * inventing a new speaker per slice. Transcription then runs on its own slicing, chosen for what
- * decodes best, and the two are reconciled afterwards by [SpeakerAlignment].
+ * Clustering is a global judgement -- it decides how many voices exist by comparing every stretch
+ * against every other -- so diarising a slice at a time invents a new speaker per slice. That holds
+ * unless the speakers are enrolled, in which case naming can put the slices back together, and
+ * [DiarizationChunks] then splits long recordings to bound the part of the cost that does not grow
+ * linearly. With nobody enrolled the whole recording is diarised at once, as it always was.
+ *
+ * Transcription runs on its own slicing, chosen for what decodes best, and the two are reconciled
+ * afterwards by [SpeakerAlignment].
  */
 @HiltWorker
 class DiarizeWorker @AssistedInject constructor(
@@ -137,6 +142,30 @@ class DiarizeWorker @AssistedInject constructor(
             // enrolment existed, even if the other people in this recording were strangers. Naming
             // can merge duplicate clusters, but it cannot split two real voices already merged into
             // one, so the explicit count must reach sherpa unchanged.
+            // Read before the branches start, because it decides whether diarisation may be split
+            // into chunks and both branches then run concurrently. A count of zero is not a
+            // failure: it means nothing could be named, so the recording has to be clustered whole.
+            val enrolledSpeakers = speakers.enrolledCount()
+
+            // One budget rather than two independent guesses. Both branches used to size their own
+            // pool from availableProcessors() and cap it at 4, which on an eight-core device asked
+            // for eight ONNX threads plus the dispatcher's own pool -- measured at 590-615% of
+            // 800%, thirteen threads at 7-93%, none of them saturating. See [ThreadBudget].
+            // Which branch is the long pole depends on the embedding model, so the split does
+            // too: CAM++ compares voices about 2.8x faster and hands the lead to transcription.
+            val threads = ThreadBudget.concurrent(
+                weights = if (bundle.id == AudioModelCatalog.SPEAKER_CAMPP_BUNDLE_ID) {
+                    ThreadBudget.Weights.FAST_EMBEDDER
+                } else {
+                    ThreadBudget.Weights.SLOW_EMBEDDER
+                },
+            )
+            Log.i(
+                TAG,
+                "thread budget: diarise ${threads.diarise}, transcribe ${threads.transcribe} " +
+                    "(${bundle.id})",
+            )
+
             val wallStarted = System.currentTimeMillis()
             val (diarised, transcribed) = coroutineScope {
                 val diarisation = async(Dispatchers.Default) {
@@ -144,29 +173,79 @@ class DiarizeWorker @AssistedInject constructor(
                         segmentationModel = audioModels.fileFor(bundle, AudioModelCatalog.SEGMENTATION),
                         embeddingModel = audioModels.fileFor(bundle, AudioModelCatalog.EMBEDDING),
                         expectedSpeakers = recording.expectedSpeakers,
+                        threadCount = threads.diarise,
                     )
 
-                    val diariseStarted = System.currentTimeMillis()
-                    val rawTurns = diarizer.diarize(compacted.samples)
+                    // Clustering and folding both compare turns against each other, so their cost
+                    // grows faster than the recording does. Chunking bounds that to whatever fits
+                    // in one chunk -- but only naming can tell the chunks apart afterwards, so this
+                    // is allowed only when there is somebody to name. See [DiarizationChunks].
+                    val chunks = if (enrolledSpeakers > 0) {
+                        DiarizationChunks.plan(
+                            totalSamples = compacted.samples.size,
+                            sampleRate = AudioRecorder.SAMPLE_RATE,
+                            spliceBoundaries = compacted.pieces.drop(1).map { it.compactedStart },
+                        )
+                    } else {
+                        listOf(DiarizationChunk(0, compacted.samples.size))
+                    }
+
+                    var diariseMillis = 0L
+                    var foldMillis = 0L
+                    var nextCluster = 0
+                    var rawTurnCount = 0
+                    val turns = mutableListOf<DiarizedSegment>()
+
+                    for (chunk in chunks) {
+                        // The only place a long diarisation can be stopped. sherpa's process() is
+                        // one uninterruptible native call -- 267 seconds of it on a twenty-minute
+                        // recording -- so without chunks a cancelled run has to be waited out.
+                        ensureActive()
+
+                        // One chunk is the whole recording, and copying it to say so would double
+                        // peak memory on the largest recordings for nothing.
+                        val slice = if (chunks.size == 1) {
+                            compacted.samples
+                        } else {
+                            compacted.samples.copyOfRange(chunk.startSample, chunk.endSample)
+                        }
+
+                        val diariseStarted = System.currentTimeMillis()
+                        val local = diarizer.diarize(slice)
+                        diariseMillis += System.currentTimeMillis() - diariseStarted
+                        rawTurnCount += local.size
+
+                        // Back into compacted coordinates before anything reads audio by these
+                        // ranges: `slice` starts at zero, `compacted.samples` does not.
+                        val inCompacted = DiarizationChunks.toCompacted(local, chunk)
+
+                        // The step sherpa's clustering leaves out. Fragments too short to be a
+                        // speaker are folded into whichever cluster they sound like, before
+                        // anything downstream inherits their ids -- see
+                        // [SpeakerRepository.mergeSmallClusters]. Per chunk, because folding is
+                        // half of what chunking exists to bound.
+                        val foldStarted = System.currentTimeMillis()
+                        val folded = speakers.mergeSmallClusters(compacted.samples, inCompacted)
+                        foldMillis += System.currentTimeMillis() - foldStarted
+
+                        val (namespaced, next) = DiarizationChunks.namespaced(folded, nextCluster)
+                        nextCluster = next
+                        turns += namespaced
+                    }
                     diarizer.release()
-                    val diariseMillis = System.currentTimeMillis() - diariseStarted
 
-                    // The step sherpa's clustering leaves out. Fragments too short to be a speaker
-                    // are folded into whichever cluster they sound like, before anything downstream
-                    // inherits their ids -- see [SpeakerRepository.mergeSmallClusters].
-                    val foldStarted = System.currentTimeMillis()
-                    val turns = speakers.mergeSmallClusters(compacted.samples, rawTurns)
-                    val foldMillis = System.currentTimeMillis() - foldStarted
-
+                    // Naming stays global on purpose. It is what merges a person's clusters across
+                    // chunks: the same voice matches the same enrolled name in every chunk it
+                    // appears in, and [nameBlocks] then reads those as one speaker.
                     val nameStarted = System.currentTimeMillis()
                     val names = speakers.labelClusters(compacted.samples, turns)
                     val nameMillis = System.currentTimeMillis() - nameStarted
 
                     Log.i(
                         TAG,
-                        "diarisation found ${rawTurns.map { it.cluster }.distinct().size} clusters " +
-                            "in ${rawTurns.size} turns, " +
-                            "${turns.map { it.cluster }.distinct().size} after folding fragments",
+                        "diarisation over ${chunks.size} chunk(s) found $rawTurnCount turns, " +
+                            "${turns.map { it.cluster }.distinct().size} clusters after folding " +
+                            "fragments, ${names.values.distinct().size} distinct names",
                     )
                     // Everything above ran in compacted coordinates -- clustering, folding and
                     // naming all read audio, so they must read the array they were measured on.
@@ -181,8 +260,13 @@ class DiarizeWorker @AssistedInject constructor(
                 // to sit still through.
                 val transcription = async(Dispatchers.Default) {
                     val started = System.currentTimeMillis()
-                    if (recognizer.loadedModelId != model.id) {
-                        recognizer.load(speechModels.selectedPaths())
+                    // Thread count as well as model id: a session built for a different share
+                    // keeps it until it is rebuilt, so without this the budget would apply only to
+                    // the first run after a cold start.
+                    if (recognizer.loadedModelId != model.id ||
+                        recognizer.loadedThreadCount != threads.transcribe
+                    ) {
+                        recognizer.load(speechModels.selectedPaths(), threadCount = threads.transcribe)
                     }
                     val bounds = recognizer.segmentBounds(samples)
                     val pieces = recognizer.transcribeSegments(samples, bounds) { done, total, _ ->
@@ -264,6 +348,11 @@ class DiarizeWorker @AssistedInject constructor(
                 // it. That read is minutes of the user's wait on a long recording, and a number
                 // that quietly leaves out a phase is worse than none.
                 runMillis = System.currentTimeMillis() - runStarted,
+                // The whole "who spoke" branch, not just sherpa's part: folding and naming are as
+                // much a cost of answering that question as the clustering is, and splitting them
+                // three ways on a list row would say less than one honest number does.
+                diariseMillis = diariseMillis + foldMillis + nameMillis,
+                transcribeMillis = transcribeMillis,
                 coveragePercent = score?.coveragePercent,
                 werPercent = score?.werPercent,
                 speakerAccuracyPercent = score?.speakerAccuracyPercent,
@@ -310,7 +399,7 @@ class DiarizeWorker @AssistedInject constructor(
      * and leaves no gap to notice, which is why [SettingsStore.vadEnabled] can turn this off
      * outright -- the same switch, for the same reason, as the note recorder's.
      */
-    private fun compactToSpeech(samples: FloatArray): CompactedAudio {
+    private suspend fun compactToSpeech(samples: FloatArray): CompactedAudio {
         if (!settings.settings.value.vadEnabled) return CompactedAudio.untouched(samples)
 
         val detector = SpeechActivityDetector(context.assets)

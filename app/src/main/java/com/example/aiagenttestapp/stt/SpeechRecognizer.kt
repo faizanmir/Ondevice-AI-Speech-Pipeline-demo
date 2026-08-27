@@ -100,14 +100,35 @@ class SpeechRecognizer(private val settings: SettingsStore) {
     var loadedModelId: String? = null
         private set
 
+    /**
+     * Threads the loaded session was built with, so a caller that needs a different share can tell
+     * that reloading is necessary. A session's thread count is fixed at construction, so a warm
+     * recogniser silently keeps whatever the last caller asked for -- which would have made
+     * [ThreadBudget] apply only to the first run after a cold start.
+     */
+    var loadedThreadCount: Int? = null
+        private set
+
     val isLoaded: Boolean get() = loadedModelId != null
 
-    /** Loads the ASR model. Seconds-long and allocation-heavy; never call this on the main thread. */
-    suspend fun load(paths: SpeechModelPaths) = decodeLock.withLock {
-        loadLocked(paths)
+    /**
+     * Loads the ASR model. Seconds-long and allocation-heavy; never call this on the main thread.
+     *
+     * @param threadCount how many threads the session may use. Defaulted rather than required,
+     * because most callers are the only heavy thing running; diarisation passes a share from
+     * [ThreadBudget] because it runs this beside the diarisation models on the same cores.
+     */
+    suspend fun load(
+        paths: SpeechModelPaths,
+        threadCount: Int = recommendedThreadCount(),
+    ) = decodeLock.withLock {
+        loadLocked(paths, threadCount)
     }
 
-    private suspend fun loadLocked(paths: SpeechModelPaths) = withContext(Dispatchers.IO) {
+    private suspend fun loadLocked(
+        paths: SpeechModelPaths,
+        threadCount: Int = recommendedThreadCount(),
+    ) = withContext(Dispatchers.IO) {
         releaseLocked()
 
         val modelConfig = when (paths.kind) {
@@ -120,7 +141,7 @@ class SpeechRecognizer(private val settings: SettingsStore) {
                     useInverseTextNormalization = true,
                 ),
                 tokens = paths.tokens.absolutePath,
-                numThreads = recommendedThreadCount(),
+                numThreads = threadCount,
                 provider = settings.settings.value.onnxProvider.slug,
                 modelType = "sense_voice",
                 debug = false,
@@ -141,7 +162,7 @@ class SpeechRecognizer(private val settings: SettingsStore) {
                     enableTokenTimestamps = true,
                 ),
                 tokens = paths.tokens.absolutePath,
-                numThreads = recommendedThreadCount(),
+                numThreads = threadCount,
                 provider = settings.settings.value.onnxProvider.slug,
                 modelType = "whisper",
                 debug = false,
@@ -154,7 +175,7 @@ class SpeechRecognizer(private val settings: SettingsStore) {
                     joiner = requirePath(paths.joiner, "joiner"),
                 ),
                 tokens = paths.tokens.absolutePath,
-                numThreads = recommendedThreadCount(),
+                numThreads = threadCount,
                 provider = settings.settings.value.onnxProvider.slug,
                 // Named, not left empty for sherpa to work out. It can -- but only by opening the
                 // encoder to read its metadata, which is a second load of a 650 MB file, and its own
@@ -194,6 +215,7 @@ class SpeechRecognizer(private val settings: SettingsStore) {
         // assetManager is null: the model lives on the filesystem, not in the APK.
         recognizer = OfflineRecognizer(assetManager = null, config = config)
         loadedModelId = paths.id
+        loadedThreadCount = threadCount
         Log.i(TAG, "ASR model loaded: ${paths.id}")
     }
 
@@ -354,6 +376,7 @@ class SpeechRecognizer(private val settings: SettingsStore) {
             .onFailure { Log.w(TAG, "releasing the recogniser failed", it) }
         recognizer = null
         loadedModelId = null
+        loadedThreadCount = null
     }
 
     /**

@@ -280,3 +280,62 @@ Every turn of two seconds or longer was correct again, 14 of 14 across the three
 of the twenty-four turns are backchannels -- "Mhm.", "Ja.", "Aha.", "Anscheinend." -- so a failure
 that costs under two points of word accuracy costs eight points of turn accuracy. The mechanism is
 unchanged from the English runs; the smaller, backchannel-heavier sample simply exposes it more.
+
+## A second device
+
+Every number above was measured on the Lenovo TB336FU. Re-running the same files on a Xiaomi Pad 8
+(`25097RP43I`, Android 16, arm64) was meant to be a sanity check on the hardware and turned into a
+check on the scorer itself, because the results are not merely close -- they are the same numbers.
+
+| | TB336FU | Xiaomi Pad 8 |
+|---|---|---|
+| English, coverage / WER / speaker accuracy | 99.1% / 2.9% / 98.6% | 99.08% / **2.88%** / 99.05% |
+| German, coverage / WER / speaker accuracy | 98.2% / 2.5% / 98.2% | 98.21% / **2.47%** / 98.16% |
+| German clustering | 4 → 2, 15 blocks → 12 | **identical** |
+| English runtime | 170s (0.59x realtime) | 56.9s (**5.1x realtime**) |
+| German runtime | 127s (0.69x realtime) | 37.3s (**5.0x realtime**) |
+
+The German run reproduced not just the scores but the cluster arithmetic exactly -- four clusters in
+45 turns folding to two, fifteen aligned blocks becoming twelve after naming. Attribution is
+deterministic given the same audio and the same models; the tablet's numbers were not an artefact of
+that tablet.
+
+The speed difference is the real finding. The Pad is roughly **3x faster** on the same work, and it
+crosses the line from slower-than-realtime to five times realtime -- a five-minute recording is
+scored in under a minute. The parallel diarise/transcribe split is doing visible work at that speed:
+56.9s wall against 91.0s if the two branches ran in sequence.
+
+**The 2x runtime anomaly did not reproduce.** Four consecutive runs on this device held between 5.0x
+and 5.2x realtime with no drift, which is what the tablet failed to do. That does not explain the
+tablet's slow run -- it localises it to that device rather than to the pipeline, which is the more
+useful half of the answer. Speed figures from the Pad are safe to quote; the caveat stays on the
+tablet's.
+
+### Compaction, measured against a run that predates it
+
+The device still held seven runs from before compaction existed. Attaching a reference to one of
+them scores it without re-diarising, which makes a genuine before/after available on identical
+audio -- not a re-run under a flag, but the actual output of the older build:
+
+| | pre-compaction build | with compaction |
+|---|---|---|
+| coverage | 99.08% | 99.08% |
+| WER | 2.88% | 2.88% |
+| speaker accuracy | 98.57% | 99.05% |
+
+Coverage and WER are unchanged to the digit, which is what output-neutrality should look like on a
+file where compaction removes 0.1%. On the over-the-air recording it removes **7.4%** (311.2s →
+288.2s) and still scores 99.31% coverage, 2.54% WER, 98.34% speaker accuracy -- the real-room result
+holding up on second hardware.
+
+The synthetic corpus remains unable to test compaction: 0.1% removed on the clean English file,
+0.4% on the German one. Nothing there reaches the 1.5s gap threshold. Only real recordings do.
+
+### The schema migration, on real data
+
+The device was carrying a v1 database -- seven recordings, two enrolled speakers, six voice samples,
+none of the scoring columns. Installing over it migrated v1 → v3 with every row intact, `language`
+defaulting to `en` and `runMillis` left null on the runs that predate timing. Rescoring one of those
+rows afterwards filled the score columns and **left `runMillis` null**, which is the property the
+targeted-write DAO exists to guarantee: a rescore owns the score columns and nothing else. A
+whole-row update would have silently zeroed the timing of every run it touched.

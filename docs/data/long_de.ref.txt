@@ -1,0 +1,251 @@
+[S1] Guten Morgen. Danke, dass Sie sich die Zeit nehmen. Dies ist das Überwachungsaudit für den Standort für gekühlte Fertiggerichte, und ich möchte mit dem Geltungsbereich beginnen, bevor wir irgendwohin gehen.
+[S2] Guten Morgen. Ja, selbstverständlich.
+[S1] Das Zertifikat umfasst also die Herstellung und Verpackung von gekühlten Fertiggerichten, und es führt außerdem ungekühlte Saucen auf. Läuft die Linie für ungekühlte Produkte hier noch, oder ist sie umgezogen?
+[S2] Sie ist umgezogen. Das ging Ende März an den Standort Bexley, also ist alles Ungekühlte jetzt deren Sache. Die Rezepturentwicklung dafür haben wir behalten, aber keine Produktion.
+[S1] Verstehe. Und hat das jemand der Zertifizierungsstelle mitgeteilt?
+[S2] Ich bin davon ausgegangen, dass unser Qualitätsleiter das gemacht hat. Das müsste ich prüfen.
+[S1] Bitte prüfen Sie das, denn auf dem Zertifikat, das mir vorliegt, steht es noch, und ein Geltungsbereich, der einen Prozess nennt, den Sie nicht mehr durchführen, ist für sich genommen eine Abweichung. Normalerweise ist das schnell verwaltungstechnisch behoben, aber es muss gemacht werden.
+[S2] Verstanden. Ich kläre das heute.
+[S1] Gut. Dann sprechen wir über die Dokumentenlenkung. Erklären Sie mir, wie hier eine Verfahrensanweisung geändert wird, von dem Moment an, in dem jemand entscheidet, dass sie geändert werden muss, bis die Fassung in der Produktion aktuell ist.
+[S2] Wir führen alles im Dokumentenmanagementsystem. Wenn jemand eine Änderung möchte, stellt er einen Änderungsantrag, der geht an den Dokumenteneigner, und der Eigner erstellt die Überarbeitung. Danach braucht es die Freigabe des Abteilungsleiters und der Qualitätssicherung, bevor sie veröffentlicht wird.
+[S1] Und wer veröffentlicht sie?
+[S2] Die Qualitätssicherung. Normalerweise ich oder meine Stellvertretung.
+[S1] Was passiert mit der Kopie, die bereits ausgedruckt neben der Linie hängt?
+[S2] Es gibt ein Verzeichnis der gelenkten Kopien. Wenn wir eine neue Fassung veröffentlichen, sagt uns das Verzeichnis, wo die gedruckten Kopien hängen, und der Schichtleiter soll sie austauschen und die alte vernichten.
+[S1] Soll.
+[S2] Nun, so lautet das Verfahren.
+[S1] Ich frage, weil ich vor dieser Besprechung zwanzig Minuten in der Verpackungshalle war, und die Verfahrensanweisung zur Metalldetektion am Ende von Linie vier ist Revision sechs. Was sagt das System?
+[S2] Das müsste ich nachsehen.
+[S1] Sehen Sie bitte jetzt nach, wenn es geht.
+[S2] Es ist Revision acht. Veröffentlicht im Februar.
+[S1] Es hängt also eine gedruckte Kopie zwei Revisionen zurück am Einsatzort, und das Verzeichnis sagt, sie hätte getauscht werden müssen. Was hat sich zwischen sechs und acht geändert?
+[S2] Sieben war eine Formulierungsänderung, glaube ich, dazu, wer die Prüfung dokumentiert. Acht hat die Prüffrequenz des Auswurfbehälters von stündlich auf alle dreißig Minuten geändert.
+[S1] Der Bediener an Linie vier arbeitet also nach einem Dokument, das ihm sagt, er solle einen kritischen Lenkungspunkt halb so oft prüfen, wie es Ihr aktuelles Verfahren verlangt. Das ist kein Dokumentationsproblem, das ist ein Lebensmittelsicherheitsproblem.
+[S2] Ja. Das sehe ich.
+[S1] Prüfen sie tatsächlich alle dreißig Minuten?
+[S2] Lassen Sie mich die Aufzeichnungen holen.
+[S1] Bitte.
+[S2] Die Aufzeichnungen von Linie vier zeigen diese Woche Prüfungen im Abstand von dreißig Minuten. Sie machen es also.
+[S1] Gut, das hilft. Die Praxis ist also korrekt und das Dokument am Einsatzort ist falsch, was erheblich besser ist als umgekehrt. Ich muss es trotzdem aufnehmen, denn Ihre Lenkung war das Verzeichnis, und das Verzeichnis hat nicht funktioniert.
+[S2] Das verstehe ich.
+[S1] Lassen Sie mich weiter fragen. Wie viele gelenkte gedruckte Kopien gibt es am Standort?
+[S2] Etwa neunzig, denke ich. Vielleicht mehr.
+[S1] Und wann hat zuletzt jemand das Verzeichnis mit dem abgeglichen, was tatsächlich an den Wänden hängt?
+[S2] Es gibt eine jährliche Prüfung. Sie ist Teil des internen Auditprogramms.
+[S1] Wann war die letzte?
+[S2] Ich glaube, im vergangenen Oktober.
+[S1] Also zehn Monate. Und in diesen zehn Monaten hat die Anweisung zur Metalldetektion zwei Revisionen durchlaufen, und die Kopie in der Produktion hat sich nicht bewegt. Ich würde sagen, eine jährliche Überprüfung ist für ein Verzeichnis von neunzig Dokumenten in einem Werk, das Verfahren so häufig überarbeitet, nicht oft genug. Das ist keine Abweichung, das ist ein Hinweis, aber ich würde darüber nachdenken.
+[S2] Das ist berechtigt.
+[S1] Kommen wir zur Schulung. Zeigen Sie mir, woher Sie wissen, dass die Person, die den Metalldetektor bedient, dafür kompetent ist.
+[S2] Zu jeder Funktion gibt es eine Schulungsmatrix. Die Matrix listet die erforderlichen Module auf, und der Nachweis für jede Person zeigt das Datum der Schulung und das Datum, an dem sie als kompetent bewertet wurde.
+[S1] Wer nimmt die Bewertung vor?
+[S2] In der Regel der Vorgesetzte. Bei kritischen Lenkungspunkten muss es ein geschulter Bewerter sein.
+[S1] Wie viele geschulte Bewerter haben Sie?
+[S2] Vier. Drei in der Tagschicht und einen in der Nachtschicht.
+[S1] Einen in der Nachtschicht. Was passiert, wenn diese Person im Urlaub ist und Sie jemanden als kompetent freigeben müssen?
+[S2] Dann wartet es, oder wir holen jemanden aus der Tagschicht herüber.
+[S1] Passiert das tatsächlich, oder wartet es?
+[S2] Ehrlich gesagt wartet es meistens.
+[S1] Wie lange hat es im längsten Fall gewartet?
+[S2] Es gab einen Fall im Juni. Ich glaube, etwa drei Wochen, weil zwei Leute gleichzeitig ausgefallen sind.
+[S1] Und hat die Person in diesen drei Wochen den Metalldetektor bedient?
+[S2] Sie hat ihn unter Aufsicht bedient.
+[S1] Dokumentierte Aufsicht?
+[S2] Es gibt einen Vermerk in der Schichtübergabe.
+[S1] Mhm.
+[S2] Ich weiß, das ist nicht ideal.
+[S1] Es ist nicht ideal, aber ein Vermerk in der Schichtübergabe ist eine Aufzeichnung, und wenn er die aufsichtführende und die beaufsichtigte Person nennt, ist er wohl ausreichend. Was ich sehen möchte, ist, dass Sie das vorher entschieden haben und nicht im Nachhinein. Gibt es ein Verfahren, das regelt, was passiert, wenn kein Bewerter verfügbar ist?
+[S2] Nein, das gibt es nicht.
+[S1] Dann schreiben Sie eines. Auch das ist eher ein Hinweis als eine Abweichung, weil Sie das Risiko beherrscht haben. Sie haben es nur informell beherrscht.
+[S2] Verstanden.
+[S1] Als Nächstes die Kalibrierung. Wie verwalten Sie die Prüfkörper für die Metalldetektion?
+[S2] Sie stehen im Kalibrierplan. Jährlich, an ein externes Labor, und wir bekommen ein Zertifikat mit der zertifizierten Kugelgröße zurück.
+[S1] Alle?
+[S2] Alle, die im Einsatz sind, ja.
+[S1] Ich habe heute Morgen den Prüfsatz an Linie zwei in die Hand genommen. Auf dem Eisenprüfkörper klebt ein Aufkleber mit Fälligkeit Juli. Wir haben August.
+[S2] Das wird der sein, der verspätet zurückkam. Es gab eine Verzögerung beim Labor.
+[S1] Wie verspätet?
+[S2] Ich glaube, er ging im Juni raus, und wir haben ihn vor zwei Wochen zurückbekommen.
+[S1] War er also vor Ablauf der Fälligkeit zurück oder danach?
+[S2] Die Daten müsste ich nachsehen.
+[S1] Bitte sehen Sie nach, denn es besteht ein realer Unterschied zwischen einem Prüfkörper, der rechtzeitig nachkalibriert wurde und bei dem man den Aufkleber vergessen hat, und einem, der über die Fälligkeit hinaus verwendet wurde. Das Erste ist ein Kennzeichnungsfehler. Das Zweite bedeutet, dass jede in diesem Zeitraum durchgeführte Metalldetektionsprüfung keine gesicherte Grundlage hat.
+[S2] Das Zertifikat ist auf den zweiten August datiert. Der Aufkleber nennt als Fälligkeit den achtzehnten Juli.
+[S1] Es gibt also ein Fenster von fünfzehn Tagen, in dem der Prüfkörper im Einsatz und nicht kalibriert war.
+[S2] Ja.
+[S1] War er in diesem Zeitraum im Einsatz?
+[S2] Das wäre er gewesen. Linie zwei lief durch den Juli.
+[S1] Dann ist das eine Abweichung, und sie erfordert eine Auswirkungsbewertung und nicht nur einen neuen Aufkleber. Sie müssen feststellen, welches Produkt zwischen dem achtzehnten Juli und dem zweiten August auf Linie zwei gelaufen ist, und nachweisen, dass der Detektor in diesem Zeitraum tatsächlich funktioniert hat, obwohl der Prüfkörper überfällig war.
+[S2] Wir haben die Prüfaufzeichnungen. Jede Prüfung war in Ordnung.
+[S1] Das hilft Ihnen sehr, und die Bewertung kommt möglicherweise zu dem Schluss, dass kein Produktrisiko besteht. Aber die Bewertung muss existieren und niedergeschrieben sein. Sagen Sie mir nicht nur, dass die Prüfungen bestanden wurden. Zeigen Sie mir die Begründung, die von den bestandenen Prüfungen zu dem Schluss führt, dass das Produkt sicher ist.
+[S2] In Ordnung. Das ist klar.
+[S1] Sprechen wir darüber, wie Sie von der Verzögerung des Labors erfahren haben. Hat das damals jemand gemeldet?
+[S2] Der Instandhaltungskoordinator hat nachgehakt. Ich glaube nicht, dass es in die Qualitätssicherung kam.
+[S1] Ein Punkt im Kalibrierplan wurde also überfällig, und das System, das hätte eskalieren sollen, hat es nicht getan.
+[S2] Der Plan ist eine Tabelle. Sie benachrichtigt niemanden.
+[S1] Verstehe. Und wer sieht sich die Tabelle an?
+[S2] Die Instandhaltung, monatlich.
+[S1] Monatlich ist angemessen. Ist also bei der monatlichen Durchsicht im Juli jemandem aufgefallen, dass der Prüfkörper überfällig war?
+[S2] Offenbar nicht.
+[S1] Ich würde das eher als Ursache betrachten als die Verzögerung des Labors. Dass das Labor langsam ist, ist ein externer Faktor, den Sie nicht vollständig beherrschen. Dass Ihre Durchsicht es nicht bemerkt, liegt vollständig in Ihrem Einflussbereich.
+[S2] Das ist eine faire Sichtweise.
+[S1] Kommen wir allgemein zu den Korrekturmaßnahmen. Wie viele sind derzeit offen?
+[S2] Dreiundzwanzig, glaube ich.
+[S1] Und wie viele davon sind über ihrem Fälligkeitsdatum?
+[S2] Das müsste ich in der Nachverfolgung ansehen.
+[S1] Nur zu.
+[S2] Neun sind überfällig.
+[S1] Neun von dreiundzwanzig. Welche ist die älteste?
+[S2] Es gibt eine vom November letzten Jahres. Es geht um die Entwässerung in der Waschbucht.
+[S1] Neun Monate. Woran hängt es?
+[S2] Es ist eine Investition. Sie ging in den Budgetzyklus und wurde nicht genehmigt, also wurde sie fortgeschrieben.
+[S1] Besteht das Risiko, gegen das sie erhoben wurde, weiterhin?
+[S2] Ja, aber wir haben eine Übergangsmaßnahme eingeführt. Es gibt eine Abzieherroutine und eine Prüfung auf dem Schichtprotokoll.
+[S1] Ist die Übergangsmaßnahme als Übergangsmaßnahme dokumentiert, mit einem Überprüfungsdatum?
+[S2] Sie steht im Datensatz der Korrekturmaßnahme.
+[S1] Mit einem Überprüfungsdatum?
+[S2] Ich glaube, da steht kein Datum.
+[S1] Das ist das Muster, das ich heute Morgen immer wieder sehe. Die Maßnahme ist real, die Überlegung dahinter ist stimmig, und die Aufzeichnung hält sie nicht fest. Eine Übergangsmaßnahme ohne Überprüfungsdatum wird stillschweigend zur Dauermaßnahme, und niemand entscheidet das jemals.
+[S2] Mhm. Ja.
+[S1] Wie geht Ihre Managementbewertung mit den überfälligen Maßnahmen um? Sieht sie die Zahl?
+[S2] Sie sieht die Gesamtzahl der offenen, und es gibt eine Folie zu den überfälligen.
+[S1] Sieht sie die Altersverteilung?
+[S2] Nein, nur eine Anzahl.
+[S1] Eine Anzahl von neun sieht also gleich aus, ob nun alle eine Woche überfällig sind oder eine davon neun Monate.
+[S2] Das stimmt.
+[S1] Ich würde diese Folie ändern. Keine Abweichung, nur etwas, das Ihrer Geschäftsleitung etwas sagen würde, worauf sie reagieren kann.
+[S2] Das nehme ich mit.
+[S1] Lieferantenfreigabe. Wie geben Sie einen neuen Rohstofflieferanten frei?
+[S2] Er füllt einen Fragebogen aus, wir prüfen seine Zertifizierung, und bei Materialien mit höherem Risiko führen wir ein Audit durch, entweder selbst oder über eine zweite Partei.
+[S1] Was macht ein Material zu einem mit höherem Risiko?
+[S2] Verzehrfertige Komponenten, alles mit Allergenen, alles, wo wir danach keinen Abtötungsschritt anwenden können.
+[S1] Das ist eine sinnvolle Definition. Wer entscheidet über die Risikokategorie?
+[S2] Die Technik, mit meiner Beteiligung.
+[S1] Wird die Entscheidung mit Begründung aufgezeichnet, oder nur die Kategorie?
+[S2] Nur die Kategorie, denke ich.
+[S1] Wenn ich Sie also fragen würde, warum der Lieferant für gegartes Hähnchen Kategorie zwei ist und nicht Kategorie eins, was würden Sie mir zeigen?
+[S2] Ich müsste das aus dem Gedächtnis rekonstruieren.
+[S1] Was bedeutet, dass die Entscheidung nicht wirklich auditierbar ist. Auch hier ist die Überlegung wahrscheinlich in Ordnung. Sie ist nur nicht aufgeschrieben.
+[S2] Ich bemerke ein Muster.
+[S1] Ich auch, und es lohnt sich, es klar zu benennen, denn es ändert, was Sie dagegen tun sollten. Sie haben hier kein Kompetenzproblem. Die Menschen, mit denen ich heute Morgen gesprochen habe, kennen ihre Prozesse gut, und die physischen Maßnahmen sind in ordentlichem Zustand. Was Sie haben, ist ein Aufzeichnungsproblem, und Aufzeichnungsprobleme sind günstig zu beheben, aber sie sind es, die ein Audit nicht bestehen, weil ein Auditor nur bewerten kann, was belegt ist.
+[S2] So gesagt hilft mir das.
+[S1] Machen wir die Reklamationen. Wie hoch ist derzeit Ihre Reklamationsrate?
+[S2] Sie liegt bei etwa elf pro Million Einheiten.
+[S1] In welche Richtung entwickelt sie sich?
+[S2] Sie ist im Frühjahr gestiegen und wieder gesunken. Im April lagen wir bei ungefähr achtzehn.
+[S1] Was hat den April getrieben?
+[S2] Zwei Dinge. Es gab ein Problem mit der Siegelnahtdichtigkeit an Linie drei, und es gab eine Reihe von Fremdkörperreklamationen, die sich als von einem Lieferanten stammend herausstellten.
+[S1] Das Siegelproblem, war das ein Maschinenfehler?
+[S2] Ein verschlissener Siegelkopf. Wir haben ihn ersetzt und in den Wartungsplan aufgenommen.
+[S1] War er vorher nicht im Plan?
+[S2] Doch, aber mit dem falschen Intervall.
+[S1] Wie haben Sie das neue Intervall bestimmt?
+[S2] Nach der Empfehlung des Herstellers.
+[S1] Und wie wurde das alte Intervall bestimmt?
+[S2] Das weiß ich ehrlich gesagt nicht. Es stammt aus der Zeit vor mir.
+[S1] Das ist eine ehrliche Antwort, und sie ist nützlicher als eine Vermutung. Darf ich vorschlagen, dass es eine eigene Aufgabe wert ist, wenn Sie nicht wissen, wie irgendeines Ihrer Wartungsintervalle festgelegt wurde. Sie haben jetzt einen dokumentierten Fall, in dem ein Intervall falsch war und es den Verbraucher erreicht hat.
+[S2] Ja. Das werde ich anstoßen.
+[S1] Die Fremdkörperreklamationen vom Lieferanten. Wie haben Sie das abgeschlossen?
+[S2] Wir haben es bei ihm angesprochen, er hat untersucht und ein beschädigtes Sieb bei sich gefunden. Er hat es ersetzt und uns Nachweise geschickt.
+[S1] Haben Sie die Nachweise überprüft oder abgeheftet?
+[S2] Wir haben sie durchgesehen und akzeptiert.
+[S1] Ist jemand hingefahren und hat nachgesehen?
+[S2] Nein, wir haben ihn dafür nicht auditiert.
+[S1] War das eine Entscheidung, oder ist es einfach nicht passiert?
+[S2] Es war eine Entscheidung. Es ist ein langjähriger Lieferant mit guter Historie, und die Korrekturmaßnahme wirkte stimmig.
+[S1] Dann ist das in Ordnung, und es ist ein gutes Beispiel für das Gegenteil dessen, worüber wir gesprochen haben, denn Sie haben eine risikobasierte Entscheidung getroffen. Steht diese Begründung in der Aufzeichnung?
+[S2] Wahrscheinlich nicht.
+[S1] Schreiben Sie sie hinein. Ein Satz. Das macht aus einer scheinbaren Lücke eine dokumentierte Beurteilung.
+[S2] In Ordnung.
+[S1] Interne Audits. Ist das Programm für dieses Jahr vollständig?
+[S2] Wir sind im Rückstand. Wir haben neun von vierzehn geplanten durchgeführt.
+[S1] Ist das mit vier verbleibenden Monaten aufholbar?
+[S2] Es sollte gehen, ja. Drei der verbleibenden fünf sind kurze.
+[S1] Wer führt die Audits durch?
+[S2] Geschulte interne Auditoren aus anderen Abteilungen. Wir lassen niemanden seinen eigenen Bereich auditieren.
+[S1] Gut. Wie sichern Sie die Qualität der internen Audits selbst?
+[S2] Wie meinen Sie das?
+[S1] Woher wissen Sie, dass ein internes Audit gut war? Wenn jemand einen Prozess abgeht, überall konform ankreuzt und nichts schreibt, hinterfragt das dann jemand?
+[S2] Ich sehe die Berichte durch.
+[S1] Haben Sie je einen zurückgegeben?
+[S2] Ja, ein paar Mal. Wenn die Nachweise nicht konkret genug waren.
+[S1] Genau das wollte ich hören. Ist diese Durchsicht irgendwo aufgezeichnet?
+[S2] Es gibt ein Freigabefeld im Bericht.
+[S1] Dann ist das ausreichend. Gut.
+[S2] Mhm.
+[S1] Managementbewertung. Wann war die letzte?
+[S2] Im Juni.
+[S1] Und die Eingaben. Wurde der vollständige Satz abgedeckt, Kundenrückmeldungen, Prozessleistung, Auditergebnisse, Lieferantenleistung, Ressourcen, die Verbesserungsmöglichkeiten?
+[S2] Ich würde lieber ins Protokoll sehen, als aus dem Gedächtnis zu antworten.
+[S1] Vernünftig. Sehen Sie nach.
+[S2] Es umfasste Kundenrückmeldungen, Auditergebnisse, Prozessleistung, und es gibt einen Abschnitt zu Ressourcen. Lieferantenleistung ist kein eigener Punkt, aber sie wird unter Reklamationen erwähnt.
+[S1] Unter Reklamationen erwähnt ist nicht dasselbe wie bewertet. Hat jemand die Daten zur Lieferantenleistung als Gesamtheit betrachtet, über alle Lieferanten hinweg, und einen Schluss gezogen?
+[S2] Nein, ich glaube nicht.
+[S1] Dann ist das eine Lücke gegenüber der Norm, und zwar eine echte und keine Formalie, denn mehrere der heutigen Themen hatten ihren Ursprung bei Lieferanten.
+[S2] Der Punkt ist angekommen.
+[S1] Sprechen wir über Ressourcen, da sie im Protokoll stehen. Was hat die Bewertung ergeben?
+[S2] Dass wir eine weitere technische Ressource brauchen. Es wurde grundsätzlich genehmigt.
+[S1] Grundsätzlich heißt was?
+[S2] Es heißt, es wurde nicht eingestellt.
+[S1] Seit Juni.
+[S2] Ja.
+[S1] Hängt das damit zusammen, dass das interne Auditprogramm im Rückstand ist, die Korrekturmaßnahmen überfällig sind und das Verzeichnis der gelenkten Kopien nicht überprüft wurde?
+[S2] Mit ziemlicher Sicherheit, ja.
+[S1] Dann möchte ich, dass die Managementbewertung das auch sagt. Im Moment haben Sie eine Reihe von Symptomen, die an verschiedenen Stellen aufgezeichnet sind, und eine Ursache, die an einer vierten Stelle aufgezeichnet ist, und nichts verbindet sie. Wäre die Verbindung aufgeschrieben, würde sich die Begründung für diese Einstellung von selbst ergeben.
+[S2] Das ist ein guter Punkt, und einer, den ich gern nach oben vertreten können möchte.
+[S1] Dann vertreten Sie ihn mit den Nachweisen, die Sie bereits haben. Sie brauchen nichts Neues. Lassen Sie mich zusammenfassen, wo wir aus meiner Sicht stehen, und dann gehen wir durch das Kühllager.
+[S2] Bitte.
+[S1] Ich habe eine Abweichung, nämlich den außerhalb der Kalibrierung verwendeten Prüfkörper an Linie zwei, und das erfordert eine Auswirkungsbewertung, nicht nur einen neuen Aufkleber. Ich habe einen geringfügigen Punkt beim Verzeichnis der Dokumentenlenkung, nämlich die Anweisung zur Metalldetektion an Linie vier, die am Einsatzort zwei Revisionen zurück ist. Und ich habe eine Reihe von Hinweisen, die alle derselbe Hinweis in anderer Kleidung sind, nämlich dass Ihre Entscheidungen stimmig sind und Ihre Aufzeichnungen sie nicht festhalten.
+[S2] Das ist eine faire Zusammenfassung.
+[S1] Die Lücke der Managementbewertung bei der Lieferantenleistung schreibe ich ebenfalls als geringfügig auf, weil es eine ausdrückliche Anforderung ist und sie nicht erfüllt wird.
+[S2] Verstanden.
+[S1] Nichts davon ist ein schlechtes Audit. Das möchte ich klarstellen, denn ich habe Ihnen eine lange Liste gegeben, und Listen fühlen sich schlimmer an, als sie sind. Die physischen Maßnahmen funktionieren, die Leute wissen, was sie tun, und die Prüfungen, auf die es ankommt, werden durchgeführt. Beheben Sie die Aufzeichnung, und das ist ein starkes System.
+[S2] Vielen Dank. Das ist wirklich hilfreich.
+[S1] Sollen wir vor dem Mittagessen durch das Kühllager gehen?
+[S2] Ja, machen wir das. Ich hole Ihnen einen Mantel.
+[S1] Gut, das Kühllager. Welche Temperatur ist hier drin die Vorgabe?
+[S2] Null bis vier Grad. Der Alarm ist auf fünf eingestellt.
+[S1] Und was passiert, wenn der Alarm auslöst?
+[S2] Er geht auf das Telefon des Bereitschaftstechnikers, und er wird automatisch protokolliert.
+[S1] Hat er in den letzten drei Monaten ausgelöst?
+[S2] Zweimal, glaube ich. Beide Male während eines Abtauzyklus.
+[S1] Beide Male tatsächlich, oder beide Male haben Sie entschieden, dass es ein Abtauzyklus war?
+[S2] Das ist eine schärfere Frage, als sie klingt. Es wurde beide Male als Abtauen protokolliert.
+[S1] Von wem?
+[S2] Vom Bereitschaftstechniker.
+[S1] Verlangt das Protokoll von ihm, aufzuzeichnen, warum er auf Abtauen geschlossen hat, oder nur die Kategorie einzutragen?
+[S2] Nur die Kategorie.
+[S1] Mhm. Wieder dieselbe Form.
+[S2] Jetzt höre ich es selbst.
+[S1] Ich möchte mir hier die Regale ansehen. In der Ecke neben der Tür steht Ware auf dem Boden. Ist das beabsichtigt?
+[S2] Nein, das sollte da nicht stehen. Das ist eine Wareneingangspalette, die auf die Einlagerung wartet.
+[S1] Wie lange wartet sie schon?
+[S2] Das weiß ich nicht. Es klebt ein Etikett mit der Annahmezeit darauf.
+[S1] Was steht darauf?
+[S2] Sechs Uhr vierzig heute Morgen. Also etwa drei Stunden.
+[S1] Gibt es eine Grenze dafür, wie lange eine Wareneingangspalette stehen darf, bevor sie eingelagert wird?
+[S2] Keine schriftliche.
+[S1] Gibt es einen Grund für eine?
+[S2] Die Temperatur ist so oder so geführt, also würde ich sagen, dem Produkt geht es gut.
+[S1] Bei der Temperatur stimme ich Ihnen zu. Meine Sorge gilt der Rückverfolgbarkeit, nicht der Sicherheit. Eine Palette auf dem Boden ohne Lagerplatz ist eine Palette, von der Ihr Bestandssystem glaubt, sie sei woanders.
+[S2] Das stimmt. Sie würde als angenommen, aber nicht eingelagert erscheinen.
+[S1] Und wenn sie heute Morgen zurückgerufen würde, wie schnell könnten Sie sie finden?
+[S2] Jemand müsste das Lager ablaufen.
+[S1] Was Ihre Antwort auf die Frage nach dem Rückruftest ist, und sie ist langsamer als die vier Stunden, zu denen sich Ihr Verfahren verpflichtet.
+[S2] Wir haben es tatsächlich nie von einer Bodenpalette aus getestet.
+[S1] Dann lohnt es sich, das in Ihren nächsten Rückrufversuch aufzunehmen. Nicht als Kritik, sondern als Szenario. Rückrufversuche, die nur den einfachen Weg prüfen, sagen Ihnen sehr wenig.
+[S2] Das ist eine gute Idee. Ich baue das ein.
+[S1] Prüfen wir die Datumskennzeichnung an ein paar davon. Können Sie mir den Code auf der obersten Kiste vorlesen?
+[S2] Es ist der zweiundzwanzigste August, Charge vier eins sieben.
+[S1] Und was bedeutet vier eins sieben?
+[S2] Julianischer Tag und Linie. Tag eins sieben, Linie vier.
+[S1] Tag siebzehn war vor fünf Tagen, und die Kiste ist auf den zweiundzwanzigsten codiert. Ist das eine Haltbarkeit von fünf Tagen?
+[S2] Sieben Tage ab Produktion. Das ist also stimmig.
+[S1] Gut. Und wer verifiziert die Kennzeichnung beim Anfahren?
+[S2] Der Linienbediener prüft sie, und der Teamleiter gegenzeichnet.
+[S1] Steht das auf der Aufzeichnung, die ich vorhin für Linie vier gesehen habe?
+[S2] Das ist eine eigene Aufzeichnung. Anfahrprüfungen.
+[S1] Können Sie eine für Linie vier vom zweiundzwanzigsten heraussuchen?
+[S2] Hier. Beide Unterschriften, Kennzeichnung verifiziert, Allergenprüfung durchgeführt.
+[S1] Genau das wollte ich sehen, und das sollte man auch sagen. Diese Aufzeichnung tut, was eine Aufzeichnung tun soll. Sie sagt mir, wer geprüft hat, wann, und was er festgestellt hat, und ich kann damit arbeiten, ohne jemanden fragen zu müssen.
+[S2] Das gebe ich an das Team weiter.
+[S1] Bitte tun Sie das. Gehen wir zurück, dann schreibe ich das auf.

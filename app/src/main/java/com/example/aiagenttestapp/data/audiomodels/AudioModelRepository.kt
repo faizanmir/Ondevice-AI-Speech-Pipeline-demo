@@ -1,6 +1,7 @@
 package com.example.aiagenttestapp.data.audiomodels
 
 import android.content.Context
+import com.example.aiagenttestapp.data.SettingsStore
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
@@ -37,7 +38,10 @@ import java.util.concurrent.TimeUnit
  * that differs between the two is whether the bytes arrive as plain files or inside a tarball -- which
  * is what [BundlePayload] exists to say.
  */
-class AudioModelRepository(context: Context) {
+class AudioModelRepository(
+    context: Context,
+    private val settings: SettingsStore,
+) {
 
     private val root = File(context.applicationContext.filesDir, "audio-models").apply { mkdirs() }
 
@@ -73,7 +77,20 @@ class AudioModelRepository(context: Context) {
 
     fun bundleWithId(id: String): AudioModelBundle? = bundles.firstOrNull { it.id == id }
 
-    val speaker: AudioModelBundle get() = AudioModelCatalog.SPEAKER
+    /**
+     * The speaker bundle the user picked, or ERes2Net-base if they have not picked.
+     *
+     * Read on every access rather than cached, so switching in Settings takes effect on the next
+     * run instead of the next app start. Falls back rather than throwing when the stored id names a
+     * bundle that no longer exists: an unknown id is a stale preference, and losing speaker
+     * identification entirely is a worse answer than quietly using the default.
+     */
+    val speaker: AudioModelBundle
+        get() {
+            val chosen = settings.settings.value.speakerBundleId
+            return AudioModelCatalog.speakerBundles.firstOrNull { it.id == chosen }
+                ?: AudioModelCatalog.SPEAKER
+        }
     val keywords: AudioModelBundle get() = AudioModelCatalog.KEYWORDS
     val punctuation: AudioModelBundle get() = AudioModelCatalog.PUNCTUATION
 

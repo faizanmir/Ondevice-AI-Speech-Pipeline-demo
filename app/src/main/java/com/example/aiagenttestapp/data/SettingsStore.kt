@@ -37,6 +37,17 @@ data class AppSettings(
      * default (SenseVoice). A plain string rather than the type to keep this layer free of stt.
      */
     val speechModelId: String? = null,
+
+    /**
+     * Which speaker-embedding bundle identifies voices, by [AudioModelBundle.id].
+     *
+     * Lives in Settings rather than being pinned in the catalogue because the two models trade
+     * against each other rather than one being better: CAM++ compares voices about 2.8x faster,
+     * ERes2Net-base is what sherpa's clustering threshold was calibrated against. Switching does
+     * not convert anybody's voiceprint -- the vectors have different dimensions -- so people
+     * enrolled under the other model need enrolling again, which the app detects and says.
+     */
+    val speakerBundleId: String? = null,
     /**
      * Which recogniser the record screen starts a new recording with, or null when the user has
      * never picked one.
@@ -192,6 +203,7 @@ class SettingsStore(context: Context) {
             activeModelId = prefs.getString(KEY_ACTIVE_MODEL, null),
             tavilyApiKey = prefs.getString(KEY_TAVILY_KEY, null),
             speechModelId = prefs.getString(KEY_SPEECH_MODEL, null),
+            speakerBundleId = prefs.getString(KEY_SPEAKER_BUNDLE, null),
             // Absent means never chosen, which the record screen resolves for itself. An
             // unrecognised slug is treated the same way rather than silently becoming the default.
             sttBackend = prefs.getString(KEY_STT_BACKEND, null)
@@ -230,6 +242,7 @@ class SettingsStore(context: Context) {
             putString(KEY_ACTIVE_MODEL, next.activeModelId)
             putString(KEY_TAVILY_KEY, next.tavilyApiKey)
             putString(KEY_SPEECH_MODEL, next.speechModelId)
+            putString(KEY_SPEAKER_BUNDLE, next.speakerBundleId)
             putString(KEY_STT_BACKEND, next.sttBackend?.slug)
             putString(KEY_NOTE_SUMMARY_MODE, next.noteSummaryMode.name)
             putInt(KEY_THREAD_COUNT, next.threadCount)
@@ -255,6 +268,7 @@ class SettingsStore(context: Context) {
         /** Any fixed non-[SamplingParams.SEED_RANDOM] value; the number itself is arbitrary. */
         const val REPRODUCIBLE_SEED = 1234
 
+        private const val KEY_SPEAKER_BUNDLE = "speaker_bundle"
         private const val KEY_ENGINE = "engine"
         private const val KEY_ACCELERATOR = "accelerator"
         private const val KEY_TEMPERATURE = "temperature"

@@ -61,7 +61,7 @@ import com.example.aiagenttestapp.data.speakers.TakeAnalysis
 @Composable
 fun SpeakersScreen(
     viewModel: SpeakersViewModel,
-    onOpenSettings: () -> Unit,
+    onOpenModels: () -> Unit,
     onBack: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -127,7 +127,7 @@ fun SpeakersScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Button(onClick = onOpenSettings) { Text("Open Settings") }
+                    Button(onClick = onOpenModels) { Text("Manage models") }
                 }
             }
             return@Scaffold

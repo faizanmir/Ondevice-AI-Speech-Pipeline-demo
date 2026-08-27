@@ -181,7 +181,10 @@ object AppModule {
     /** Optional bundles: speaker identification, keyword spotting and punctuation. */
     @Provides
     @Singleton
-    fun audioModelRepository(@ApplicationContext context: Context) = AudioModelRepository(context)
+    fun audioModelRepository(
+        @ApplicationContext context: Context,
+        settings: SettingsStore,
+    ) = AudioModelRepository(context, settings)
 
     @Provides
     @CacheDirPath

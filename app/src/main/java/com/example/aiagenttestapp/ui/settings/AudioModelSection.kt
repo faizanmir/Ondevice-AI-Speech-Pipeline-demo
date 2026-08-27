@@ -3,19 +3,11 @@ package com.example.aiagenttestapp.ui.settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -25,7 +17,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.aiagenttestapp.data.audiomodels.AudioModelBundle
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
 import com.example.aiagenttestapp.data.audiomodels.AudioModelState
-import com.example.aiagenttestapp.ui.components.formatBytes
+import com.example.aiagenttestapp.ui.components.ModelDownloadControl
+import com.example.aiagenttestapp.ui.components.ModelDownloadUiState
 
 /**
  * One optional audio-model bundle: a switch, and whatever the bundle needs from the user next.
@@ -71,61 +64,74 @@ fun AudioBundleRow(
         // Nothing below matters until the feature is actually wanted.
         if (!enabled) return@Column
 
-        when (val current = state) {
-            is AudioModelState.NotDownloaded -> OutlinedButton(
-                onClick = { repository.enqueueDownload(bundle) },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Default.Download, contentDescription = null, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Download ${formatBytes(bundle.downloadBytes)}")
-            }
+        ModelDownloadControl(
+            state = when (val current = state) {
+                AudioModelState.NotDownloaded -> ModelDownloadUiState.NotDownloaded
+                is AudioModelState.Downloading ->
+                    ModelDownloadUiState.Downloading(current.progress)
+                AudioModelState.Ready -> ModelDownloadUiState.Ready
+                is AudioModelState.Failed -> ModelDownloadUiState.Failed(current.message)
+            },
+            downloadBytes = bundle.downloadBytes,
+            onDownload = { repository.enqueueDownload(bundle) },
+            onCancel = { repository.cancelDownload(bundle) },
+            onDelete = { repository.delete(bundle) },
+            deleteTitle = "Delete ${bundle.label}?",
+        )
+    }
+}
 
-            is AudioModelState.Downloading -> Column(
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                LinearProgressIndicator(
-                    progress = { current.progress },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+/**
+ * The two speaker-embedding models, as cards the user picks between.
+ *
+ * A choice rather than a setting with a right answer, because the two genuinely trade against each
+ * other. CAM++ compares voices about 2.8x faster, measured head to head at four threads on five
+ * seconds of audio, and embedding is most of what identifying speakers costs. ERes2Net-base is what
+ * sherpa's clustering threshold was calibrated against, and an earlier attempt to run a CAM++ model
+ * against that threshold turned a two-speaker recording into eleven clusters.
+ *
+ * Selection is allowed before the files are there. The model is a statement of intent and the
+ * download is a separate act, the same separation [AudioBundleRow] already draws between a feature
+ * switch and its bytes; the speaker screen refuses to run without the files and says which are
+ * missing.
+ */
+@Composable
+fun SpeakerModelSection(
+    repository: AudioModelRepository,
+    bundles: List<AudioModelBundle>,
+    selectedId: String?,
+    onSelect: (AudioModelBundle) -> Unit,
+) {
+    val active = bundles.firstOrNull { it.id == selectedId } ?: bundles.first()
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Voice matching", style = MaterialTheme.typography.bodyMedium)
+        Text(
+            "Which model compares voices. Switching does not convert anyone already enrolled: the " +
+                "two store different kinds of voiceprint, so people need enrolling again.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        bundles.forEach { bundle ->
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        "${(current.progress * 100).toInt()}%",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    TextButton(onClick = { repository.cancelDownload(bundle) }) { Text("Cancel") }
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = bundle.id == active.id,
+                            onClick = { onSelect(bundle) },
+                        )
+                        Text(bundle.label, style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
-            }
-
-            is AudioModelState.Ready -> Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "Downloaded and ready",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                TextButton(onClick = { repository.delete(bundle) }) { Text("Delete") }
-            }
-
-            is AudioModelState.Failed -> Column(
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(
-                    current.message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                OutlinedButton(onClick = { repository.enqueueDownload(bundle) }) {
-                    Text("Try again")
-                }
+                AudioBundleRow(repository = repository, bundle = bundle)
             }
         }
     }

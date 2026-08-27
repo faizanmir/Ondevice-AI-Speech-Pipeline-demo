@@ -102,7 +102,42 @@ class SpeakerRepository(
     /** The same enrolled takes as the native index, retained so naming can inspect score margins. */
     private var enrolledEmbeddings: Map<String, List<FloatArray>> = emptyMap()
 
+    /**
+     * Which bundle the resident embedder came from, so switching models actually switches models.
+     *
+     * Without it the embedder is loaded once and kept, and picking CAM++ in Settings would go on
+     * comparing voices with ERes2Net until the process restarted -- silently, because a wrong-model
+     * embedding does not look wrong, it just matches nobody.
+     */
+    private var loadedBundleId: String? = null
+
+    /**
+     * The id stamped on voiceprints right now, from whichever embedding bundle is selected.
+     *
+     * Read per call rather than held, because the selection can change between a run and the next
+     * enrolment, and a stale value here would mark new voiceprints with the old model's name --
+     * which is the one failure [AudioModelBundle.embeddingModelId] exists to prevent.
+     */
+    private fun activeEmbeddingModelId(): String =
+        audioModels.speaker.embeddingModelId ?: AudioModelCatalog.EMBEDDING_MODEL_ID
+
     fun observeSpeakers() = dao.observeAll()
+
+    /**
+     * How many people this run could actually put a name to.
+     *
+     * Counts only voiceprints made by the embedding model currently selected. A vector from the
+     * other model is not a candidate -- [prepareLocked] filters it out of the index -- so counting
+     * it here would be counting somebody who cannot be matched.
+     *
+     * That distinction decides whether a long recording may be split. Chunking is only sound
+     * because naming reunites a person's clusters across chunks; with nobody matchable there is
+     * nothing to reunite them, and each chunk would contribute its own unnamed strangers. Switching
+     * the embedding model without re-enrolling is exactly that case, and counting rows rather than
+     * usable voiceprints would have walked straight into it. See [DiarizationChunks].
+     */
+    suspend fun enrolledCount(): Int =
+        dao.all().count { it.embeddingModelId == activeEmbeddingModelId() }
 
     /** Whether the models this needs are on disk. */
     fun isAvailable(): Boolean = audioModels.isReady(audioModels.speaker)
@@ -119,17 +154,23 @@ class SpeakerRepository(
     private suspend fun prepareLocked(): Boolean = withContext(Dispatchers.Default) {
         if (!isAvailable()) return@withContext false
 
-        if (!embedder.isLoaded) {
+        val bundle = audioModels.speaker
+        if (!embedder.isLoaded || loadedBundleId != bundle.id) {
+            embedder.release()
             val loaded = runCatching {
-                embedder.load(audioModels.fileFor(audioModels.speaker, AudioModelCatalog.EMBEDDING))
+                embedder.load(audioModels.fileFor(bundle, AudioModelCatalog.EMBEDDING))
             }.onFailure { Log.w(TAG, "could not load the speaker embedder", it) }.isSuccess
 
-            if (!loaded) return@withContext false
+            if (!loaded) {
+                loadedBundleId = null
+                return@withContext false
+            }
+            loadedBundleId = bundle.id
             indexLoaded = false
         }
 
         if (!indexLoaded) {
-            val speakers = dao.all().filter { it.embeddingModelId == AudioModelCatalog.EMBEDDING_MODEL_ID }
+            val speakers = dao.all().filter { it.embeddingModelId == activeEmbeddingModelId() }
             val enrolled = speakers.associate { speaker ->
                 speaker.name to dao.samplesFor(speaker.id).map { it.embedding }
             }
@@ -144,7 +185,7 @@ class SpeakerRepository(
 
     /** Speakers whose voiceprints came from a model no longer in use, so re-enrolment can be offered. */
     suspend fun staleSpeakers(): List<SpeakerRecord> =
-        dao.all().filter { it.embeddingModelId != AudioModelCatalog.EMBEDDING_MODEL_ID }
+        dao.all().filter { it.embeddingModelId != activeEmbeddingModelId() }
 
     /**
      * Examines one enrolment recording: how much speech it holds, how many voices, and its voiceprint.
@@ -268,7 +309,7 @@ class SpeakerRepository(
                 SpeakerRecord(
                     name = cleanName,
                     createdAtMillis = System.currentTimeMillis(),
-                    embeddingModelId = AudioModelCatalog.EMBEDDING_MODEL_ID,
+                    embeddingModelId = activeEmbeddingModelId(),
                     dim = mean.size,
                 ),
             )

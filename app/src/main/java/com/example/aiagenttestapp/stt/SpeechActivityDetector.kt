@@ -5,6 +5,8 @@ import android.util.Log
 import com.k2fsa.sherpa.onnx.SileroVadModelConfig
 import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.VadModelConfig
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * Finds the stretches of a recording that actually contain speech.
@@ -110,13 +112,24 @@ class SpeechActivityDetector(private val assets: AssetManager) {
      * protections are [SpeechRegions]' job, kept separate because they are judgement calls about
      * whose failure a unit test should be able to demonstrate.
      */
-    fun detect(totalSamples: Int, readBlock: (from: Int, until: Int) -> FloatArray): List<IntRange> {
+    suspend fun detect(
+        totalSamples: Int,
+        readBlock: (from: Int, until: Int) -> FloatArray,
+    ): List<IntRange> {
         val active = vad ?: error("The VAD model is not loaded")
 
         val regions = mutableListOf<IntRange>()
 
         var blockStart = 0
         while (blockStart < totalSamples) {
+            // Cancellation has to be checked here or it is not checked at all: everything below is
+            // native, and a cancelled job used to run this loop to the end of the recording anyway.
+            // Observed on a twenty-minute import -- the job was cancelled four minutes earlier and
+            // the thread was still feeding windows, holding gigabytes and competing with the run
+            // that replaced it. One block is 4.1 seconds of audio and far less than that of work,
+            // so checking per block stops it promptly without measurably slowing it down.
+            currentCoroutineContext().ensureActive()
+
             val block = readBlock(blockStart, minOf(blockStart + BLOCK, totalSamples))
             // A short read means the file ended earlier than its length implied. Stopping is right:
             // flush below still closes whatever speech was open, so the audio that did arrive is

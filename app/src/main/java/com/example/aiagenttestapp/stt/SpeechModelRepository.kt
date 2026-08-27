@@ -340,9 +340,15 @@ class SpeechModelRepository(context: Context, private val settings: SettingsStor
         onProgress: suspend (Long) -> Unit,
     ) = downloadToFile(client, file.url, target, file.name, onProgress)
 
-    fun delete() {
-        available.flatMap { it.files }.forEach { fileFor(it).delete() }
+    /** Deletes one recogniser without discarding the other models the user chose to keep. */
+    fun delete(model: SpeechModel) {
+        cancelDownload(model)
+        model.files.forEach { fileFor(it).delete() }
         refresh()
+    }
+
+    fun delete() {
+        available.forEach(::delete)
     }
 
     private fun fileFor(file: SpeechModelFile): File = File(dir, file.name)

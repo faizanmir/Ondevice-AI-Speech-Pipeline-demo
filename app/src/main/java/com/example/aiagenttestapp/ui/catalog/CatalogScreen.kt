@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -41,26 +43,33 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.aiagent.engine.core.EngineId
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagenttestapp.data.DownloadState
+import com.example.aiagenttestapp.data.SettingsStore
+import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
+import com.example.aiagenttestapp.stt.SpeechModelRepository
 import com.example.aiagenttestapp.ui.components.GridCardMinWidth
 import com.example.aiagenttestapp.ui.hub.HubContent
 import com.example.aiagenttestapp.ui.hub.HubViewModel
 
-private const val TAB_DOWNLOADED = 0
-private const val TAB_HUGGINGFACE = 1
-private const val TAB_CATALOG = 2
+private const val TAB_CHAT = 0
+private const val TAB_SPEECH = 1
+private const val TAB_HUGGINGFACE = 2
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CatalogScreen(
     viewModel: CatalogViewModel,
     hubViewModel: HubViewModel,
+    settingsStore: SettingsStore,
+    speechModels: SpeechModelRepository,
+    audioModels: AudioModelRepository,
     onOpenChat: (ModelSpec) -> Unit,
     onOpenDetail: (ModelSpec) -> Unit,
     onSignIn: () -> Unit,
     onBack: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    var tab by rememberSaveable { mutableIntStateOf(TAB_DOWNLOADED) }
+    var tab by rememberSaveable { mutableIntStateOf(TAB_CHAT) }
+    var downloadedOnly by rememberSaveable { mutableStateOf(true) }
     var filterMenuOpen by remember { mutableStateOf(false) }
     var sortMenuOpen by remember { mutableStateOf(false) }
 
@@ -76,9 +85,9 @@ fun CatalogScreen(
                     }
                 },
                 actions = {
-                    // Sort and engine filter drive the two model-list tabs; the HuggingFace
-                    // tabs have their own search, so both are hidden there.
-                    if (tab == TAB_DOWNLOADED || tab == TAB_CATALOG) {
+                    // Sort and engine filter describe chat models only. Speech and feature models
+                    // have different capabilities, and HuggingFace has its own search.
+                    if (tab == TAB_CHAT) {
                         Box {
                             IconButton(onClick = { sortMenuOpen = true }) {
                                 Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort")
@@ -120,31 +129,76 @@ fun CatalogScreen(
         ) {
             TabRow(selectedTabIndex = tab) {
                 Tab(
-                    selected = tab == TAB_DOWNLOADED,
-                    onClick = { tab = TAB_DOWNLOADED },
-                    text = { Text("Downloaded") },
+                    selected = tab == TAB_CHAT,
+                    onClick = { tab = TAB_CHAT },
+                    text = { Text("Chat") },
+                )
+                Tab(
+                    selected = tab == TAB_SPEECH,
+                    onClick = { tab = TAB_SPEECH },
+                    text = { Text("Speech & audio") },
                 )
                 Tab(
                     selected = tab == TAB_HUGGINGFACE,
                     onClick = { tab = TAB_HUGGINGFACE },
                     text = { Text("HuggingFace") },
                 )
-                Tab(
-                    selected = tab == TAB_CATALOG,
-                    onClick = { tab = TAB_CATALOG },
-                    text = { Text("Catalog") },
-                )
             }
 
             when (tab) {
-                TAB_DOWNLOADED -> ModelList(
-                    entries = downloaded,
-                    header = null,
-                    emptyText = "No models downloaded yet. Add one from the Catalog or HuggingFace.",
-                    viewModel = viewModel,
-                    onOpenChat = onOpenChat,
-                    onOpenDetail = onOpenDetail,
-                    onSignIn = onSignIn,
+                TAB_CHAT -> Column(Modifier.fillMaxSize()) {
+                    Row(
+                        Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            selected = downloadedOnly,
+                            onClick = { downloadedOnly = true },
+                            label = { Text("On device (${downloaded.size})") },
+                        )
+                        FilterChip(
+                            selected = !downloadedOnly,
+                            onClick = { downloadedOnly = false },
+                            label = { Text("All models (${state.entries.size})") },
+                        )
+                    }
+                    Box(Modifier.weight(1f)) {
+                        ModelList(
+                            entries = if (downloadedOnly) downloaded else state.entries,
+                            header = if (downloadedOnly) {
+                                null
+                            } else {
+                                {
+                                    DeviceCapabilityCard(
+                                        device = state.device,
+                                        quantization = state.budgetQuantization,
+                                        maxParamsBillions = state.maxParamsBillions,
+                                        onQuantizationChange = {
+                                            viewModel.onIntent(
+                                                CatalogIntent.BudgetQuantizationChanged(it),
+                                            )
+                                        },
+                                    )
+                                }
+                            },
+                            emptyText = if (downloadedOnly) {
+                                "No chat models on this device yet. Choose All models or search " +
+                                    "HuggingFace to add one."
+                            } else {
+                                "No models match this filter."
+                            },
+                            viewModel = viewModel,
+                            onOpenChat = onOpenChat,
+                            onOpenDetail = onOpenDetail,
+                            onSignIn = onSignIn,
+                        )
+                    }
+                }
+
+                TAB_SPEECH -> SpeechModelsContent(
+                    settingsStore = settingsStore,
+                    speechModels = speechModels,
+                    audioModels = audioModels,
                 )
 
                 TAB_HUGGINGFACE -> HubContent(
@@ -153,24 +207,6 @@ fun CatalogScreen(
                     modifier = Modifier.fillMaxSize(),
                 )
 
-                TAB_CATALOG -> ModelList(
-                    entries = state.entries,
-                    header = {
-                        DeviceCapabilityCard(
-                            device = state.device,
-                            quantization = state.budgetQuantization,
-                            maxParamsBillions = state.maxParamsBillions,
-                            onQuantizationChange = {
-                                viewModel.onIntent(CatalogIntent.BudgetQuantizationChanged(it))
-                            },
-                        )
-                    },
-                    emptyText = "No models match this filter.",
-                    viewModel = viewModel,
-                    onOpenChat = onOpenChat,
-                    onOpenDetail = onOpenDetail,
-                    onSignIn = onSignIn,
-                )
             }
         }
     }

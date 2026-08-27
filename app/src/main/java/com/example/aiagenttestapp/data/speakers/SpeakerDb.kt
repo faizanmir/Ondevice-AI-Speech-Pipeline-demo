@@ -158,6 +158,21 @@ data class DiarizedRecording(
     val runMillis: Long? = null,
 
     /**
+     * How long working out *who* spoke took: segmentation, clustering, folding and naming together.
+     *
+     * **This and [transcribeMillis] overlap, and do not add up to [runMillis].** The two branches
+     * run concurrently by design, so the run costs roughly the longer of them plus reading the
+     * file, not their sum. They are stored apart because they are the two independent knobs: one is
+     * paid to the diarisation models and answers whether chunking or a coarser window shift is
+     * worth it, the other is paid to the recogniser and answers whether a smaller model would do.
+     * A single total hides which one to reach for.
+     */
+    val diariseMillis: Long? = null,
+
+    /** How long transcribing the words took. Concurrent with [diariseMillis]; see its note. */
+    val transcribeMillis: Long? = null,
+
+    /**
      * The transcript this recording is scored against, speaker-tagged, or null if none is attached.
      *
      * Held on the recording rather than alongside the run, because a reference outlives any one
@@ -312,6 +327,7 @@ interface DiarizedDao {
         """
         UPDATE diarized_recordings
         SET status = 'Running', progress = 0.0, error = NULL, runMillis = NULL,
+            diariseMillis = NULL, transcribeMillis = NULL,
             coveragePercent = NULL, werPercent = NULL, speakerAccuracyPercent = NULL,
             expectedSpeakers = :expectedSpeakers
         WHERE id = :id
@@ -324,6 +340,7 @@ interface DiarizedDao {
         """
         UPDATE diarized_recordings
         SET status = 'Done', progress = 1.0, error = NULL, runMillis = :runMillis,
+            diariseMillis = :diariseMillis, transcribeMillis = :transcribeMillis,
             coveragePercent = :coveragePercent, werPercent = :werPercent,
             speakerAccuracyPercent = :speakerAccuracyPercent
         WHERE id = :id
@@ -332,6 +349,8 @@ interface DiarizedDao {
     suspend fun finishRun(
         id: Long,
         runMillis: Long,
+        diariseMillis: Long?,
+        transcribeMillis: Long?,
         coveragePercent: Double?,
         werPercent: Double?,
         speakerAccuracyPercent: Double?,
@@ -437,7 +456,7 @@ internal object SpeakerConverters {
         DiarizedRecording::class,
         DiarizedBlock::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 @TypeConverters(SpeakerConverters::class)
@@ -477,6 +496,21 @@ abstract class SpeakerDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE diarized_recordings ADD COLUMN coveragePercent REAL")
                 db.execSQL("ALTER TABLE diarized_recordings ADD COLUMN werPercent REAL")
                 db.execSQL("ALTER TABLE diarized_recordings ADD COLUMN speakerAccuracyPercent REAL")
+            }
+        }
+
+        /**
+         * The two phase timings, split out of the single run total.
+         *
+         * Nullable and not backfilled for the same reason [MIGRATION_1_2] left runMillis alone: a
+         * run that finished before the columns existed recorded one number, and splitting it after
+         * the fact would be inventing the halves rather than reporting them. Those rows keep their
+         * total and show no split.
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE diarized_recordings ADD COLUMN diariseMillis INTEGER")
+                db.execSQL("ALTER TABLE diarized_recordings ADD COLUMN transcribeMillis INTEGER")
             }
         }
     }

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,6 +54,8 @@ import com.example.aiagenttestapp.data.notes.Note
 import com.example.aiagenttestapp.data.notes.NoteFinding
 import com.example.aiagenttestapp.data.notes.NoteStatus
 import com.example.aiagenttestapp.functions.MarkerKind
+import com.example.aiagenttestapp.ui.components.EmptyState
+import com.example.aiagenttestapp.ui.components.FeatureHero
 import com.example.aiagenttestapp.ui.components.GridCardMinWidth
 import com.example.aiagenttestapp.ui.components.SwipeAction
 import com.example.aiagenttestapp.ui.components.SwipeActionTone
@@ -107,11 +110,13 @@ fun NotesScreen(
                     .padding(32.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    "No notes yet. Record one, correct the transcript, and let the on-device " +
-                        "model summarise it.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                EmptyState(
+                    icon = Icons.Default.Mic,
+                    title = "Capture your first voice note",
+                    body = "Record naturally, review the private on-device transcript, then create " +
+                        "a summary and findings.",
+                    actionLabel = "Record a note",
+                    onAction = onRecord,
                 )
             }
             return@Scaffold
@@ -127,6 +132,16 @@ fun NotesScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                FeatureHero(
+                    eyebrow = "Voice notes",
+                    title = "Think out loud",
+                    body = "Capture the conversation while it is fresh. Transcription and " +
+                        "summaries stay on this device.",
+                    icon = Icons.Default.Mic,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             items(notes, key = { it.id }) { note ->
                 NoteCard(
                     note = note,
