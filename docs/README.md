@@ -69,7 +69,10 @@ proper nouns (`Blomqvist`→`Blumkvist`, `swab`→`swap`, `site`→`side`).
 | Path | What it is |
 |---|---|
 | `stt-benchmark.html` | The report |
+| `diarization-pipeline.html` | How a transcript gets attributed to a speaker — every stage, with file:line anchors and the real timeline where a backchannel is swallowed |
+| `diarization-benchmark.md` | Speaker attribution scored against sample-exact ground truth |
 | `wer.py` | Scorer — Ratcliff–Obershelp alignment, two normalisation modes |
+| `diarscore.py` | Diarisation scorer — recomputes the device's WER and speaker accuracy through `wer.py`, adds frame and turn accuracy |
 | `data/audit_script.txt` | English source script, with `say` silence directives |
 | `data/audit_de.txt` | German source script |
 | `data/transcript.txt` | English, Gemma — as saved, including four leaked model refusals |
