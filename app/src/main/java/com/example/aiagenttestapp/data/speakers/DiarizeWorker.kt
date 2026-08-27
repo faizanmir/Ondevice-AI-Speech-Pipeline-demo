@@ -95,7 +95,7 @@ class DiarizeWorker @AssistedInject constructor(
             // found one speaker rather than as a model that cannot do this at all.
             val model = speechModels.selected
             check(model.kind.reportsWordTimings) {
-                "${model.label} reports no word timings. Choose Parakeet v3 or Whisper Small."
+                "${model.label} reports no word timings. Choose ${speechModels.wordTimingChoices}."
             }
             check(speechModels.isDownloaded(model)) { "${model.label} is not downloaded yet." }
 

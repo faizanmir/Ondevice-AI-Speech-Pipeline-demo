@@ -8,6 +8,8 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.example.aiagenttestapp.data.ArchiveEntry
+import com.example.aiagenttestapp.data.ArchiveExtractor
 import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.downloadToFile
 import kotlinx.coroutines.CoroutineScope
@@ -28,12 +30,55 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-/** One file that makes up a speech model. */
+/**
+ * One file that makes up a speech model.
+ *
+ * [url] is null for a file that arrives inside its model's [SpeechModelArchive] rather than on its
+ * own. It still carries a name and an exact size, because [SpeechModelRepository.isDownloaded]
+ * judges every file the same way however it got there.
+ */
 internal data class SpeechModelFile(
+    val name: String,
+    val url: String?,
+    val sizeBytes: Long,
+)
+
+/**
+ * A tarball carrying several of a model's files, for the releases sherpa-onnx publishes no other way.
+ *
+ * Every other speech model here is fetched a file at a time from HuggingFace, and that is the shape
+ * to prefer: one resumable transfer per file, an exact size to check each against, nothing to
+ * unpack. The FastConformer int8 builds do not offer it. Their HuggingFace repos exist and hold
+ * nothing but a `.gitattributes`; the quantised networks live only inside the GitHub release
+ * archive, and the float files that *are* on HuggingFace are a 456 MB encoder running float
+ * kernels, which throws away most of the reason to want the model.
+ *
+ * [entries] map archive members onto the local names in [SpeechModel.files], which carry the
+ * members' exact sizes. The audio-model bundles deliberately do not assert member sizes, because
+ * theirs are published nowhere. These were read out of the archive itself, and an archive that
+ * matches [sizeBytes] holds exactly those members -- so the check is the same contract the direct
+ * files have, not an invented one.
+ */
+internal data class SpeechModelArchive(
     val name: String,
     val url: String,
     val sizeBytes: Long,
+    val entries: List<ArchiveEntry>,
 )
+
+/**
+ * The files an unpacked archive failed to deliver at the size the catalogue promises.
+ *
+ * Missing and wrong-sized are reported together on purpose. A member that unpacked short is the
+ * archive-shaped version of a truncated download, and it would be handed to the native loader
+ * just the same; both mean "the release is not what this build was written against".
+ */
+internal fun archiveShortfall(
+    expected: List<SpeechModelFile>,
+    produced: Map<String, File>,
+): List<String> = expected
+    .filter { file -> produced[file.name]?.length() != file.sizeBytes }
+    .map { it.name }
 
 /** Which recogniser family a model belongs to -- decides how [SpeechRecognizer] configures it. */
 enum class SpeechEngineKind {
@@ -107,10 +152,17 @@ class SpeechModel internal constructor(
     /** Transducers only: the joiner network. Null for the encoder/decoder and single-file shapes. */
     internal val joiner: SpeechModelFile? = null,
     internal val tokens: SpeechModelFile,
+    /** Set when the files arrive inside one tarball instead of each from its own [SpeechModelFile.url]. */
+    internal val archive: SpeechModelArchive? = null,
 ) {
     internal val files: List<SpeechModelFile>
         get() = listOfNotNull(model, encoder, decoder, joiner, tokens)
-    val totalBytes: Long get() = files.sumOf { it.sizeBytes }
+
+    /**
+     * Bytes that cross the network. For an archive that is the compressed size, which is what the
+     * progress bar is actually measuring -- the unpacked files are a third larger.
+     */
+    val totalBytes: Long get() = archive?.sizeBytes ?: files.sumOf { it.sizeBytes }
 }
 
 /** A [SpeechModel] with its files resolved to absolute paths, ready for [SpeechRecognizer.load]. */
@@ -163,7 +215,17 @@ class SpeechModelRepository(context: Context, private val settings: SettingsStor
 
     /** Everything the Settings picker offers, in display order. First entry is the default. */
     val available: List<SpeechModel> =
-        listOf(SENSE_VOICE, WHISPER_SMALL, PARAKEET_V3, STREAMING_EN)
+        listOf(SENSE_VOICE, WHISPER_SMALL, PARAKEET_V3, FASTCONFORMER_EN_DE_ES_FR, STREAMING_EN)
+
+    /**
+     * The models speaker attribution can use, for a message telling the user what to switch to.
+     *
+     * Derived rather than spelled out at the call sites, which is where it went wrong before: two
+     * separate strings said "Choose Parakeet v3 or Whisper Small", and the third model that
+     * reports word timings would have arrived without either of them noticing.
+     */
+    val wordTimingChoices: String
+        get() = available.filter { it.kind.reportsWordTimings }.joinToString(" or ") { it.label }
 
     private val states: Map<String, MutableStateFlow<SpeechModelState>> =
         available.associate { it.id to MutableStateFlow(stateOnDisk(it)) }
@@ -306,6 +368,11 @@ class SpeechModelRepository(context: Context, private val settings: SettingsStor
     ) = withContext(Dispatchers.IO) {
         if (isDownloaded(model)) return@withContext
 
+        model.archive?.let { archive ->
+            downloadArchive(model, archive, onProgress)
+            return@withContext
+        }
+
         var completed = 0L
         val total = model.totalBytes
 
@@ -338,12 +405,83 @@ class SpeechModelRepository(context: Context, private val settings: SettingsStor
         file: SpeechModelFile,
         target: File,
         onProgress: suspend (Long) -> Unit,
-    ) = downloadToFile(client, file.url, target, file.name, onProgress)
+    ) {
+        // A catalogue error, not a runtime condition: a file with no URL belongs to an archive
+        // model, and those never reach this loop.
+        val url = file.url ?: throw IOException("${file.name} has no download source")
+        downloadToFile(client, url, target, file.name, onProgress)
+    }
+
+    /**
+     * Fetches the tarball, unpacks the members the model needs, then throws the archive away.
+     *
+     * Same shape as the audio bundles' archive path, with one difference: the members are checked
+     * against exact sizes, not just for presence -- see [SpeechModelArchive] for why that is
+     * honest here and would not be there.
+     *
+     * Unpacking goes through a per-model directory rather than straight into [dir]. The extractor
+     * keeps a `staging` folder it wipes on entry and exit, and two models unpacking into the same
+     * place at once would take each other's members down with it.
+     */
+    private suspend fun downloadArchive(
+        model: SpeechModel,
+        archive: SpeechModelArchive,
+        onProgress: suspend (Float) -> Unit,
+    ) {
+        val tarball = File(dir, archive.name)
+
+        if (tarball.length() != archive.sizeBytes) {
+            val part = File(dir, "${archive.name}.part")
+            downloadToFile(client, archive.url, part, archive.name) { bytes ->
+                val fraction = bytes.toFloat() / archive.sizeBytes * ARCHIVE_TRANSFER_SHARE
+                onProgress(fraction.coerceIn(0f, ARCHIVE_TRANSFER_SHARE))
+            }
+            if (part.length() != archive.sizeBytes) {
+                part.delete()
+                throw IOException("${archive.name} downloaded to the wrong size")
+            }
+            if (!part.renameTo(tarball)) throw IOException("Could not save ${archive.name}")
+        }
+
+        // Progress is scaled so that unpacking has somewhere to go. bzip2 over a hundred megabytes
+        // is slow enough to notice on a phone, and a bar parked at 100% through it reads as a hang.
+        onProgress(ARCHIVE_TRANSFER_SHARE)
+
+        val unpack = File(dir, "${model.id}.unpack")
+        try {
+            val produced = ArchiveExtractor.extractOrThrow(tarball, unpack, archive.entries)
+
+            val shortfall = archiveShortfall(model.files, produced)
+            if (shortfall.isNotEmpty()) {
+                throw IOException(
+                    "${archive.name} did not contain ${shortfall.joinToString()} at the expected " +
+                        "size -- the model release may have changed shape",
+                )
+            }
+
+            // Only once every member has passed. Moving them one at a time as they were checked
+            // would leave a half-installed model behind a failure, and isDownloaded would then be
+            // the only thing standing between that and the native loader.
+            for (file in model.files) {
+                val target = fileFor(file)
+                target.delete()
+                val source = produced.getValue(file.name)
+                if (!source.renameTo(target)) source.copyTo(target, overwrite = true)
+            }
+        } finally {
+            unpack.deleteRecursively()
+        }
+
+        tarball.delete()
+        onProgress(1f)
+    }
 
     /** Deletes one recogniser without discarding the other models the user chose to keep. */
     fun delete(model: SpeechModel) {
         cancelDownload(model)
         model.files.forEach { fileFor(it).delete() }
+        // A tarball left by a download that was cancelled between transfer and unpack.
+        model.archive?.let { File(dir, it.name).delete() }
         refresh()
     }
 
@@ -363,6 +501,19 @@ class SpeechModelRepository(context: Context, private val settings: SettingsStor
          * exists to serve.
          */
         private const val PARAKEET_V3_REPO = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
+
+        private const val GH_ASR = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
+
+        /**
+         * The int8 release. Its siblings are traps of the usual kind: `-en-24500` is the same
+         * architecture, English only, and `-be-de-en-es-fr-hr-it-pl-ru-uk-20k` covers ten
+         * languages at the same size if four ever stop being enough.
+         */
+        private const val FASTCONFORMER_RELEASE =
+            "sherpa-onnx-nemo-fast-conformer-transducer-en-de-es-fr-14288-int8"
+
+        /** Share of the archive progress bar given to the transfer; the rest is unpacking. */
+        private const val ARCHIVE_TRANSFER_SHARE = 0.9f
 
         /** Work-data keys shared with [SpeechModelDownloadWorker]. */
         internal const val KEY_MODEL_ID = "speechModelId"
@@ -548,6 +699,89 @@ class SpeechModelRepository(context: Context, private val settings: SettingsStor
                 name = "parakeet-v3-tokens.txt",
                 url = "$HF/csukuangfj/$PARAKEET_V3_REPO/resolve/main/tokens.txt?download=true",
                 sizeBytes = 93_939L,
+            ),
+        )
+
+        /**
+         * Sizes read from the release archive itself (`tar -tjvf`), not from a listing: nothing
+         * publishes them. Names carry the language set because the ten-language sibling would
+         * otherwise download to the same files and load as the wrong model without a trace.
+         */
+        private val FASTCONFORMER_ENCODER = SpeechModelFile(
+            name = "fastconformer-en-de-es-fr-encoder.int8.onnx",
+            url = null,
+            sizeBytes = 131_113_682L,
+        )
+        private val FASTCONFORMER_DECODER = SpeechModelFile(
+            name = "fastconformer-en-de-es-fr-decoder.int8.onnx",
+            url = null,
+            sizeBytes = 4_938_904L,
+        )
+        private val FASTCONFORMER_JOINER = SpeechModelFile(
+            name = "fastconformer-en-de-es-fr-joiner.int8.onnx",
+            url = null,
+            sizeBytes = 2_397_367L,
+        )
+        private val FASTCONFORMER_TOKENS = SpeechModelFile(
+            name = "fastconformer-en-de-es-fr-tokens.txt",
+            url = null,
+            sizeBytes = 24_057L,
+        )
+
+        /**
+         * NeMo's FastConformer hybrid transducer, "large" (~114 M parameters), int8, for English,
+         * German, Spanish and French.
+         *
+         * It is here for speed, on the path Parakeet already takes. Diarising a twenty-minute
+         * recording on the Xiaomi Pad 8 measured transcription as the long pole -- 114.7 s against
+         * 73.7 s for the speaker branch -- and Parakeet's encoder is 24 layers at d=1024 with
+         * nothing left to trim around it. This encoder is 17 layers at d=512 with the same 8x
+         * subsampling: about 5.6x less work per frame, 131 MB against 652 MB, and a fifth of the
+         * resident memory.
+         *
+         * What it keeps, checked rather than assumed:
+         *
+         *  - **Word timings.** It decodes through sherpa's `nemo_transducer` path, the same
+         *    `Convert()` that gives Parakeet its token times, so speaker attribution works
+         *    unchanged. sherpa tells a plain RNN-T from a TDT model by the encoder's metadata, so
+         *    the recogniser configuration is identical too.
+         *  - **Punctuation and capitals.** The vocabulary is a 2,561-token BPE set with `,` `.`
+         *    `?`, `▁The` and `▁Die` in it -- the `_pc` training -- so the summariser gets sentences.
+         *
+         * What it costs is accuracy, and by how much is **unmeasured**: this is the generation
+         * before Parakeet. Score it on `docs/data/long_en.ref.txt` and `long_de.ref.txt` through
+         * `docs/wer.py` before treating it as the default. Parakeet v3 stays in the list as the
+         * accurate option, the way ERes2Net stays beside CAM++.
+         *
+         * Canary 180M, the other small multilingual NeMo model, was ruled out for the mirror-image
+         * reason: sherpa's Canary decoder fills `text` and `tokens` and never `timestamps`.
+         */
+        internal val FASTCONFORMER_EN_DE_ES_FR = SpeechModel(
+            id = "fastconformer-en-de-es-fr",
+            label = "FastConformer",
+            blurb = "NVIDIA's smaller recogniser for English, German, Spanish and French: about " +
+                "five times less work than Parakeet v3, at a cost in accuracy that has not been " +
+                "measured here yet.",
+            kind = SpeechEngineKind.NEMO_TRANSDUCER,
+            model = null,
+            encoder = FASTCONFORMER_ENCODER,
+            decoder = FASTCONFORMER_DECODER,
+            joiner = FASTCONFORMER_JOINER,
+            tokens = FASTCONFORMER_TOKENS,
+            archive = SpeechModelArchive(
+                name = "$FASTCONFORMER_RELEASE.tar.bz2",
+                url = "$GH_ASR/$FASTCONFORMER_RELEASE.tar.bz2",
+                sizeBytes = 106_902_947L,
+                // Anchored exact names, not the "prefer int8, settle for float" pairs the keyword
+                // bundle uses: this archive ships one build of each network and nothing else
+                // ends in `.onnx`, so a looser pattern would only widen what a changed release
+                // could silently hand over.
+                entries = listOf(
+                    ArchiveEntry(FASTCONFORMER_ENCODER.name, listOf(Regex("^encoder\\.int8\\.onnx$"))),
+                    ArchiveEntry(FASTCONFORMER_DECODER.name, listOf(Regex("^decoder\\.int8\\.onnx$"))),
+                    ArchiveEntry(FASTCONFORMER_JOINER.name, listOf(Regex("^joiner\\.int8\\.onnx$"))),
+                    ArchiveEntry(FASTCONFORMER_TOKENS.name, listOf(Regex("^tokens\\.txt$"))),
+                ),
             ),
         )
     }

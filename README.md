@@ -76,6 +76,7 @@ The downloadable recognisers:
 | **Streaming Zipformer** | ~73 MB | English only, transcribed live as you speak |
 | **Whisper Small** | ~375 MB | ~100 languages, detected automatically. Slower |
 | **Parakeet v3** | ~670 MB | English, German and 23 more European languages. Most accurate |
+| **FastConformer** | ~105 MB | English, German, Spanish, French. About five times less work than Parakeet; accuracy not yet measured here |
 
 Three optional bundles download separately:
 
@@ -186,8 +187,9 @@ Speech models likewise download on demand, the first time you need one.
 
 - **Chat model** — the model new chats, note summaries and audits use.
 - **Speech recognition** — which recogniser the sherpa-onnx backend downloads and uses: SenseVoice
-  for speed, Parakeet v3 for accuracy in English and the European languages, Whisper Small for
-  everything further afield, streaming for a live transcript. (Which *backend* — speech model,
+  for speed, Parakeet v3 for accuracy in English and the European languages, FastConformer for
+  speed in English, German, Spanish and French, Whisper Small for everything further afield,
+  streaming for a live transcript. (Which *backend* — speech model,
   Gemma or Android — is picked on the record screen, per recording.)
 - **Voice notes** — skip silence, spoken keyword markers, the speaker bundle, and the ONNX execution
   provider (CPU by default; XNNPACK is the faster one).
