@@ -19,8 +19,13 @@ class ThreadBudgetTest {
     }
 
     @Test
-    fun `with the fast embedder an eight core device gives transcription the extra thread`() {
-        val split = ThreadBudget.concurrent(cores = 8, weights = ThreadBudget.Weights.FAST_EMBEDDER)
+    fun `a heavy recogniser gives transcription the extra thread`() {
+        // CAM++ embedding (diarise 6) against Parakeet (transcribe 8): transcription is the bigger
+        // job, so it takes the odd thread. This is the split the app was tuned to before a cheaper
+        // recogniser existed.
+        val split = ThreadBudget.concurrent(
+            cores = 8, weights = ThreadBudget.Weights(diarise = 6, transcribe = 8),
+        )
 
         assertEquals(3, split.diarise)
         assertEquals(4, split.transcribe)
@@ -28,8 +33,13 @@ class ThreadBudgetTest {
     }
 
     @Test
-    fun `with the slow embedder the extra thread goes the other way`() {
-        val split = ThreadBudget.concurrent(cores = 8, weights = ThreadBudget.Weights.SLOW_EMBEDDER)
+    fun `a light recogniser hands the extra thread back to diarisation`() {
+        // CAM++ embedding (diarise 6) against FastConformer (transcribe 4): transcription is now the
+        // small job, so the split flips -- the regression the old embedder-only presets could not
+        // see, because they assumed Parakeet.
+        val split = ThreadBudget.concurrent(
+            cores = 8, weights = ThreadBudget.Weights(diarise = 6, transcribe = 4),
+        )
 
         assertEquals(4, split.diarise)
         assertEquals(3, split.transcribe)
@@ -37,16 +47,20 @@ class ThreadBudgetTest {
     }
 
     /**
-     * The whole reason the weights are a pair: a budget calibrated for one embedding model and
-     * applied to the other lands on the wrong side, which measured about 16 seconds of wall clock.
+     * The whole reason the weights are a pair: the same embedder against a heavy versus a light
+     * recogniser lands the odd thread on opposite branches.
      */
     @Test
-    fun `the two calibrations disagree about who gets the extra thread`() {
-        val fast = ThreadBudget.concurrent(cores = 8, weights = ThreadBudget.Weights.FAST_EMBEDDER)
-        val slow = ThreadBudget.concurrent(cores = 8, weights = ThreadBudget.Weights.SLOW_EMBEDDER)
+    fun `swapping the recogniser moves who gets the extra thread`() {
+        val heavy = ThreadBudget.concurrent(
+            cores = 8, weights = ThreadBudget.Weights(diarise = 6, transcribe = 8),
+        )
+        val light = ThreadBudget.concurrent(
+            cores = 8, weights = ThreadBudget.Weights(diarise = 6, transcribe = 4),
+        )
 
-        assertTrue(fast.transcribe > fast.diarise)
-        assertTrue(slow.diarise > slow.transcribe)
+        assertTrue(heavy.transcribe > heavy.diarise)
+        assertTrue(light.diarise > light.transcribe)
     }
 
     @Test

@@ -34,7 +34,9 @@ import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
@@ -87,7 +89,6 @@ class DiarizeWorker @AssistedInject constructor(
 
         runCatching { setForeground(foregroundInfo(id, 0f)) }
 
-        val diarizer = SpeakerDiarizer()
         return try {
             // Refused rather than degraded, and on the capability rather than on a model name. A
             // recogniser with no word timings leaves every word outside every turn, and the whole
@@ -151,35 +152,28 @@ class DiarizeWorker @AssistedInject constructor(
             // pool from availableProcessors() and cap it at 4, which on an eight-core device asked
             // for eight ONNX threads plus the dispatcher's own pool -- measured at 590-615% of
             // 800%, thirteen threads at 7-93%, none of them saturating. See [ThreadBudget].
-            // Which branch is the long pole depends on the embedding model, so the split does
-            // too: CAM++ compares voices about 2.8x faster and hands the lead to transcription.
+            //
+            // The split leans toward whichever branch is the long pole, and that depends on both
+            // models -- the embedder decides the diarisation cost, the recogniser the transcription
+            // cost -- so each contributes its own weight. This used to key only on the embedder and
+            // silently assumed Parakeet: with FastConformer's ~39s transcription against a ~63s
+            // diarisation branch, the odd thread now belongs to diarisation, which the old presets
+            // could not express.
             val threads = ThreadBudget.concurrent(
-                weights = if (bundle.id == AudioModelCatalog.SPEAKER_CAMPP_BUNDLE_ID) {
-                    ThreadBudget.Weights.FAST_EMBEDDER
-                } else {
-                    ThreadBudget.Weights.SLOW_EMBEDDER
-                },
+                weights = ThreadBudget.Weights(
+                    diarise = bundle.diariseWeight,
+                    transcribe = model.transcribeWeight,
+                ),
             )
             Log.i(
                 TAG,
                 "thread budget: diarise ${threads.diarise}, transcribe ${threads.transcribe} " +
-                    "(${bundle.id})",
+                    "(${bundle.id} / ${model.id})",
             )
 
             val wallStarted = System.currentTimeMillis()
             val (diarised, transcribed) = coroutineScope {
                 val diarisation = async(Dispatchers.Default) {
-                    diarizer.load(
-                        segmentationModel = audioModels.fileFor(bundle, AudioModelCatalog.SEGMENTATION),
-                        embeddingModel = audioModels.fileFor(bundle, AudioModelCatalog.EMBEDDING),
-                        expectedSpeakers = recording.expectedSpeakers,
-                        threadCount = threads.diarise,
-                        // The whole sherpa-onnx side of a run takes the one provider Settings names:
-                        // segmentation and embedding here, the VAD in compactToSpeech, the naming
-                        // embedder in SpeakerRepository, and the recogniser on the other branch.
-                        provider = settings.settings.value.onnxProvider.slug,
-                    )
-
                     // Clustering and folding both compare turns against each other, so their cost
                     // grows faster than the recording does. Chunking bounds that to whatever fits
                     // in one chunk -- but only naming can tell the chunks apart afterwards, so this
@@ -194,36 +188,51 @@ class DiarizeWorker @AssistedInject constructor(
                         listOf(DiarizationChunk(0, compacted.samples.size))
                     }
 
-                    var diariseMillis = 0L
-                    var attributeMillis = 0L
+                    // How many chunks to diarise at once. sherpa's process() is one unbatched ONNX
+                    // run per window, so a single chunk on all the diarise threads leaves the machine
+                    // underused -- XNNPACK moved a 20-minute diarisation by only 3%, which is the
+                    // tell. Splitting the threads across lanes that each own a chunk keeps more cores
+                    // busy, at the cost of one resident model set per extra lane. Never more chunks
+                    // than there are, never more than the thread budget can halve, never more than
+                    // the memory cap.
+                    val lanes = if (chunks.size > 1) {
+                        minOf(MAX_DIARIZE_LANES, chunks.size, threads.diarise)
+                    } else {
+                        1
+                    }
+                    // The provider every sherpa-onnx model on this side of the run takes, from
+                    // Settings: segmentation and embedding here, the VAD in compactToSpeech, the
+                    // naming embedder in SpeakerRepository, and the recogniser on the other branch.
+                    val provider = settings.settings.value.onnxProvider.slug
+
+                    // The parallelisable half. Model load is inside, and counted, because with lanes
+                    // it happens concurrently and is genuinely part of the branch's wall clock.
+                    val diariseStarted = System.currentTimeMillis()
+                    val perChunkTurns = diarizeChunks(
+                        chunks = chunks,
+                        compacted = compacted,
+                        segmentationModel = audioModels.fileFor(bundle, AudioModelCatalog.SEGMENTATION),
+                        embeddingModel = audioModels.fileFor(bundle, AudioModelCatalog.EMBEDDING),
+                        expectedSpeakers = recording.expectedSpeakers,
+                        diariseThreads = threads.diarise,
+                        provider = provider,
+                        lanes = lanes,
+                    )
+                    val diariseMillis = System.currentTimeMillis() - diariseStarted
+                    val rawTurnCount = perChunkTurns.sumOf { it.size }
+
+                    // The sequential half. Fold and name share one embedder behind a lock, so they
+                    // cannot run in parallel -- but they are cheap now that they share one embedding
+                    // pass, and they must run in chunk order for the placeholder counter to number
+                    // strangers by first appearance across the whole recording.
                     var nextCluster = 0
                     var placeholder = 0
-                    var rawTurnCount = 0
                     val turns = mutableListOf<DiarizedSegment>()
                     val names = mutableMapOf<Int, String>()
 
-                    for (chunk in chunks) {
-                        // The only place a long diarisation can be stopped. sherpa's process() is
-                        // one uninterruptible native call -- 267 seconds of it on a twenty-minute
-                        // recording -- so without chunks a cancelled run has to be waited out.
+                    val attributeStarted = System.currentTimeMillis()
+                    for (inCompacted in perChunkTurns) {
                         ensureActive()
-
-                        // One chunk is the whole recording, and copying it to say so would double
-                        // peak memory on the largest recordings for nothing.
-                        val slice = if (chunks.size == 1) {
-                            compacted.samples
-                        } else {
-                            compacted.samples.copyOfRange(chunk.startSample, chunk.endSample)
-                        }
-
-                        val diariseStarted = System.currentTimeMillis()
-                        val local = diarizer.diarize(slice)
-                        diariseMillis += System.currentTimeMillis() - diariseStarted
-                        rawTurnCount += local.size
-
-                        // Back into compacted coordinates before anything reads audio by these
-                        // ranges: `slice` starts at zero, `compacted.samples` does not.
-                        val inCompacted = DiarizationChunks.toCompacted(local, chunk)
 
                         // Fold fragments and name the survivors in one pass over one set of
                         // voiceprints -- naming no longer re-embeds what folding already did. Per
@@ -231,10 +240,8 @@ class DiarizeWorker @AssistedInject constructor(
                         // is independent of the other chunks, and the placeholder counter is threaded
                         // through so the "Unknown Speaker N" numbering stays global. See
                         // [SpeakerRepository.foldAndName].
-                        val attributeStarted = System.currentTimeMillis()
                         val attribution =
                             speakers.foldAndName(compacted.samples, inCompacted, placeholder)
-                        attributeMillis += System.currentTimeMillis() - attributeStarted
                         placeholder = attribution.nextPlaceholder
 
                         // Namespace the folded turns and their names by the same offset: sherpa
@@ -246,11 +253,12 @@ class DiarizeWorker @AssistedInject constructor(
                         nextCluster = next
                         turns += namespaced
                     }
-                    diarizer.release()
+                    val attributeMillis = System.currentTimeMillis() - attributeStarted
 
                     Log.i(
                         TAG,
-                        "diarisation over ${chunks.size} chunk(s) found $rawTurnCount turns, " +
+                        "diarisation over ${chunks.size} chunk(s) in $lanes lane(s) found " +
+                            "$rawTurnCount turns, " +
                             "${turns.map { it.cluster }.distinct().size} clusters after folding " +
                             "fragments, ${names.values.distinct().size} distinct names",
                     )
@@ -380,7 +388,9 @@ class DiarizeWorker @AssistedInject constructor(
             dao.fail(id, e.message ?: "The run failed.")
             Result.success()
         } finally {
-            diarizer.release()
+            // Each diarisation lane releases its own diarizer in [diarizeChunks]; there is no
+            // longer a run-scoped one to release here.
+            //
             // Work replacement and deletion cancel this coroutine. Native cleanup still has to wait
             // for any concurrent enrolment operation and run to completion; abandoning it can retain
             // the model indefinitely or tempt a later unsynchronised release.
@@ -448,6 +458,91 @@ class DiarizeWorker @AssistedInject constructor(
             ),
         )
         return compacted
+    }
+
+    /**
+     * Diarises every chunk, running [lanes] of them at once, and returns each chunk's turns in
+     * compacted coordinates in chunk order.
+     *
+     * **Why lanes.** sherpa's `process()` is one ONNX run per segmentation window and one per
+     * (window, speaker) embedding, none of it batched, so a single chunk given the whole diarise
+     * budget cannot keep the cores fed -- the per-window overhead stalls them. Two chunks on half
+     * the threads each run two of those streams side by side, so one lane's stalls are the other
+     * lane's work. The total thread count is unchanged; only its division is.
+     *
+     * **The cost.** One [SpeakerDiarizer] per lane, because a single instance cannot `process()` two
+     * clips at once, and each carries its own copy of the segmentation and embedding models -- so a
+     * second lane is a second resident model set. The caller caps [lanes] to keep that bounded and
+     * only pays it when there is more than one chunk to spread.
+     *
+     * Chunk order is preserved on purpose: the fold-name pass that consumes this numbers unnamed
+     * speakers by first appearance, which is only "across the recording" if the chunks arrive in
+     * time order. Lanes are assigned round-robin so they finish close together when chunk sizes vary.
+     */
+    private suspend fun diarizeChunks(
+        chunks: List<DiarizationChunk>,
+        compacted: CompactedAudio,
+        segmentationModel: File,
+        embeddingModel: File,
+        expectedSpeakers: Int,
+        diariseThreads: Int,
+        provider: String,
+        lanes: Int,
+    ): List<List<DiarizedSegment>> {
+        fun sliceFor(chunk: DiarizationChunk): FloatArray =
+            // One chunk is the whole recording, and copying it to say so would double peak memory on
+            // the largest recordings for nothing.
+            if (chunks.size == 1) {
+                compacted.samples
+            } else {
+                compacted.samples.copyOfRange(chunk.startSample, chunk.endSample)
+            }
+
+        fun newDiarizer(threads: Int) = SpeakerDiarizer().apply {
+            load(
+                segmentationModel = segmentationModel,
+                embeddingModel = embeddingModel,
+                expectedSpeakers = expectedSpeakers,
+                threadCount = threads,
+                provider = provider,
+            )
+        }
+
+        // One diarizer, sequential: the whole-recording case, and any case where the budget cannot
+        // give each lane a thread. `ensureActive` between chunks is the only place a long
+        // diarisation can be stopped -- process() itself is an uninterruptible native call.
+        if (lanes <= 1) {
+            val diarizer = newDiarizer(diariseThreads)
+            return try {
+                chunks.map { chunk ->
+                    currentCoroutineContext().ensureActive()
+                    DiarizationChunks.toCompacted(diarizer.diarize(sliceFor(chunk)), chunk)
+                }
+            } finally {
+                diarizer.release()
+            }
+        }
+
+        // Several lanes, each its own diarizer over a round-robin share of the chunks, each on its
+        // share of the threads. The results carry their chunk index so the flattened list can be put
+        // back into chunk order.
+        val perLaneThreads = (diariseThreads / lanes).coerceAtLeast(1)
+        return coroutineScope {
+            (0 until lanes).map { lane ->
+                async(Dispatchers.Default) {
+                    val laneChunks = chunks.withIndex().filter { it.index % lanes == lane }
+                    val diarizer = newDiarizer(perLaneThreads)
+                    try {
+                        laneChunks.map { (index, chunk) ->
+                            currentCoroutineContext().ensureActive()
+                            index to DiarizationChunks.toCompacted(diarizer.diarize(sliceFor(chunk)), chunk)
+                        }
+                    } finally {
+                        diarizer.release()
+                    }
+                }
+            }.awaitAll().flatten().sortedBy { it.first }.map { it.second }
+        }
     }
 
     /**
@@ -523,6 +618,16 @@ class DiarizeWorker @AssistedInject constructor(
          * and [CompactedAudio.of] merges touching regions back into one piece.
          */
         private const val MAX_SPEECH_SAMPLES = 5 * 60 * AudioRecorder.SAMPLE_RATE
+
+        /**
+         * How many chunks may be diarised at once. Two, because each lane is a second resident copy
+         * of the segmentation and embedding models (~46 MB) on top of the recogniser and the whole
+         * recording as floats -- and because the gain is from overlapping two thread-starved streams,
+         * which a second lane already delivers. Raising it trades memory for a smaller marginal
+         * speed-up and is the first thing to try if a device has cores and RAM to spare. See
+         * [diarizeChunks].
+         */
+        private const val MAX_DIARIZE_LANES = 2
 
         private const val TAG = "DiarizeWorker"
         private const val CHANNEL_ID = "speaker_diarization"

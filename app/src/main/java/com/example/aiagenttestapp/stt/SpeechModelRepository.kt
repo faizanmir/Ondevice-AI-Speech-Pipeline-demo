@@ -154,6 +154,16 @@ class SpeechModel internal constructor(
     internal val tokens: SpeechModelFile,
     /** Set when the files arrive inside one tarball instead of each from its own [SpeechModelFile.url]. */
     internal val archive: SpeechModelArchive? = null,
+    /**
+     * This recogniser's transcription cost relative to the diarisation branch, for the concurrent
+     * thread split -- see [com.example.aiagenttestapp.stt.ThreadBudget.Weights].
+     *
+     * Roughly relative core-seconds on a 20:36 recording: Parakeet 0.6B ~8 (114.7s), FastConformer
+     * ~4 (38.9s), Whisper Small heaviest at ~14. The value only matters for a model that reaches
+     * diarisation, which is any that reports word timings; the rest keep the middle default so a
+     * future timestamped model is never accidentally starved. Meant to be re-measured.
+     */
+    internal val transcribeWeight: Int = 8,
 ) {
     internal val files: List<SpeechModelFile>
         get() = listOfNotNull(model, encoder, decoder, joiner, tokens)
@@ -629,6 +639,9 @@ class SpeechModelRepository(context: Context, private val settings: SettingsStor
                 url = "$HF/csukuangfj/sherpa-onnx-whisper-small/resolve/main/small-tokens.txt?download=true",
                 sizeBytes = 816_730L,
             ),
+            // The heaviest recogniser that reaches diarisation, by a wide margin -- so it takes the
+            // largest share of the thread budget away from the diarisation branch.
+            transcribeWeight = 14,
         )
 
         /**
@@ -700,6 +713,9 @@ class SpeechModelRepository(context: Context, private val settings: SettingsStor
                 url = "$HF/csukuangfj/$PARAKEET_V3_REPO/resolve/main/tokens.txt?download=true",
                 sizeBytes = 93_939L,
             ),
+            // The reference cost the other weights are set against: 114.7s of transcription on the
+            // 20:36 benchmark, the bigger branch back when it was the only accurate recogniser.
+            transcribeWeight = 8,
         )
 
         /**
@@ -783,6 +799,10 @@ class SpeechModelRepository(context: Context, private val settings: SettingsStor
                     ArchiveEntry(FASTCONFORMER_TOKENS.name, listOf(Regex("^tokens\\.txt$"))),
                 ),
             ),
+            // ~39s of transcription on the 20:36 benchmark against Parakeet's 114.7s, which is what
+            // flips the thread split back toward diarisation -- diarisation is the pole with this
+            // recogniser. See [ThreadBudget.Weights].
+            transcribeWeight = 4,
         )
     }
 }

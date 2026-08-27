@@ -58,6 +58,15 @@ class AudioModelBundle internal constructor(
      * bundle produced them. See [com.example.aiagenttestapp.data.speakers.SpeakerRecord].
      */
     val embeddingModelId: String? = null,
+    /**
+     * This embedder's diarisation cost relative to the transcription branch, for the concurrent
+     * thread split -- see [com.example.aiagenttestapp.stt.ThreadBudget.Weights].
+     *
+     * Roughly relative core-seconds: ERes2Net-base ~10, CAM++ ~6 (it compares voices about 2.8x
+     * faster). Only meaningful for a bundle that actually diarises; the rest keep the default and it
+     * is never read. Meant to be re-measured.
+     */
+    val diariseWeight: Int = 10,
 ) {
     /** Bytes that cross the network. For an archive this is the compressed size, which is what the
      *  progress bar is actually measuring. */
@@ -177,6 +186,8 @@ internal object AudioModelCatalog {
             ),
         ),
         embeddingModelId = EMBEDDING_MODEL_ID,
+        // ERes2Net-base: the slower embedder, so the diarisation branch weighs more in the split.
+        diariseWeight = 10,
     )
 
     /**
@@ -218,6 +229,9 @@ internal object AudioModelCatalog {
             ),
         ),
         embeddingModelId = EMBEDDING_MODEL_ID_CAMPP,
+        // CAM++: ~2.8x faster to compare voices, so the diarisation branch weighs less and hands a
+        // thread to transcription when the recogniser is the heavier one.
+        diariseWeight = 6,
     )
 
     /**
