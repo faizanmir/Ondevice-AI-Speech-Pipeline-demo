@@ -96,6 +96,50 @@ class ThreadBudgetTest {
     }
 
     @Test
+    fun `few fast cores cap the budget below the core count`() {
+        // Eight cores but only two run near the top clock (a big.LITTLE part): the budget stops
+        // spilling ONNX threads onto the slow companions -- two fast plus the headroom, not cores-1.
+        val split = ThreadBudget.concurrent(
+            cores = 8, fastCores = 2,
+            weights = ThreadBudget.Weights(diarise = 6, transcribe = 4),
+        )
+        assertEquals(4, split.total)
+        assertEquals(2, split.diarise)
+        assertEquals(2, split.transcribe)
+    }
+
+    @Test
+    fun `enough fast cores leave the budget at cores minus one`() {
+        // Six fast cores clears cores-1, so nothing is held back: the many-core devices are unchanged.
+        val split = ThreadBudget.concurrent(
+            cores = 8, fastCores = 6,
+            weights = ThreadBudget.Weights(diarise = 6, transcribe = 4),
+        )
+        assertEquals(7, split.total)
+    }
+
+    @Test
+    fun `fast-core detection counts cores near the top clock`() {
+        // MT8755-shaped: six at 2.0 GHz against two at 2.6 GHz -> two fast.
+        val mtk = longArrayOf(
+            2_000_000, 2_000_000, 2_000_000, 2_000_000, 2_000_000, 2_000_000, 2_600_000, 2_600_000,
+        )
+        assertEquals(2, ThreadBudget.detectFastCores(cores = 8) { mtk[it] })
+
+        // Snapdragon-shaped: 3.2 + 3.0x3 + 2.8x2 + 2.0x2 -> only the 2.0 GHz pair drops out.
+        val sd = longArrayOf(
+            3_206_400, 3_014_400, 3_014_400, 3_014_400, 2_803_200, 2_803_200, 2_016_000, 2_016_000,
+        )
+        assertEquals(6, ThreadBudget.detectFastCores(cores = 8) { sd[it] })
+    }
+
+    @Test
+    fun `unreadable topology falls back to all cores`() {
+        // No /sys to read: assume every core is fast, which restores the old cores-1 budget.
+        assertEquals(8, ThreadBudget.detectFastCores(cores = 8) { null })
+    }
+
+    @Test
     fun `a stage running alone still leaves one core free`() {
         assertEquals(7, ThreadBudget.exclusive(cores = 8))
         assertEquals(3, ThreadBudget.exclusive(cores = 4))

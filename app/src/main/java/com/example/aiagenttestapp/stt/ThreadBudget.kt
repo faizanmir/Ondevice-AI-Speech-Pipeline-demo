@@ -1,5 +1,6 @@
 package com.example.aiagenttestapp.stt
 
+import java.io.File
 import kotlin.math.roundToInt
 
 /**
@@ -53,6 +54,9 @@ object ThreadBudget {
      */
     data class Weights(val diarise: Int, val transcribe: Int)
 
+    /** A couple of efficiency cores can still take work past the fast ones. Tune and re-measure. */
+    const val FAST_CORE_HEADROOM = 2
+
     /**
      * Splits the machine between two branches that run at the same time.
      *
@@ -60,21 +64,56 @@ object ThreadBudget {
      * UI all need somewhere to run, and a run that saturates every core makes the progress bar
      * stutter for no measured gain.
      *
+     * The budget is sized by the **fast** cores, not the raw count. `cores - 1` was right on a chip
+     * whose cores are all quick, but on a big.LITTLE part with two 2.6 GHz cores against six 2.0 GHz
+     * companions it asks for seven ONNX threads and spills five onto the slow cores; every per-op
+     * barrier then waits on one of them -- the same drag the recogniser's own `min(cores-2, 4)` cap
+     * already guards against, undone here. So the budget is [fastCores] plus a small headroom, and
+     * `cores - 1` becomes the ceiling rather than the value: a device where every core is fast (so
+     * fastCores == cores) is unchanged, a two-fast-core device is held back from its slow companions.
+     *
      * The weights default to even; every real caller passes a pair built from the two selected
-     * models, and only the invariant tests lean on the default.
+     * models, and only the invariant tests lean on the default. [fastCores] defaults to [cores] so
+     * that same default reproduces the old `cores - 1` behaviour for those tests.
      */
     fun concurrent(
         cores: Int = Runtime.getRuntime().availableProcessors(),
         weights: Weights = Weights(diarise = 1, transcribe = 1),
+        fastCores: Int = cores,
     ): Split {
         // Two is the floor: below it there is nothing to split and both branches get one thread.
-        val budget = (cores - 1).coerceAtLeast(2)
+        val budget = minOf(cores - 1, fastCores + FAST_CORE_HEADROOM).coerceAtLeast(2)
         val total = (weights.diarise + weights.transcribe).coerceAtLeast(1)
         val diarise = ((budget.toDouble() * weights.diarise) / total)
             .roundToInt()
             .coerceIn(1, budget - 1)
         return Split(diarise = diarise, transcribe = budget - diarise)
     }
+
+    /**
+     * How many of [cores] run at (near) the top clock -- the performance cores.
+     *
+     * Read from each core's `cpuinfo_max_freq` and counted as fast when within 15% of the fastest,
+     * which separates a 2.6 GHz A76 cluster from 2.0 GHz A55 companions without hard-coding any
+     * frequency. Unreadable topology falls back to [cores], which restores the plain `cores - 1`
+     * budget -- the safe direction, since erring high only ever asks for more threads, never fewer.
+     *
+     * [maxFreqKHz] is injected so the rule can be pinned by a JVM test without a real `/sys`.
+     */
+    fun detectFastCores(
+        cores: Int = Runtime.getRuntime().availableProcessors(),
+        maxFreqKHz: (Int) -> Long? = ::readCpuMaxFreqKHz,
+    ): Int {
+        val freqs = (0 until cores).mapNotNull(maxFreqKHz)
+        if (freqs.isEmpty()) return cores
+        val top = freqs.max()
+        val threshold = top * 85 / 100
+        return freqs.count { it >= threshold }.coerceAtLeast(1)
+    }
+
+    private fun readCpuMaxFreqKHz(cpu: Int): Long? = runCatching {
+        File("/sys/devices/system/cpu/cpu$cpu/cpufreq/cpuinfo_max_freq").readText().trim().toLong()
+    }.getOrNull()
 
     /**
      * The whole budget, for a stage with nothing running beside it.

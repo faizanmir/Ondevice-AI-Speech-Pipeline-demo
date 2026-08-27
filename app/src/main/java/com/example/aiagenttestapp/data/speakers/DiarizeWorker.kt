@@ -159,16 +159,21 @@ class DiarizeWorker @AssistedInject constructor(
             // silently assumed Parakeet: with FastConformer's ~39s transcription against a ~63s
             // diarisation branch, the odd thread now belongs to diarisation, which the old presets
             // could not express.
+            // Sized by the fast cores, not the raw count: a big.LITTLE chip with only a couple of
+            // performance cores must not spill ONNX threads onto its slow companions. See
+            // [ThreadBudget.concurrent].
+            val fastCores = ThreadBudget.detectFastCores()
             val threads = ThreadBudget.concurrent(
                 weights = ThreadBudget.Weights(
                     diarise = bundle.diariseWeight,
                     transcribe = model.transcribeWeight,
                 ),
+                fastCores = fastCores,
             )
             Log.i(
                 TAG,
                 "thread budget: diarise ${threads.diarise}, transcribe ${threads.transcribe} " +
-                    "(${bundle.id} / ${model.id})",
+                    "(${bundle.id} / ${model.id}, $fastCores fast cores)",
             )
 
             val wallStarted = System.currentTimeMillis()
