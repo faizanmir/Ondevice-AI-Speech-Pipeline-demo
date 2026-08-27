@@ -1,6 +1,7 @@
 package com.example.aiagenttestapp.data.speakers
 
 import android.util.Log
+import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.audiomodels.AudioModelCatalog
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
 import com.example.aiagenttestapp.stt.AudioRecorder
@@ -85,9 +86,20 @@ sealed interface EnrollResult {
 class SpeakerRepository(
     private val dao: SpeakerDao,
     private val audioModels: AudioModelRepository,
+    private val settings: SettingsStore,
 ) {
 
     private val embedder = SpeakerEmbedder()
+
+    /**
+     * The ONNX execution provider the speaker models run on, read per load rather than held.
+     *
+     * The same value the recogniser and [SpeakerDiarizer] use, so a run's whole sherpa-onnx side is
+     * one configuration. Read fresh each time because the diarisation worker releases the embedder
+     * after every run, so a provider changed in Settings takes effect on the next run without a
+     * process restart.
+     */
+    private fun provider(): String = settings.settings.value.onnxProvider.slug
 
     /** Guards the embedder and its index: enrolment and a background transcription can collide. */
     private val lock = Mutex()
@@ -157,7 +169,10 @@ class SpeakerRepository(
         if (!embedder.isLoaded || loadedBundleId != bundle.id) {
             embedder.release()
             val loaded = runCatching {
-                embedder.load(audioModels.fileFor(bundle, AudioModelCatalog.EMBEDDING))
+                embedder.load(
+                    audioModels.fileFor(bundle, AudioModelCatalog.EMBEDDING),
+                    provider = provider(),
+                )
             }.onFailure { Log.w(TAG, "could not load the speaker embedder", it) }.isSuccess
 
             if (!loaded) {
@@ -212,6 +227,7 @@ class SpeakerRepository(
                         audioModels.speaker,
                         AudioModelCatalog.EMBEDDING,
                     ),
+                    provider = provider(),
                 )
                 diarizer.diarize(samples)
             } catch (e: Exception) {

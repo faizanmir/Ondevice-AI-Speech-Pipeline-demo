@@ -82,6 +82,12 @@ class SpeakerDiarizer {
         embeddingModel: File,
         expectedSpeakers: Int = 0,
         threadCount: Int = recommendedThreadCount(),
+        // The ONNX execution provider, from Settings rather than pinned. Segmentation and embedding
+        // take the same one on purpose: they are the two halves of one diarisation, and running them
+        // on different providers would make a phase timing describe two configurations at once. The
+        // caller is responsible for feeding the VAD and the naming embedder the same value, for the
+        // same reason.
+        provider: String = "cpu",
     ) {
         release()
 
@@ -118,13 +124,13 @@ class SpeakerDiarizer {
                 ),
                 numThreads = threadCount,
                 debug = false,
-                provider = "cpu",
+                provider = provider,
             ),
             embedding = SpeakerEmbeddingExtractorConfig(
                 model = embeddingModel.absolutePath,
                 numThreads = threadCount,
                 debug = false,
-                provider = "cpu",
+                provider = provider,
             ),
             // threshold is unread when numClusters is positive; carrying both values from one policy
             // keeps the native configuration and its JVM-testable contract together.
@@ -142,7 +148,7 @@ class SpeakerDiarizer {
         )
 
         diarization = OfflineSpeakerDiarization(assetManager = null, config = config)
-        Log.i(TAG, "diarizer loaded, expectedSpeakers=$expectedSpeakers")
+        Log.i(TAG, "diarizer loaded, expectedSpeakers=$expectedSpeakers, provider=$provider")
     }
 
     /**

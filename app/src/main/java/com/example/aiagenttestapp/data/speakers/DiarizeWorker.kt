@@ -174,6 +174,10 @@ class DiarizeWorker @AssistedInject constructor(
                         embeddingModel = audioModels.fileFor(bundle, AudioModelCatalog.EMBEDDING),
                         expectedSpeakers = recording.expectedSpeakers,
                         threadCount = threads.diarise,
+                        // The whole sherpa-onnx side of a run takes the one provider Settings names:
+                        // segmentation and embedding here, the VAD in compactToSpeech, the naming
+                        // embedder in SpeakerRepository, and the recogniser on the other branch.
+                        provider = settings.settings.value.onnxProvider.slug,
                     )
 
                     // Clustering and folding both compare turns against each other, so their cost
@@ -414,10 +418,11 @@ class DiarizeWorker @AssistedInject constructor(
                 // transcribers. A forced close only ever splits one region into two touching ones,
                 // which CompactedAudio merges straight back, so the value cannot change the output.
                 maxSpeechSamples = MAX_SPEECH_SAMPLES,
-                // "cpu", matching SpeakerDiarizer rather than Settings: the diarisation models are
-                // pinned there, and running the detector on a different provider from the models it
-                // feeds would make the phase timings describe two configurations at once.
-                provider = "cpu",
+                // The same provider as SpeakerDiarizer and the naming embedder, from Settings. The
+                // detector runs inside the diarisation branch and feeds the models it splits audio
+                // for, so running it on a different provider would make a run's timings describe two
+                // configurations at once. Kept together, they describe one.
+                provider = settings.settings.value.onnxProvider.slug,
             )
             detector.detect(samples.size) { from, until -> samples.copyOfRange(from, until) }
         } catch (e: kotlinx.coroutines.CancellationException) {

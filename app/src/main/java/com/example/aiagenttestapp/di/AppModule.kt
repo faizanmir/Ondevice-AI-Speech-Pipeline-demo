@@ -175,8 +175,11 @@ object AppModule {
     /** Enrolled voices, and the search index used to put names on a diarised recording. */
     @Provides
     @Singleton
-    fun speakerRepository(dao: SpeakerDao, audioModels: AudioModelRepository) =
-        SpeakerRepository(dao, audioModels)
+    fun speakerRepository(
+        dao: SpeakerDao,
+        audioModels: AudioModelRepository,
+        settings: SettingsStore,
+    ) = SpeakerRepository(dao, audioModels, settings)
 
     /** Optional bundles: speaker identification, keyword spotting and punctuation. */
     @Provides
