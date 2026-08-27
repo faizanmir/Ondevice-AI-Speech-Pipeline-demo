@@ -172,7 +172,7 @@ class SpeakerAttributionProbeTest {
         }
 
         // The bottom line: how much speech clustering would hand to the wrong person. Every cluster
-        // takes the name of whichever enrolled voice holds most of it -- which is what labelClusters
+        // takes the name of whichever enrolled voice holds most of it -- which is what foldAndName
         // effectively does -- so anything inside it belonging to somebody else is mislabelled.
         val mislabelled = judged.groupBy { it.cluster }.entries.sumOf { (_, its) ->
             val named = its.filter { it.verdict != "unmatched" && it.verdict != "no-embedding" }

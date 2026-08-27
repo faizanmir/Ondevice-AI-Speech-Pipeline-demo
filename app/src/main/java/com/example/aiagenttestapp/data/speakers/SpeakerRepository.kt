@@ -9,7 +9,6 @@ import com.example.aiagenttestapp.stt.SpeakerDiarizer
 import com.example.aiagenttestapp.stt.SpeakerEmbedder
 import com.example.aiagenttestapp.stt.averageEmbedding
 import com.example.aiagenttestapp.stt.cosineSimilarity
-import com.example.aiagenttestapp.stt.matchSpeaker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -350,115 +349,62 @@ class SpeakerRepository(
     }
 
     /**
-     * Puts a name to each diarisation cluster, or a "Speaker N" placeholder.
+     * Folds fragment clusters and names the survivors, over **one** set of voiceprints.
      *
-     * Each cluster is embedded from its own longest turns -- up to [LABEL_SAMPLE_SECONDS] of them --
-     * rather than from one arbitrary turn. The best enrolled match must clear both [MATCH_THRESHOLD]
-     * and [MATCH_MARGIN] over the runner-up. The native search API exposes only the winning name, so
-     * it cannot distinguish a clear result from a near tie; putting a name on the latter produced
-     * confident but false attribution.
+     * Folding and naming used to be two calls that each embedded every cluster from its longest
+     * turns -- the same longest turns, to the same [LABEL_SAMPLE_SECONDS] cap, producing the same
+     * vector. Embedding is most of what the speaker branch costs on a long recording, so paying for
+     * it twice was the single largest avoidable expense here. This computes each cluster's
+     * voiceprint once and feeds it to both halves:
+     *
+     *  - **Folding** ([smallClusterRemap]) merges any cluster too short to be a speaker into
+     *    whichever real one it sounds most like. It compares clusters against each other, not against
+     *    enrolled people, so it improves a recording of strangers as much as one of Bob and Tim.
+     *  - **Naming** ([nameClustersByVoiceprint]) matches each survivor against the enrolled voices;
+     *    the best match must clear both [MATCH_THRESHOLD] and [MATCH_MARGIN] over the runner-up, or
+     *    the cluster stays an unnamed "Speaker N".
+     *
+     * A survivor that absorbed a fragment is named from its **pre-fold** voiceprint -- the fragment,
+     * being under [MIN_CLUSTER_SECONDS], never displaces one of the survivor's own longest turns, so
+     * the vector is the one it would have had anyway, and naming a cluster by its confident long
+     * turns rather than by a fragment assigned on similarity is if anything the sounder choice.
+     *
+     * Called once per diarisation chunk. [startingPlaceholder] threads the "Unknown Speaker N"
+     * counter across chunks so the numbering is global even though the naming is not; a stranger who
+     * appears in two chunks still fragments into two numbers, which is the known cost of chunking and
+     * not a regression from the old global pass, which could not match them across chunks either.
      */
-    suspend fun labelClusters(
+    internal suspend fun foldAndName(
         samples: FloatArray,
         turns: List<DiarizedSegment>,
-    ): Map<Int, String> = lock.withLock {
-        withContext(Dispatchers.Default) {
-            if (turns.isEmpty()) return@withContext emptyMap()
-
-            val ready = prepareLocked()
-            val labels = mutableMapOf<Int, String>()
-
-            // Numbered by first appearance, so "Speaker 2" is the second person heard rather than
-            // whatever index the clustering happened to assign.
-            val order = turns.sortedBy { it.startSample }.map { it.cluster }.distinct()
-
-            var placeholder = 0
-            for (cluster in order) {
-                val decision = if (!ready) {
-                    null
-                } else {
-                    val audio = concatenate(
-                        samples,
-                        turns.filter { it.cluster == cluster }
-                            .sortedByDescending { it.endSample - it.startSample }
-                            .fold(mutableListOf<IntRange>()) { taken, turn ->
-                                val total = taken.sumOf { it.count() }
-                                if (total < LABEL_SAMPLE_SECONDS * AudioRecorder.SAMPLE_RATE) {
-                                    taken += turn.startSample until turn.endSample
-                                }
-                                taken
-                            }
-                            .sortedBy { it.first },
-                    )
-                    embedder.embed(audio)?.let { embedding ->
-                        matchSpeaker(
-                            embedding = embedding,
-                            enrolled = enrolledEmbeddings,
-                            threshold = MATCH_THRESHOLD,
-                            minimumMargin = MATCH_MARGIN,
-                        )
-                    }
-                }
-
-                decision?.let {
-                    Log.i(
-                        TAG,
-                        "cluster %d match: best=%s %.3f, runner-up=%s %s, accepted=%s".format(
-                            cluster,
-                            it.bestName ?: "none",
-                            it.bestScore,
-                            it.runnerUpName ?: "none",
-                            it.runnerUpScore?.let { score -> "%.3f".format(score) } ?: "none",
-                            it.acceptedName ?: "unknown",
-                        ),
-                    )
-                }
-                labels[cluster] = decision?.acceptedName
-                    ?: "$UNKNOWN_SPEAKER_PREFIX ${++placeholder}"
-            }
-
-            labels
-        }
-    }
-
-    /**
-     * Folds clusters too small to be a speaker into the one they sound most like.
-     *
-     * Runs before anything downstream sees the turns, because every later stage inherits the cluster
-     * ids: alignment cuts blocks on them, naming puts one name on each, and a 0.8-second fragment
-     * that survives this step is reported to the user as another person who spoke. See
-     * [smallClusterRemap] for why sherpa leaves this out and pyannote does not.
-     *
-     * Needs no enrolled voices -- it compares clusters against each other, not against people -- so
-     * it improves a recording of complete strangers just as much as one of Bob and Tim.
-     *
-     * A cluster's voiceprint comes from its longest turns, up to [LABEL_SAMPLE_SECONDS] of them, for
-     * the same reason [labelClusters] does it that way: an average over a cluster's best evidence is
-     * steadier than whichever turn happened to come first.
-     */
-    suspend fun mergeSmallClusters(
-        samples: FloatArray,
-        turns: List<DiarizedSegment>,
+        startingPlaceholder: Int,
         minClusterSeconds: Float = MIN_CLUSTER_SECONDS,
-    ): List<DiarizedSegment> = lock.withLock {
+    ): ClusterAttribution = lock.withLock {
         withContext(Dispatchers.Default) {
-            if (turns.isEmpty()) return@withContext turns
-            if (!prepareLocked()) return@withContext turns
+            if (turns.isEmpty()) {
+                return@withContext ClusterAttribution(turns, emptyMap(), startingPlaceholder)
+            }
+            val ready = prepareLocked()
 
             val sizes = clusterSizes(turns)
+
+            // The one embedding pass. A cluster the model cannot describe is left out of the map,
+            // which folding and naming both read as "unusable" rather than guessing at it.
+            val voiceprints = if (!ready) {
+                emptyMap()
+            } else {
+                sizes.keys.mapNotNull { cluster ->
+                    embedder.embed(concatenate(samples, longestTurnRanges(turns, cluster)))
+                        ?.let { cluster to it }
+                }.toMap()
+            }
+
             val minSamples = (minClusterSeconds * AudioRecorder.SAMPLE_RATE).toInt()
-            // Nothing is small, so nothing has to be embedded. Worth the check: this runs on every
-            // recording and the embedding is the expensive half.
-            if (sizes.none { it.value < minSamples }) return@withContext turns
-
-            val centroids = sizes.keys.mapNotNull { cluster ->
-                val audio = concatenate(samples, longestTurnRanges(turns, cluster))
-                embedder.embed(audio)?.let { cluster to it }
-            }.toMap()
-
-            val remap = smallClusterRemap(sizes, centroids, minSamples)
-            if (remap.isEmpty()) return@withContext turns
-
+            val remap = if (voiceprints.isEmpty()) {
+                emptyMap()
+            } else {
+                smallClusterRemap(sizes, voiceprints, minSamples)
+            }
             remap.forEach { (from, to) ->
                 Log.i(
                     TAG,
@@ -470,7 +416,32 @@ class SpeakerRepository(
                     ),
                 )
             }
-            applyClusterRemap(turns, remap)
+            val folded = applyClusterRemap(turns, remap)
+
+            val naming = nameClustersByVoiceprint(
+                turns = folded,
+                voiceprints = voiceprints,
+                enrolled = enrolledEmbeddings,
+                threshold = MATCH_THRESHOLD,
+                minimumMargin = MATCH_MARGIN,
+                unknownPrefix = UNKNOWN_SPEAKER_PREFIX,
+                startingPlaceholder = startingPlaceholder,
+            )
+            naming.decisions.forEach { (cluster, decision) ->
+                Log.i(
+                    TAG,
+                    "cluster %d match: best=%s %.3f, runner-up=%s %s, accepted=%s".format(
+                        cluster,
+                        decision.bestName ?: "none",
+                        decision.bestScore,
+                        decision.runnerUpName ?: "none",
+                        decision.runnerUpScore?.let { score -> "%.3f".format(score) } ?: "none",
+                        decision.acceptedName ?: "unknown",
+                    ),
+                )
+            }
+
+            ClusterAttribution(folded, naming.names, naming.nextPlaceholder)
         }
     }
 

@@ -191,10 +191,12 @@ class DiarizeWorker @AssistedInject constructor(
                     }
 
                     var diariseMillis = 0L
-                    var foldMillis = 0L
+                    var attributeMillis = 0L
                     var nextCluster = 0
+                    var placeholder = 0
                     var rawTurnCount = 0
                     val turns = mutableListOf<DiarizedSegment>()
+                    val names = mutableMapOf<Int, String>()
 
                     for (chunk in chunks) {
                         // The only place a long diarisation can be stopped. sherpa's process() is
@@ -219,27 +221,28 @@ class DiarizeWorker @AssistedInject constructor(
                         // ranges: `slice` starts at zero, `compacted.samples` does not.
                         val inCompacted = DiarizationChunks.toCompacted(local, chunk)
 
-                        // The step sherpa's clustering leaves out. Fragments too short to be a
-                        // speaker are folded into whichever cluster they sound like, before
-                        // anything downstream inherits their ids -- see
-                        // [SpeakerRepository.mergeSmallClusters]. Per chunk, because folding is
-                        // half of what chunking exists to bound.
-                        val foldStarted = System.currentTimeMillis()
-                        val folded = speakers.mergeSmallClusters(compacted.samples, inCompacted)
-                        foldMillis += System.currentTimeMillis() - foldStarted
+                        // Fold fragments and name the survivors in one pass over one set of
+                        // voiceprints -- naming no longer re-embeds what folding already did. Per
+                        // chunk, and naming among them: matching each cluster to an enrolled voice
+                        // is independent of the other chunks, and the placeholder counter is threaded
+                        // through so the "Unknown Speaker N" numbering stays global. See
+                        // [SpeakerRepository.foldAndName].
+                        val attributeStarted = System.currentTimeMillis()
+                        val attribution =
+                            speakers.foldAndName(compacted.samples, inCompacted, placeholder)
+                        attributeMillis += System.currentTimeMillis() - attributeStarted
+                        placeholder = attribution.nextPlaceholder
 
-                        val (namespaced, next) = DiarizationChunks.namespaced(folded, nextCluster)
+                        // Namespace the folded turns and their names by the same offset: sherpa
+                        // numbers clusters from zero in every chunk, so without this the second
+                        // chunk's cluster 0 would silently merge with the first's.
+                        val base = nextCluster
+                        val (namespaced, next) = DiarizationChunks.namespaced(attribution.turns, base)
+                        attribution.names.forEach { (cluster, name) -> names[cluster + base] = name }
                         nextCluster = next
                         turns += namespaced
                     }
                     diarizer.release()
-
-                    // Naming stays global on purpose. It is what merges a person's clusters across
-                    // chunks: the same voice matches the same enrolled name in every chunk it
-                    // appears in, and [nameBlocks] then reads those as one speaker.
-                    val nameStarted = System.currentTimeMillis()
-                    val names = speakers.labelClusters(compacted.samples, turns)
-                    val nameMillis = System.currentTimeMillis() - nameStarted
 
                     Log.i(
                         TAG,
@@ -251,7 +254,7 @@ class DiarizeWorker @AssistedInject constructor(
                     // naming all read audio, so they must read the array they were measured on.
                     // Only here, where turns stop being audio and start being a timeline the
                     // transcript is joined against, do they become recording coordinates again.
-                    Diarised(expandToRecording(compacted, turns), names, diariseMillis, foldMillis, nameMillis)
+                    Diarised(expandToRecording(compacted, turns), names, diariseMillis, attributeMillis)
                 }
 
                 // Recognition owns the progress bar outright now. Diarisation cannot report any --
@@ -285,8 +288,7 @@ class DiarizeWorker @AssistedInject constructor(
             val names = diarised.names
             val words = transcribed.words
             val diariseMillis = diarised.diariseMillis
-            val foldMillis = diarised.foldMillis
-            val nameMillis = diarised.nameMillis
+            val attributeMillis = diarised.attributeMillis
             val transcribeMillis = transcribed.millis
 
             val blocks = SpeakerAlignment.blocks(words, turns, AudioRecorder.SAMPLE_RATE)
@@ -296,18 +298,21 @@ class DiarizeWorker @AssistedInject constructor(
             // whether running them concurrently is worth the peak memory is decided entirely by
             // which one is the long pole. That is a per-device answer, so the numbers have to come
             // from the device rather than from a guess.
+            //
+            // Folding and naming are one number now: they share a single embedding pass, so timing
+            // them apart would split a cost that is no longer divisible. "attribute" is that shared
+            // fold-and-name.
             Log.i(
                 TAG,
-                ("phases over %.1fs of audio: diarise %.1fs + fold %.1fs + name %.1fs = %.1fs " +
+                ("phases over %.1fs of audio: diarise %.1fs + attribute %.1fs = %.1fs " +
                     "|| transcribe %.1fs -> wall %.1fs (sequential would be %.1fs)").format(
                     samples.size / AudioRecorder.SAMPLE_RATE.toFloat(),
                     diariseMillis / 1000f,
-                    foldMillis / 1000f,
-                    nameMillis / 1000f,
-                    (diariseMillis + foldMillis + nameMillis) / 1000f,
+                    attributeMillis / 1000f,
+                    (diariseMillis + attributeMillis) / 1000f,
                     transcribeMillis / 1000f,
                     (System.currentTimeMillis() - wallStarted) / 1000f,
-                    (diariseMillis + foldMillis + nameMillis + transcribeMillis) / 1000f,
+                    (diariseMillis + attributeMillis + transcribeMillis) / 1000f,
                 ),
             )
 
@@ -350,8 +355,8 @@ class DiarizeWorker @AssistedInject constructor(
                 runMillis = System.currentTimeMillis() - runStarted,
                 // The whole "who spoke" branch, not just sherpa's part: folding and naming are as
                 // much a cost of answering that question as the clustering is, and splitting them
-                // three ways on a list row would say less than one honest number does.
-                diariseMillis = diariseMillis + foldMillis + nameMillis,
+                // on a list row would say less than one honest number does.
+                diariseMillis = diariseMillis + attributeMillis,
                 transcribeMillis = transcribeMillis,
                 coveragePercent = score?.coveragePercent,
                 werPercent = score?.werPercent,
@@ -578,8 +583,8 @@ private data class Diarised(
     val turns: List<DiarizedSegment>,
     val names: Map<Int, String>,
     val diariseMillis: Long,
-    val foldMillis: Long,
-    val nameMillis: Long,
+    /** Folding and naming together: they share one embedding pass, so they share one number. */
+    val attributeMillis: Long,
 )
 
 /** What the recognition branch produced. */
