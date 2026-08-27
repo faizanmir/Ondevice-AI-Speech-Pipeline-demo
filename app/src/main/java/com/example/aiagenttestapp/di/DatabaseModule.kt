@@ -79,7 +79,9 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun speakerDatabase(@ApplicationContext context: Context): SpeakerDatabase =
-        Room.databaseBuilder(context, SpeakerDatabase::class.java, "speakers.db").build()
+        Room.databaseBuilder(context, SpeakerDatabase::class.java, "speakers.db")
+            .addMigrations(SpeakerDatabase.MIGRATION_1_2, SpeakerDatabase.MIGRATION_2_3)
+            .build()
 
     @Provides
     fun speakerDao(database: SpeakerDatabase): SpeakerDao = database.speakerDao()

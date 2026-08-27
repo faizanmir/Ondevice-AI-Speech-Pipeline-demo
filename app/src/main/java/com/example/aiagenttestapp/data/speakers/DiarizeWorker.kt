@@ -17,8 +17,12 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.example.aiagenttestapp.data.audiomodels.AudioModelCatalog
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
+import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.notes.WavFile
 import com.example.aiagenttestapp.stt.AudioRecorder
+import com.example.aiagenttestapp.stt.CompactedAudio
+import com.example.aiagenttestapp.stt.SpeechActivityDetector
+import com.example.aiagenttestapp.stt.SpeechRegions
 import com.example.aiagenttestapp.stt.DiarizedSegment
 import com.example.aiagenttestapp.stt.SpeakerDiarizer
 import com.example.aiagenttestapp.stt.SpeechEngineKind
@@ -58,11 +62,16 @@ class DiarizeWorker @AssistedInject constructor(
     private val audioModels: AudioModelRepository,
     private val speechModels: SpeechModelRepository,
     private val recognizer: SpeechRecognizer,
+    private val settings: SettingsStore,
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
         val id = inputData.getLong(KEY_RECORDING_ID, -1L)
         if (id < 0) return Result.failure()
+
+        // From here rather than from the tap: what the row reports is what the models cost on this
+        // device, not how long WorkManager sat on the job behind whatever else was queued.
+        val runStarted = System.currentTimeMillis()
 
         val recording = dao.byId(id) ?: return Result.success() // deleted while queued
         val audio = File(recording.audioPath)
@@ -98,6 +107,17 @@ class DiarizeWorker @AssistedInject constructor(
             val samples = withProgress(id, 0.05f) { WavFile.read(audio) }
             check(samples.isNotEmpty()) { "The recording is empty." }
 
+            // Silence removed from what diarisation sees, and only from that. Recognition keeps the
+            // whole recording: its slicing is chosen for what decodes best, and a word the detector
+            // did not think was speech should still be transcribed if the recogniser hears one.
+            //
+            // Measured against a perfect detector on `eleven_two_voice.wav` -- every inter-turn
+            // pause removed, so every speaker change became a zero-silence splice -- turn accuracy
+            // was unchanged at 27/36 and the block count went up rather than down, which is the
+            // opposite of the merging that `minDurationOff` losing its silence cue would cause. See
+            // `docs/diarization-benchmark.md`.
+            val compacted = compactToSpeech(samples)
+
             // The two halves run concurrently. Nothing flows between them -- diarisation makes
             // turns, recognition makes words, and they meet only at SpeakerAlignment -- so the wall
             // clock is the longer branch rather than their sum.
@@ -127,7 +147,7 @@ class DiarizeWorker @AssistedInject constructor(
                     )
 
                     val diariseStarted = System.currentTimeMillis()
-                    val rawTurns = diarizer.diarize(samples)
+                    val rawTurns = diarizer.diarize(compacted.samples)
                     diarizer.release()
                     val diariseMillis = System.currentTimeMillis() - diariseStarted
 
@@ -135,11 +155,11 @@ class DiarizeWorker @AssistedInject constructor(
                     // are folded into whichever cluster they sound like, before anything downstream
                     // inherits their ids -- see [SpeakerRepository.mergeSmallClusters].
                     val foldStarted = System.currentTimeMillis()
-                    val turns = speakers.mergeSmallClusters(samples, rawTurns)
+                    val turns = speakers.mergeSmallClusters(compacted.samples, rawTurns)
                     val foldMillis = System.currentTimeMillis() - foldStarted
 
                     val nameStarted = System.currentTimeMillis()
-                    val names = speakers.labelClusters(samples, turns)
+                    val names = speakers.labelClusters(compacted.samples, turns)
                     val nameMillis = System.currentTimeMillis() - nameStarted
 
                     Log.i(
@@ -148,7 +168,11 @@ class DiarizeWorker @AssistedInject constructor(
                             "in ${rawTurns.size} turns, " +
                             "${turns.map { it.cluster }.distinct().size} after folding fragments",
                     )
-                    Diarised(turns, names, diariseMillis, foldMillis, nameMillis)
+                    // Everything above ran in compacted coordinates -- clustering, folding and
+                    // naming all read audio, so they must read the array they were measured on.
+                    // Only here, where turns stop being audio and start being a timeline the
+                    // transcript is joined against, do they become recording coordinates again.
+                    Diarised(expandToRecording(compacted, turns), names, diariseMillis, foldMillis, nameMillis)
                 }
 
                 // Recognition owns the progress bar outright now. Diarisation cannot report any --
@@ -213,21 +237,36 @@ class DiarizeWorker @AssistedInject constructor(
             )
             Log.i(TAG, "transcript: ${blocks.size} aligned blocks became ${named.size} after naming")
 
+            val rows = named.map { block ->
+                DiarizedBlock(
+                    recordingId = id,
+                    startSample = block.startSample,
+                    endSample = block.endSample,
+                    cluster = block.cluster,
+                    speakerName = block.name,
+                    text = block.text,
+                )
+            }
             dao.deleteBlocksFor(id)
-            dao.insertBlocks(
-                named.map { block ->
-                    DiarizedBlock(
-                        recordingId = id,
-                        startSample = block.startSample,
-                        endSample = block.endSample,
-                        cluster = block.cluster,
-                        speakerName = block.name,
-                        text = block.text,
-                    )
-                },
-            )
-            dao.update(
-                recording.copy(status = DiarizedStatus.Done, progress = 1f, error = null),
+            dao.insertBlocks(rows)
+
+            // Re-read rather than scoring against the row fetched at the top of doWork. A reference
+            // can be attached while a run is in flight -- it is a text field on a screen the user is
+            // looking at, and this job takes minutes -- and the stale row would score against a
+            // reference that is no longer the one attached, or against none at all.
+            val current = dao.byId(id) ?: recording
+            val score = current.referenceText
+                ?.let { DiarizationScore.of(it, current.language, rows) }
+
+            dao.finishRun(
+                id = id,
+                // The whole run, including reading the WAV -- not `wallStarted`, which begins after
+                // it. That read is minutes of the user's wait on a long recording, and a number
+                // that quietly leaves out a phase is worse than none.
+                runMillis = System.currentTimeMillis() - runStarted,
+                coveragePercent = score?.coveragePercent,
+                werPercent = score?.werPercent,
+                speakerAccuracyPercent = score?.speakerAccuracyPercent,
             )
 
             // No transcript is a result, not a crash: an empty recording or one the models heard
@@ -250,6 +289,85 @@ class DiarizeWorker @AssistedInject constructor(
             withContext(NonCancellable) { speakers.release() }
         }
     }
+
+    /**
+     * Removes the silence before diarisation sees the recording.
+     *
+     * The whole recording has to be in memory at once, because clustering compares every stretch
+     * against every other and cannot be done a piece at a time. At 16 kHz that is 3.8 MB a minute:
+     * 77 MB for the twenty-minute recordings this screen was measured on, 228 MB for an hour-long
+     * meeting, and a kill for two hours. The comment on the array read above names sherpa's
+     * streaming diarisation API as the way past that ceiling. sherpa-onnx has no such API, so this
+     * is the way past it.
+     *
+     * Compacting rather than diarising piecewise is what keeps the clustering global: it still sees
+     * all of the speech at once, with only the gaps between it gone.
+     *
+     * **Every failure here falls back to the whole recording.** A detector that will not load, one
+     * that throws, and one that honestly found nothing are three different events with one right
+     * answer, and [SpeechRegions.resolve] deliberately returns the same `null` for all three so a
+     * caller cannot mishandle them differently. Speech mistaken for silence is never transcribed
+     * and leaves no gap to notice, which is why [SettingsStore.vadEnabled] can turn this off
+     * outright -- the same switch, for the same reason, as the note recorder's.
+     */
+    private fun compactToSpeech(samples: FloatArray): CompactedAudio {
+        if (!settings.settings.value.vadEnabled) return CompactedAudio.untouched(samples)
+
+        val detector = SpeechActivityDetector(context.assets)
+        val detected = try {
+            detector.load(
+                // No slice cap applies here -- diarisation has no per-clip limit, unlike the
+                // transcribers. A forced close only ever splits one region into two touching ones,
+                // which CompactedAudio merges straight back, so the value cannot change the output.
+                maxSpeechSamples = MAX_SPEECH_SAMPLES,
+                // "cpu", matching SpeakerDiarizer rather than Settings: the diarisation models are
+                // pinned there, and running the detector on a different provider from the models it
+                // feeds would make the phase timings describe two configurations at once.
+                provider = "cpu",
+            )
+            detector.detect(samples.size) { from, until -> samples.copyOfRange(from, until) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "voice-activity detection unavailable; diarising the whole recording", e)
+            return CompactedAudio.untouched(samples)
+        } finally {
+            detector.release()
+        }
+
+        val compacted = CompactedAudio.of(
+            samples,
+            SpeechRegions.resolve(detected = detected, totalSamples = samples.size).orEmpty(),
+        )
+        Log.i(
+            TAG,
+            "compaction: %.1fs of audio -> %.1fs of speech in %d regions (%.1f%% removed)".format(
+                samples.size / AudioRecorder.SAMPLE_RATE.toFloat(),
+                compacted.samples.size / AudioRecorder.SAMPLE_RATE.toFloat(),
+                compacted.pieces.size,
+                compacted.removedFraction * 100,
+            ),
+        )
+        return compacted
+    }
+
+    /**
+     * Puts turns back into recording coordinates, splitting any that crossed a splice.
+     *
+     * A turn spanning removed silence is two separated stretches in the recording, and reporting it
+     * as one would claim the speaker held the floor through audio dropped for having no speech in
+     * it. Split, the removed silence is covered by no turn -- which is the state
+     * [SpeakerAlignment] already handles, filling a gap only when the turns either side agree.
+     */
+    private fun expandToRecording(
+        compacted: CompactedAudio,
+        turns: List<DiarizedSegment>,
+    ): List<DiarizedSegment> = turns
+        .flatMap { turn ->
+            compacted.toOriginal(turn.startSample until turn.endSample)
+                .map { range -> turn.copy(startSample = range.first, endSample = range.last + 1) }
+        }
+        .sortedBy { it.startSample }
 
     /** Runs [block] having first moved the bar, so a slow step does not start at a dead zero. */
     private suspend fun <T> withProgress(id: Long, to: Float, block: () -> T): T {
@@ -298,6 +416,14 @@ class DiarizeWorker @AssistedInject constructor(
          * better evidence than the fragment itself. See [smoothShortBlocks].
          */
         private const val SHORT_BLOCK_SECONDS = 2
+
+        /**
+         * How long a single detected speech region may run before the detector closes it.
+         *
+         * Generous because nothing downstream cares: a forced close produces two touching regions
+         * and [CompactedAudio.of] merges touching regions back into one piece.
+         */
+        private const val MAX_SPEECH_SAMPLES = 5 * 60 * AudioRecorder.SAMPLE_RATE
 
         private const val TAG = "DiarizeWorker"
         private const val CHANNEL_ID = "speaker_diarization"

@@ -40,6 +40,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -59,11 +60,14 @@ import androidx.compose.foundation.layout.Box
 import com.example.aiagenttestapp.ui.components.ListDetailPanes
 import com.example.aiagenttestapp.ui.components.rememberListDetailState
 import com.example.aiagenttestapp.ui.components.ControlsContentPanes
+import com.example.aiagenttestapp.ui.components.formatDuration
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.aiagenttestapp.data.speakers.DialogTurn
 import com.example.aiagenttestapp.data.speakers.DialogTurns
 import com.example.aiagenttestapp.data.speakers.DiarizedRecording
+import com.example.aiagenttestapp.data.benchmark.ReferenceText
+import com.example.aiagenttestapp.data.benchmark.Wer
 import com.example.aiagenttestapp.data.speakers.DiarizedStatus
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonOutline
@@ -86,7 +90,7 @@ import com.example.aiagenttestapp.stt.AudioRecorder
 fun DiarizeScreen(
     viewModel: DiarizeViewModel,
     onOpenSpeakers: () -> Unit,
-    onOpenSettings: () -> Unit,
+    onOpenModels: () -> Unit,
     onBack: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -98,6 +102,22 @@ fun DiarizeScreen(
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri -> uri?.let { viewModel.onIntent(DiarizeIntent.Import(it)) } }
+
+    // Two launchers rather than one with a remembered target. Which recording a picked reference
+    // belongs to is decided at the moment the picker opens, and a single launcher would have to
+    // carry that decision across a system dialog in state that outlives the screen's recomposition.
+    val pendingReferencePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let { viewModel.onIntent(DiarizeIntent.AttachReferenceFile(null, it)) } }
+
+    val openReferencePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        val target = expandedId
+        if (uri != null && target != null) {
+            viewModel.onIntent(DiarizeIntent.AttachReferenceFile(target, uri))
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -123,6 +143,9 @@ fun DiarizeScreen(
                     onStart = { viewModel.onIntent(DiarizeIntent.StartRecording) },
                     onStop = { viewModel.onIntent(DiarizeIntent.StopRecording) },
                     onExpected = { viewModel.onIntent(DiarizeIntent.SetExpectedSpeakers(it)) },
+                    onPickReference = { pendingReferencePicker.launch(ReferenceText.MIME_TYPES) },
+                    onReference = { viewModel.onIntent(DiarizeIntent.AttachReference(null, it)) },
+                    onLanguage = { viewModel.onIntent(DiarizeIntent.SetLanguage(null, it)) },
                 )
 
                 state.blocker?.let { blocker ->
@@ -136,8 +159,8 @@ fun DiarizeScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                         )
-                        TextButton(onClick = onOpenSettings, contentPadding = PaddingValues(0.dp)) {
-                            Text("Open Settings")
+                        TextButton(onClick = onOpenModels, contentPadding = PaddingValues(0.dp)) {
+                            Text("Manage models")
                         }
                     }
                 }
@@ -203,6 +226,13 @@ fun DiarizeScreen(
                             recording = recording,
                             stats = stats,
                             onRun = { viewModel.onIntent(DiarizeIntent.Run(recording.id)) },
+                            onPickReference = { openReferencePicker.launch(ReferenceText.MIME_TYPES) },
+                            onReference = {
+                                viewModel.onIntent(DiarizeIntent.AttachReference(recording.id, it))
+                            },
+                            onLanguage = {
+                                viewModel.onIntent(DiarizeIntent.SetLanguage(recording.id, it))
+                            },
                         )
                     }
                     items(turns, key = { "turn-" + it.id }) { turn ->
@@ -224,6 +254,9 @@ private fun SourceCard(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onExpected: (Int) -> Unit,
+    onPickReference: () -> Unit,
+    onReference: (String) -> Unit,
+    onLanguage: (String) -> Unit,
 ) {
     Card(
         colors = CardDefaults.cardColors(
@@ -321,6 +354,100 @@ private fun SourceCard(
                     )
                 }
             }
+
+            ReferenceEditor(
+                reference = state.pendingReference,
+                language = state.pendingLanguage,
+                // Optional here and mandatory on the benchmark screen, which is the difference
+                // between the two features: a benchmark clip exists only to be scored, while a
+                // conversation is worth transcribing whether or not anyone knows what was said.
+                title = "Reference transcript (optional)",
+                onPickReference = onPickReference,
+                onReference = onReference,
+                onLanguage = onLanguage,
+            )
+        }
+    }
+}
+
+/**
+ * Attaching a reference, in the two ways one arrives: a file beside the recording, or text on hand.
+ *
+ * The same pair the benchmark's import sheet offers, and for the same reason -- a corpus clip comes
+ * with a script file, an ad-hoc check comes as something pasted. Neither clears the other here,
+ * because both end up as the same string on the same row: the last one given simply wins.
+ *
+ * The paste field applies on a press rather than on every keystroke. Scoring is an edit distance
+ * over every word of both transcripts, and running it per character typed would re-score a
+ * thousand-word reference a thousand times.
+ */
+@Composable
+private fun ReferenceEditor(
+    reference: String,
+    language: String,
+    title: String,
+    onPickReference: () -> Unit,
+    onReference: (String) -> Unit,
+    onLanguage: (String) -> Unit,
+) {
+    // Keyed on the stored reference so that a file picked while this is on screen replaces what the
+    // field shows -- without it the editor would keep displaying text the row no longer holds.
+    var draft by remember(reference) { mutableStateOf(reference) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+        Text(
+            "What was actually said, one bracketed speaker per turn — “[S1] ... [S2] ...”. " +
+                "The tags say who, and are not scored as words.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Paste the reference, or choose a file") },
+            placeholder = { Text("[S1] so where did we land on the migration") },
+            minLines = 3,
+            maxLines = 6,
+            textStyle = MaterialTheme.typography.bodySmall,
+        )
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(onClick = onPickReference) {
+                Icon(Icons.Default.UploadFile, contentDescription = null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Choose file")
+            }
+            // Enabled only when the field differs from what is stored, so the control says whether
+            // there is anything to apply. Clearing a stored reference is a real change and stays
+            // available: an empty field against a stored one is a difference like any other.
+            TextButton(onClick = { onReference(draft) }, enabled = draft != reference) {
+                Text(if (draft.isBlank()) "Clear" else "Use this")
+            }
+        }
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                // Not the recognition language: this one only decides how numbers are compared.
+                "Numerals:",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            listOf("en" to "English", "de" to "German").forEach { (code, label) ->
+                FilterChip(
+                    selected = language == code,
+                    onClick = { onLanguage(code) },
+                    label = { Text(label) },
+                )
+            }
         }
     }
 }
@@ -362,6 +489,10 @@ private fun RecordingRow(
                                 },
                             )
                             if (speakerCount > 0) append(" · $speakerCount found")
+                            // Phrased and formatted unlike the recording's own length, which sits
+                            // three words to its left. Two bare clock times on one line invite the
+                            // reader to compare them as if they measured the same thing.
+                            recording.runMillis?.let { append(" · took ${formatDuration(it)}") }
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -371,6 +502,8 @@ private fun RecordingRow(
                     Icon(Icons.Default.Delete, contentDescription = "Delete")
                 }
             }
+
+            ScoreLine(recording)
 
             // Progress and failure belong on the row, not only in the detail: a run takes minutes
             // and the whole point of the list is to see at a glance which ones are still going.
@@ -406,6 +539,38 @@ private fun RecordingRow(
 }
 
 /**
+ * How the run scored against its reference, or nothing at all when it has none.
+ *
+ * Coverage is printed first and the whole line turns red below 90%, which is the shared scoring
+ * protocol this app already follows on the benchmark screen: a truncated transcript produces a
+ * plausible-looking error rate that is really a measure of how much is missing, and that has
+ * already been read here as an accuracy result once.
+ *
+ * The two rates are kept apart rather than blended into one number. Mishearing a word and giving
+ * the right word to the wrong person are different failures with different fixes -- a worse
+ * recogniser against a worse embedding model -- and a single figure would hide which one a run has.
+ */
+@Composable
+private fun ScoreLine(recording: DiarizedRecording) {
+    val wer = recording.werPercent ?: return
+    val coverage = recording.coveragePercent
+
+    Text(
+        buildString {
+            coverage?.let { append("coverage %.0f%% · ".format(it)) }
+            append("WER %.1f%%".format(wer))
+            recording.speakerAccuracyPercent?.let { append(" · speakers %.0f%%".format(it)) }
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = if (recording.isTruncated) {
+            MaterialTheme.colorScheme.error
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+    )
+}
+
+/**
  * The heading above an opened transcript: what it is, and how to run it again.
  *
  * Separate from the turns rather than wrapping them, because the turns are emitted as their own
@@ -417,6 +582,9 @@ private fun TranscriptHeader(
     recording: DiarizedRecording,
     stats: List<SpeakerStat>,
     onRun: () -> Unit,
+    onPickReference: () -> Unit,
+    onReference: (String) -> Unit,
+    onLanguage: (String) -> Unit,
 ) {
     val hasBlocks = stats.isNotEmpty()
 
@@ -449,6 +617,38 @@ private fun TranscriptHeader(
             )
             stats.forEachIndexed { index, stat ->
                 SpeakerStatRow(stat, accent = speakerAccent(index))
+            }
+
+            // Offered on a finished transcript, not only before a run, because scoring reads the
+            // blocks already stored: a reference attached now scores this recording immediately,
+            // without spending the minutes of two models to produce the same transcript again.
+            ReferenceEditor(
+                reference = recording.referenceText.orEmpty(),
+                language = recording.language,
+                title = if (recording.referenceText == null) {
+                    "Score this against a reference"
+                } else {
+                    "Reference transcript"
+                },
+                onPickReference = onPickReference,
+                onReference = onReference,
+                onLanguage = onLanguage,
+            )
+
+            if (recording.werPercent != null && recording.isTruncated) {
+                Text(
+                    TRUNCATION_NOTE,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            if (recording.referenceText != null && recording.speakerAccuracyPercent == null) {
+                Text(
+                    "The reference names no speakers, so only the words are scored. Mark each turn " +
+                        "with a bracketed label — “[S1] …” — to score attribution too.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -566,6 +766,14 @@ private fun DialogTurnRow(turn: DialogTurn, accent: Color) {
         }
     }
 }
+
+/** One predicate, so the row and the detail pane cannot disagree about what "truncated" means. */
+private val DiarizedRecording.isTruncated: Boolean
+    get() = (coveragePercent ?: 100.0) < Wer.TRUNCATED_COVERAGE
+
+private val TRUNCATION_NOTE =
+    "Under %.0f%% coverage the transcript is truncated — the error rate below that is measuring "
+        .format(Wer.TRUNCATED_COVERAGE) + "what is missing rather than what was heard."
 
 private fun formatClock(millis: Long): String {
     val seconds = (millis / 1000).coerceAtLeast(0)
