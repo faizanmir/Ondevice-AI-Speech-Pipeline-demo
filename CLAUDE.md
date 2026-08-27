@@ -34,9 +34,16 @@ captures two halves: structure from the AST, and the **rationale carried in the 
 used to be X, which cost the user their recording" comments that are the most valuable thing in this
 repo and the first thing to go stale.
 
-**Re-run `/graphify` after finishing a feature**, and after any change that rewrites a long
-explanatory comment. The structural half tracks file changes on its own; the extracted rationale does
-not, and a graph that still describes the reasoning you just replaced is worse than no graph.
+**The graph rebuilds on commit, not by hand.** A `post-commit` hook (`graphify hook status` to
+check) launches a background rebuild of the structural half from whatever the commit touched. Do not
+run `/graphify` yourself to refresh it after a change — the hook has it. Running it manually
+re-clusters the whole graph, which renumbers every community and forces all ~370 labels to be
+reassigned by hand for a result the hook produces on its own.
+
+The hook covers the AST half only, and only for code files. The **rationale in the KDoc** — the half
+that actually matters here — needs a semantic pass, which costs an LLM call per file and therefore
+happens only when explicitly asked for. So after a change that rewrites a long explanatory comment,
+say so; do not launch one unprompted.
 
 Fall back to Grep/Glob/Read only when the graph does not cover what you need.
 
@@ -55,6 +62,8 @@ tools/fetch_llama_cpp.sh                  # once, before the first build — lla
   engine as unavailable at runtime. Use it when your change does not touch llama.cpp.
 - `-PenableLlamaCppVulkan=true` opts into the Vulkan backend (needs SPIRV-Headers on the host).
 - minSdk 31, **arm64-v8a only**. For an emulator, add `x86_64` to `llamaCppAbiFilters`.
+- **Do not run the test suite unless asked.** Write the tests, and use `:app:compileDebugKotlin`
+  to confirm a change builds — running them is the user's call, not a step to fold into every task.
 - Most logic is deliberately pure and JVM-testable. Prefer adding a unit test over reaching for a
   device; ask the user to run on-device steps rather than driving adb yourself.
 
