@@ -34,10 +34,11 @@ import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -210,55 +211,95 @@ class DiarizeWorker @AssistedInject constructor(
                     // naming embedder in SpeakerRepository, and the recogniser on the other branch.
                     val provider = settings.settings.value.onnxProvider.slug
 
-                    // The parallelisable half. Model load is inside, and counted, because with lanes
-                    // it happens concurrently and is genuinely part of the branch's wall clock.
-                    val diariseStarted = System.currentTimeMillis()
-                    val perChunkTurns = diarizeChunks(
-                        chunks = chunks,
-                        compacted = compacted,
-                        segmentationModel = audioModels.fileFor(bundle, AudioModelCatalog.SEGMENTATION),
-                        embeddingModel = audioModels.fileFor(bundle, AudioModelCatalog.EMBEDDING),
-                        expectedSpeakers = recording.expectedSpeakers,
-                        diariseThreads = threads.diarise,
-                        provider = provider,
-                        lanes = lanes,
-                    )
-                    val diariseMillis = System.currentTimeMillis() - diariseStarted
-                    val rawTurnCount = perChunkTurns.sumOf { it.size }
-
-                    // The sequential half. Fold and name share one embedder behind a lock, so they
-                    // cannot run in parallel -- but they are cheap now that they share one embedding
-                    // pass, and they must run in chunk order for the placeholder counter to number
-                    // strangers by first appearance across the whole recording.
+                    // The parallelisable half feeds the sequential half through a channel, chunk by
+                    // chunk, instead of being awaited whole first. Model load is inside
+                    // diarizeChunks, and counted, because with lanes it happens concurrently and is
+                    // genuinely part of the branch's wall clock.
+                    //
+                    // Fold-and-name must still run in chunk order -- the placeholder counter numbers
+                    // strangers by first appearance, which is only "across the recording" if chunks
+                    // are folded in the order they were spoken -- but that is a constraint on the
+                    // order of consumption, not a reason to wait for everything. The old
+                    // awaitAll-then-fold shape left 9.8 measured seconds of folding sitting entirely
+                    // after 45 seconds of diarisation it could have hidden behind. [InOrderChunks]
+                    // re-sequences the lanes' out-of-order completions so each chunk is folded the
+                    // moment it and its predecessors exist, while later chunks are still on the
+                    // lanes. The folds contend with those lanes for CPU, which is accepted: a fold
+                    // is a short burst, and by the tail of a run a lane is usually already idle.
                     var nextCluster = 0
                     var placeholder = 0
+                    var rawTurnCount = 0
+                    var diariseMillis = 0L
+                    var foldMillis = 0L
                     val turns = mutableListOf<DiarizedSegment>()
                     val names = mutableMapOf<Int, String>()
 
-                    val attributeStarted = System.currentTimeMillis()
-                    for (inCompacted in perChunkTurns) {
-                        ensureActive()
+                    val diariseStarted = System.currentTimeMillis()
+                    coroutineScope {
+                        val diarisedChunks =
+                            Channel<Pair<Int, List<DiarizedSegment>>>(Channel.UNLIMITED)
+                        launch {
+                            try {
+                                diarizeChunks(
+                                    chunks = chunks,
+                                    compacted = compacted,
+                                    segmentationModel =
+                                        audioModels.fileFor(bundle, AudioModelCatalog.SEGMENTATION),
+                                    embeddingModel =
+                                        audioModels.fileFor(bundle, AudioModelCatalog.EMBEDDING),
+                                    expectedSpeakers = recording.expectedSpeakers,
+                                    diariseThreads = threads.diarise,
+                                    provider = provider,
+                                    lanes = lanes,
+                                ) { index, chunkTurns -> diarisedChunks.send(index to chunkTurns) }
+                            } finally {
+                                // In the finally so a lane failure still closes the channel: the
+                                // consumer below sits in a `for` over it and would otherwise wait
+                                // for a producer that is never coming back.
+                                diariseMillis = System.currentTimeMillis() - diariseStarted
+                                diarisedChunks.close()
+                            }
+                        }
 
-                        // Fold fragments and name the survivors in one pass over one set of
-                        // voiceprints -- naming no longer re-embeds what folding already did. Per
-                        // chunk, and naming among them: matching each cluster to an enrolled voice
-                        // is independent of the other chunks, and the placeholder counter is threaded
-                        // through so the "Unknown Speaker N" numbering stays global. See
-                        // [SpeakerRepository.foldAndName].
-                        val attribution =
-                            speakers.foldAndName(compacted.samples, inCompacted, placeholder)
-                        placeholder = attribution.nextPlaceholder
+                        val inOrder = InOrderChunks<List<DiarizedSegment>>()
+                        for ((index, arrived) in diarisedChunks) {
+                            for (inCompacted in inOrder.offer(index, arrived)) {
+                                ensureActive()
+                                rawTurnCount += inCompacted.size
 
-                        // Namespace the folded turns and their names by the same offset: sherpa
-                        // numbers clusters from zero in every chunk, so without this the second
-                        // chunk's cluster 0 would silently merge with the first's.
-                        val base = nextCluster
-                        val (namespaced, next) = DiarizationChunks.namespaced(attribution.turns, base)
-                        attribution.names.forEach { (cluster, name) -> names[cluster + base] = name }
-                        nextCluster = next
-                        turns += namespaced
+                                // Fold fragments and name the survivors in one pass over one set of
+                                // voiceprints -- naming no longer re-embeds what folding already
+                                // did. Per chunk, and naming among them: matching each cluster to an
+                                // enrolled voice is independent of the other chunks, and the
+                                // placeholder counter is threaded through so the "Unknown Speaker N"
+                                // numbering stays global. See [SpeakerRepository.foldAndName].
+                                val foldStarted = System.currentTimeMillis()
+                                val attribution =
+                                    speakers.foldAndName(compacted.samples, inCompacted, placeholder)
+                                foldMillis += System.currentTimeMillis() - foldStarted
+                                placeholder = attribution.nextPlaceholder
+
+                                // Namespace the folded turns and their names by the same offset:
+                                // sherpa numbers clusters from zero in every chunk, so without this
+                                // the second chunk's cluster 0 would silently merge with the
+                                // first's.
+                                val base = nextCluster
+                                val (namespaced, next) =
+                                    DiarizationChunks.namespaced(attribution.turns, base)
+                                attribution.names.forEach { (cluster, name) ->
+                                    names[cluster + base] = name
+                                }
+                                nextCluster = next
+                                turns += namespaced
+                            }
+                        }
                     }
-                    val attributeMillis = System.currentTimeMillis() - attributeStarted
+                    // Only the folds the overlap could not hide -- the ones that ran after the last
+                    // chunk was diarised. Kept as "attribute" so the two numbers still sum to the
+                    // branch's wall clock, which is what the run row stores.
+                    val attributeMillis =
+                        (System.currentTimeMillis() - diariseStarted - diariseMillis)
+                            .coerceAtLeast(0)
 
                     Log.i(
                         TAG,
@@ -271,7 +312,13 @@ class DiarizeWorker @AssistedInject constructor(
                     // naming all read audio, so they must read the array they were measured on.
                     // Only here, where turns stop being audio and start being a timeline the
                     // transcript is joined against, do they become recording coordinates again.
-                    Diarised(expandToRecording(compacted, turns), names, diariseMillis, attributeMillis)
+                    Diarised(
+                        expandToRecording(compacted, turns),
+                        names,
+                        diariseMillis,
+                        attributeMillis,
+                        foldMillis,
+                    )
                 }
 
                 // Recognition owns the progress bar outright now. Diarisation cannot report any --
@@ -306,6 +353,7 @@ class DiarizeWorker @AssistedInject constructor(
             val words = transcribed.words
             val diariseMillis = diarised.diariseMillis
             val attributeMillis = diarised.attributeMillis
+            val foldMillis = diarised.foldMillis
             val transcribeMillis = transcribed.millis
 
             val blocks = SpeakerAlignment.blocks(words, turns, AudioRecorder.SAMPLE_RATE)
@@ -316,20 +364,25 @@ class DiarizeWorker @AssistedInject constructor(
             // which one is the long pole. That is a per-device answer, so the numbers have to come
             // from the device rather than from a guess.
             //
-            // Folding and naming are one number now: they share a single embedding pass, so timing
-            // them apart would split a cost that is no longer divisible. "attribute" is that shared
-            // fold-and-name.
+            // Folding and naming are one number: they share a single embedding pass, so timing
+            // them apart would split a cost that is no longer divisible. And since the folds run
+            // while later chunks are still being diarised, "attribute" is only the tail that ran
+            // after the last chunk -- the part the wall clock actually paid for -- with the full
+            // fold cost and how much of it was hidden reported alongside.
             Log.i(
                 TAG,
                 ("phases over %.1fs of audio: diarise %.1fs + attribute %.1fs = %.1fs " +
+                    "(folding %.1fs, %.1fs hidden behind diarisation) " +
                     "|| transcribe %.1fs -> wall %.1fs (sequential would be %.1fs)").format(
                     samples.size / AudioRecorder.SAMPLE_RATE.toFloat(),
                     diariseMillis / 1000f,
                     attributeMillis / 1000f,
                     (diariseMillis + attributeMillis) / 1000f,
+                    foldMillis / 1000f,
+                    (foldMillis - attributeMillis).coerceAtLeast(0) / 1000f,
                     transcribeMillis / 1000f,
                     (System.currentTimeMillis() - wallStarted) / 1000f,
-                    (diariseMillis + attributeMillis + transcribeMillis) / 1000f,
+                    (diariseMillis + foldMillis + transcribeMillis) / 1000f,
                 ),
             )
 
@@ -466,8 +519,8 @@ class DiarizeWorker @AssistedInject constructor(
     }
 
     /**
-     * Diarises every chunk, running [lanes] of them at once, and returns each chunk's turns in
-     * compacted coordinates in chunk order.
+     * Diarises every chunk, running [lanes] of them at once, handing each chunk's turns to [emit]
+     * in compacted coordinates as it finishes.
      *
      * **Why lanes.** sherpa's `process()` is one ONNX run per segmentation window and one per
      * (window, speaker) embedding, none of it batched, so a single chunk given the whole diarise
@@ -480,9 +533,13 @@ class DiarizeWorker @AssistedInject constructor(
      * second lane is a second resident model set. The caller caps [lanes] to keep that bounded and
      * only pays it when there is more than one chunk to spread.
      *
-     * Chunk order is preserved on purpose: the fold-name pass that consumes this numbers unnamed
-     * speakers by first appearance, which is only "across the recording" if the chunks arrive in
-     * time order. Lanes are assigned round-robin so they finish close together when chunk sizes vary.
+     * **[emit] is called in completion order, not chunk order.** This used to await every lane and
+     * sort, which held the first chunk hostage to the last: nothing downstream could start until the
+     * whole recording was diarised. Emitting on completion is what lets the caller fold early chunks
+     * behind the diarisation of later ones; the caller re-sequences with [InOrderChunks], since the
+     * fold pass genuinely needs chunk order. [emit] may be called from several lanes concurrently --
+     * a channel send is safe, mutable accumulation is not. Lanes are assigned round-robin so they
+     * finish close together when chunk sizes vary.
      */
     private suspend fun diarizeChunks(
         chunks: List<DiarizationChunk>,
@@ -493,7 +550,8 @@ class DiarizeWorker @AssistedInject constructor(
         diariseThreads: Int,
         provider: String,
         lanes: Int,
-    ): List<List<DiarizedSegment>> {
+        emit: suspend (index: Int, turns: List<DiarizedSegment>) -> Unit,
+    ) {
         fun sliceFor(chunk: DiarizationChunk): FloatArray =
             // One chunk is the whole recording, and copying it to say so would double peak memory on
             // the largest recordings for nothing.
@@ -518,35 +576,38 @@ class DiarizeWorker @AssistedInject constructor(
         // diarisation can be stopped -- process() itself is an uninterruptible native call.
         if (lanes <= 1) {
             val diarizer = newDiarizer(diariseThreads)
-            return try {
-                chunks.map { chunk ->
+            try {
+                chunks.forEachIndexed { index, chunk ->
                     currentCoroutineContext().ensureActive()
-                    DiarizationChunks.toCompacted(diarizer.diarize(sliceFor(chunk)), chunk)
+                    emit(index, DiarizationChunks.toCompacted(diarizer.diarize(sliceFor(chunk)), chunk))
                 }
             } finally {
                 diarizer.release()
             }
+            return
         }
 
         // Several lanes, each its own diarizer over a round-robin share of the chunks, each on its
-        // share of the threads. The results carry their chunk index so the flattened list can be put
-        // back into chunk order.
+        // share of the threads, each emitting its chunks the moment they are done.
         val perLaneThreads = (diariseThreads / lanes).coerceAtLeast(1)
-        return coroutineScope {
-            (0 until lanes).map { lane ->
-                async(Dispatchers.Default) {
+        coroutineScope {
+            (0 until lanes).forEach { lane ->
+                launch(Dispatchers.Default) {
                     val laneChunks = chunks.withIndex().filter { it.index % lanes == lane }
                     val diarizer = newDiarizer(perLaneThreads)
                     try {
-                        laneChunks.map { (index, chunk) ->
+                        laneChunks.forEach { (index, chunk) ->
                             currentCoroutineContext().ensureActive()
-                            index to DiarizationChunks.toCompacted(diarizer.diarize(sliceFor(chunk)), chunk)
+                            emit(
+                                index,
+                                DiarizationChunks.toCompacted(diarizer.diarize(sliceFor(chunk)), chunk),
+                            )
                         }
                     } finally {
                         diarizer.release()
                     }
                 }
-            }.awaitAll().flatten().sortedBy { it.first }.map { it.second }
+            }
         }
     }
 
@@ -698,8 +759,14 @@ private data class Diarised(
     val turns: List<DiarizedSegment>,
     val names: Map<Int, String>,
     val diariseMillis: Long,
-    /** Folding and naming together: they share one embedding pass, so they share one number. */
+    /**
+     * The fold-and-name tail that ran after the last chunk was diarised -- the only part of
+     * attribution the wall clock still pays for now that folding overlaps diarisation. Sums with
+     * [diariseMillis] to the branch's wall clock, which is what the run row stores.
+     */
     val attributeMillis: Long,
+    /** All the fold-and-name work wherever it ran; the log reports how much of it was hidden. */
+    val foldMillis: Long,
 )
 
 /** What the recognition branch produced. */
