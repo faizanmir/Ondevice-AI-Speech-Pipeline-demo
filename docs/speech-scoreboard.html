@@ -1,0 +1,872 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>On-Device Speech Scoreboard</title>
+<meta name="description" content="Speaker attribution and transcription accuracy for the on-device speech pipeline, in English and German, on two devices.">
+<style>
+  /* Minimal reset. The artifact runtime supplies one; this file stands alone. */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img, svg { max-width: 100%; height: auto; }
+  table { border-spacing: 0; }
+  code { font-family: var(--mono); font-size: 0.94em; }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --ground:      #eef1f4;
+    --surface:     #ffffff;
+    --surface-alt: #f6f8fa;
+    --ink:         #12171d;
+    --ink-soft:    #37424e;
+    --muted:       #5c6773;
+    --line:        #d9dfe6;
+    --line-strong: #b9c3cd;
+
+    --real:        #0d6e63;
+    --real-bg:     #d9efeb;
+    --synth:       #8f5410;
+
+    --good:        #16794f;
+    --mid:         #92670f;
+    --poor:        #a83a2c;
+
+    --display: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
+    --body:    "Source Serif 4", Georgia, "Times New Roman", serif;
+    --mono:    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #0e1216;
+      --surface:     #151b21;
+      --surface-alt: #1b222a;
+      --ink:         #e4e9ee;
+      --ink-soft:    #c2cbd4;
+      --muted:       #93a0ac;
+      --line:        #29323b;
+      --line-strong: #3c4854;
+
+      --real:        #4cbdac;
+      --real-bg:     #123029;
+      --synth:       #d99a4a;
+
+      --good:        #4fbe8b;
+      --mid:         #d3a63f;
+      --poor:        #e2705f;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #0e1216;
+    --surface:     #151b21;
+    --surface-alt: #1b222a;
+    --ink:         #e4e9ee;
+    --ink-soft:    #c2cbd4;
+    --muted:       #93a0ac;
+    --line:        #29323b;
+    --line-strong: #3c4854;
+
+    --real:        #4cbdac;
+    --real-bg:     #123029;
+    --synth:       #d99a4a;
+
+    --good:        #4fbe8b;
+    --mid:         #d3a63f;
+    --poor:        #e2705f;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 3rem 1.5rem 6rem;
+  }
+
+  .prose { max-width: 68ch; }
+
+  h1, h2, h3 {
+    font-family: var(--display);
+    font-weight: 700;
+    line-height: 1.12;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  h1 { font-size: clamp(2.1rem, 5vw, 3.3rem); letter-spacing: -0.02em; font-weight: 800; }
+  h2 { font-size: clamp(1.45rem, 3vw, 1.95rem); letter-spacing: -0.015em; }
+  h3 { font-size: 1.12rem; letter-spacing: -0.005em; }
+
+  p { margin: 0; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  header { display: flex; flex-direction: column; gap: 1.1rem; }
+
+  .lede { font-size: 1.16rem; color: var(--ink-soft); max-width: 64ch; }
+
+  .meta-row {
+    display: flex; flex-wrap: wrap; gap: 0.5rem;
+    align-items: center; margin-top: 0.3rem;
+  }
+
+  .chip {
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    font-weight: 500;
+    padding: 0.32rem 0.62rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    color: var(--ink-soft);
+    background: var(--surface);
+    white-space: nowrap;
+  }
+
+  .chip.real { color: var(--real); border-color: var(--real); background: var(--real-bg); }
+
+  section { margin-top: 3.6rem; display: flex; flex-direction: column; gap: 1.1rem; }
+  .section-head { display: flex; flex-direction: column; gap: 0.5rem; }
+
+  /* The findings table is twelve columns wide. Let the tables break out of the
+     text column and take the window, while prose stays at a readable measure. */
+  .scroller {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--surface);
+    position: relative;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(100vw - 3rem, 1720px);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  thead th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 0.72rem 0.85rem;
+    border-bottom: 1px solid var(--line-strong);
+    background: var(--surface-alt);
+    position: sticky;
+    top: 0;
+  }
+
+  tbody td {
+    padding: 0.62rem 0.85rem;
+    border-bottom: 1px solid var(--line);
+    color: var(--ink-soft);
+  }
+
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover td { background: var(--surface-alt); }
+
+  tfoot td {
+    padding: 0.78rem 0.85rem;
+    border-top: 2px solid var(--line-strong);
+    background: var(--surface-alt);
+    color: var(--ink);
+    font-weight: 600;
+  }
+  tfoot td.lbl {
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .flag { color: var(--poor); font-weight: 600; }
+
+  td.name { color: var(--ink); font-weight: 500; }
+  td.num  { text-align: right; }
+  .strong { color: var(--ink); font-weight: 600; }
+
+  .good { color: var(--good); font-weight: 600; }
+  .mid  { color: var(--mid);  font-weight: 600; }
+
+  .tag {
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 0.16rem 0.42rem;
+    border-radius: 3px;
+    letter-spacing: 0.03em;
+    color: var(--real);
+    background: var(--real-bg);
+  }
+
+  .dev { font-size: 0.72rem; color: var(--muted); }
+
+  caption {
+    caption-side: bottom;
+    text-align: left;
+    font-family: var(--body);
+    font-size: 0.86rem;
+    color: var(--muted);
+    padding: 0.8rem 0.85rem;
+    white-space: normal;
+    border-top: 1px solid var(--line);
+  }
+
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--synth);
+    border-radius: 4px;
+    padding: 1.2rem 1.4rem;
+    display: flex; flex-direction: column; gap: 0.6rem;
+  }
+  .callout h3 { font-size: 1rem; }
+  .callout p { font-size: 0.96rem; color: var(--ink-soft); max-width: 72ch; }
+
+  .steps {
+    counter-reset: step;
+    list-style: none;
+    padding: 0;
+    display: grid;
+    gap: 0.75rem;
+    max-width: 78ch;
+  }
+  .steps li {
+    counter-increment: step;
+    display: grid;
+    grid-template-columns: 1.9rem 1fr;
+    gap: 0.85rem;
+    align-items: start;
+  }
+  .steps li::before {
+    content: counter(step);
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--real);
+    background: var(--real-bg);
+    border-radius: 3px;
+    text-align: center;
+    padding: 0.18rem 0;
+    line-height: 1.4;
+  }
+
+  .defs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 0;
+  }
+  .def { background: var(--surface); padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; }
+  .def dt { font-family: var(--mono); font-size: 0.78rem; font-weight: 600; color: var(--ink); }
+  .def dd { margin: 0; font-size: 0.92rem; color: var(--muted); line-height: 1.5; }
+
+  a { color: var(--real); }
+
+  footer {
+    margin-top: 4rem;
+    padding-top: 1.4rem;
+    border-top: 1px solid var(--line);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+
+  @media (max-width: 640px) {
+    body { font-size: 16px; }
+    .wrap { padding: 2rem 1rem 4rem; }
+    .scroller { width: calc(100vw - 2rem); }
+    .steps li { grid-template-columns: 1.6rem 1fr; gap: 0.6rem; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">On-device speech pipeline</p>
+    <h1>On-Device Speech Scoreboard</h1>
+    <p class="lede">
+      An Android app that writes down what was said in a conversation and who said it, running
+      entirely on the phone with no network connection. These are its accuracy results in English
+      and German, on two tablets.
+    </p>
+    <div class="meta-row">
+      <span class="chip real">ElevenLabs voices</span>
+      <span class="chip">Lenovo TB336FU, MediaTek MT8755</span>
+      <span class="chip">Xiaomi 25097RP43I, Snapdragon 8s Gen 4</span>
+      <span class="chip">2026-08-25 to 08-28</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">The pipeline</p>
+      <h2>How a recording becomes a labelled transcript</h2>
+    </div>
+    <p class="prose">
+      Audio is captured at 16 kHz in mono. Five stages then run over it, and the results below
+      exercise all of them at once.
+    </p>
+    <ol class="steps">
+      <li><span>A segmentation model cuts the audio into turns, meaning stretches where one person
+        is talking. It treats silence as a cue for where a turn ends.</span></li>
+      <li><span>An embedding model converts each turn into a voiceprint: a vector that describes the
+        voice itself rather than the words.</span></li>
+      <li><span>Those voiceprints are clustered, so turns spoken by the same person group together.
+        When nobody has said how many people are present, the clustering cuts at a 0.5 similarity
+        threshold. Small fragments are folded into larger clusters afterwards.</span></li>
+      <li><span>Each cluster is compared against the voiceprints of people who have enrolled, and
+        takes the closest name. Clusters with no close match are left unnamed.</span></li>
+      <li><span>A speech recogniser transcribes the audio, and its word timings are matched against
+        the turn ranges, so every word ends up underneath a speaker.</span></li>
+    </ol>
+    <p class="prose">
+      Enrolment, in step 4, means recording a few seconds of someone speaking so the app has a
+      voiceprint to compare against later. How it was done here bounds what the results mean, and
+      the table caption returns to it.
+    </p>
+    <p class="prose">
+      One option changes what stage 1 receives. When it is switched on, the silent parts of the
+      recording are cut out first and only the speech is passed to attribution, which saves memory
+      and time on a recording with long pauses in it. The recogniser in step 5 still receives the
+      whole recording, because a word the detector missed should still be transcribed. The "silence
+      cut" column in the table reports how much of each recording was removed this way.
+    </p>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">What was used</p>
+      <h2>Two shelves of models</h2>
+    </div>
+    <p class="prose">
+      Each is downloaded once and then runs locally through sherpa-onnx. There are now two shelves:
+      an <strong>accuracy</strong> shelf (Parakeet + ERes2Net, behind the accuracy table below) and a
+      <strong>speed</strong> shelf (FastConformer + CAM++, the current default, behind the long-file
+      speed table). Sizes are the files as they sit on disk after download.
+    </p>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>Stage</th>
+            <th>Model</th>
+            <th>Identifier</th>
+            <th class="num">Size</th>
+            <th>Runs on</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name">Turn segmentation</td>
+            <td>pyannote segmentation 3.0</td>
+            <td class="dev">sherpa-onnx-pyannote-segmentation-3-0</td>
+            <td class="num">5.7 MB</td>
+            <td class="dev">CPU</td>
+          </tr>
+          <tr>
+            <td class="name">Voiceprints, accuracy shelf</td>
+            <td>3D-Speaker ERes2Net-base</td>
+            <td class="dev">3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k</td>
+            <td class="num">37.8 MB</td>
+            <td class="dev">CPU</td>
+          </tr>
+          <tr>
+            <td class="name">Voiceprints, speed shelf (default)</td>
+            <td>3D-Speaker CAM++, ~2.8&times; faster embedding</td>
+            <td class="dev">3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced</td>
+            <td class="num">27.0 MB</td>
+            <td class="dev">CPU</td>
+          </tr>
+          <tr>
+            <td class="name">Transcription, accuracy shelf</td>
+            <td>NVIDIA Parakeet TDT 0.6B v3, int8</td>
+            <td class="dev">sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8</td>
+            <td class="num">639 MB</td>
+            <td class="dev">CPU</td>
+          </tr>
+          <tr>
+            <td class="name">Transcription, speed shelf (default)</td>
+            <td>NeMo FastConformer en/de/es/fr, int8, ~3&times; faster</td>
+            <td class="dev">sherpa-onnx-nemo-fast-conformer-transducer-en-de-es-fr-14288-int8</td>
+            <td class="num">132 MB</td>
+            <td class="dev">CPU</td>
+          </tr>
+        </tbody>
+        <caption>
+          Parakeet is used because attribution needs per-word timings for step 5, and it is one of
+          only two recognisers available here that report them.
+        </caption>
+      </table>
+    </div>
+
+    <div class="callout">
+      <h3>Everything runs on the CPU, now through XNNPACK</h3>
+      <p>
+        There is no GPU or NPU path: the models are dynamically int8-quantised, which is a CPU
+        strength rather than a GPU one. What changed since these runs is that the CPU work no longer
+        takes the generic path. XNNPACK &mdash; ONNX Runtime's optimised ARM int8 kernels &mdash; is
+        compiled into the prebuilt library alongside NNAPI and QNN, and is now the default execution
+        provider: measurably faster on the int8 recogniser, and about 3% on the diarisation
+        embeddings. NNAPI and QNN stay unused &mdash; NNAPI is deprecated and does not cover dynamic
+        int8, and QNN needs models pre-compiled to Qualcomm context binaries. An earlier version of
+        this note read the library as CPU-only; running <span class="mono">provider=xnnpack</span> on
+        both tablets showed otherwise.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">How to read the table</p>
+      <h2>Voice sources and the five measures</h2>
+    </div>
+    <p class="prose">
+      The test audio was synthesised by ElevenLabs, whose voices are close enough to real speech that
+      telling two of them apart is a fair test. Three appear here: Sarah, a woman, and Daniel and
+      George, both men. Each turn of the conversation was synthesised separately and the pieces
+      joined together, so the correct answer is known to the exact audio sample: who spoke, from when,
+      to when.
+    </p>
+    <p class="prose">
+      The pairing matters more than the individual voices. A man and a woman is the easy case. Two
+      men is the hard one, and it is hard for a measurable reason: the two male voiceprints sit at
+      0.734 cosine similarity, against 0.91 between two separate recordings of the same person. That
+      gap is the ceiling every later stage inherits, because once a cluster contains both voices only
+      one name can be attached to it and no later stage recovers the other.
+    </p>
+    <p class="prose">
+      Accuracy is reported five ways. The three speaker measures disagree with each other, and the
+      size of the gap is itself informative: word and frame accuracy weight a speaker by how much
+      they said, while turn accuracy counts every turn once however short it was.
+    </p>
+    <dl class="defs">
+      <div class="def">
+        <dt>Coverage</dt>
+        <dd>How much of the expected text the transcript actually reached. Read this before the error
+          rate: below 90% the transcript stopped early, and its error rate means nothing.</dd>
+      </div>
+      <div class="def">
+        <dt>WER</dt>
+        <dd>Word error rate. The share of words the recogniser got wrong, with numerals spelled out
+          so that "14001" and "fourteen thousand and one" count as agreeing. Lower is better.</dd>
+      </div>
+      <div class="def">
+        <dt>Speaker accuracy, by word</dt>
+        <dd>Of the words both transcripts agree were said, the share placed under the right speaker.
+          This is the figure the app itself displays.</dd>
+      </div>
+      <div class="def">
+        <dt>Frame accuracy</dt>
+        <dd>The share of 10 millisecond slices of speech attributed to the right person. It weights a
+          speaker by how long they talked.</dd>
+      </div>
+      <div class="def">
+        <dt>Turn accuracy</dt>
+        <dd>The share of conversational turns whose majority speaker is right. Every turn counts once,
+          however short, which is why this is the harshest of the three and the closest to how a
+          reader experiences the transcript.</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">Findings</p>
+      <h2>Results in English and German</h2>
+    </div>
+    <p class="prose">
+      The material is one 36-turn conversation between an auditor and an employee, of the kind the
+      app is built for. The German file is the same conversation, 24 turns, spoken by the same two
+      voices.
+    </p>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Voices</th>
+            <th>Lang</th>
+            <th>Device</th>
+            <th>Silence cut</th>
+            <th class="num">Audio</th>
+            <th class="num">Time taken</th>
+            <th class="num">Coverage</th>
+            <th class="num">WER</th>
+            <th class="num">Speaker</th>
+            <th class="num">Frame</th>
+            <th class="num">Turn</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name">identifiable_fm<br><span class="dev">one man, one woman, the easy case</span></td>
+            <td><span class="tag">11L</span> Sarah f, Daniel m</td>
+            <td>EN</td>
+            <td class="dev">Lenovo</td>
+            <td class="dev">not logged</td>
+            <td class="num dev">4m 44s</td>
+            <td class="num">2m 44s <span class="dev">(1.73&times;)</span></td>
+            <td class="num">99.1%</td>
+            <td class="num good">2.5%</td>
+            <td class="num">98.3%</td>
+            <td class="num">96.2%</td>
+            <td class="num strong">29/36</td>
+          </tr>
+          <tr>
+            <td class="name">eleven_two_voice<br><span class="dev">two men, the hard case</span></td>
+            <td><span class="tag">11L</span> George m, Daniel m</td>
+            <td>EN</td>
+            <td class="dev">Lenovo</td>
+            <td class="dev">not logged</td>
+            <td class="num dev">4m 49s</td>
+            <td class="num">2m 50s <span class="dev">(1.70&times;)</span></td>
+            <td class="num">99.1%</td>
+            <td class="num good">2.9%</td>
+            <td class="num">98.6%</td>
+            <td class="num">96.0%</td>
+            <td class="num">27/36</td>
+          </tr>
+          <tr>
+            <td class="name">eleven_two_voice<br><span class="dev">two men, the hard case</span></td>
+            <td><span class="tag">11L</span> George m, Daniel m</td>
+            <td>EN</td>
+            <td class="dev">Lenovo</td>
+            <td class="dev">not logged</td>
+            <td class="num dev">4m 49s</td>
+            <td class="num"><span class="flag">6m 22s</span> <span class="dev">(0.76&times;)</span></td>
+            <td class="num">99.1%</td>
+            <td class="num good">2.9%</td>
+            <td class="num strong">99.0%</td>
+            <td class="num strong">96.8%</td>
+            <td class="num strong">29/36</td>
+          </tr>
+          <tr>
+            <td class="name">eleven_two_voice<br><span class="dev">two men, the hard case</span></td>
+            <td><span class="tag">11L</span> George m, Daniel m</td>
+            <td>EN</td>
+            <td class="dev">Xiaomi</td>
+            <td class="dev">0.1%</td>
+            <td class="num dev">4m 49s</td>
+            <td class="num">1m 00s <span class="dev">(4.79&times;)</span></td>
+            <td class="num">99.1%</td>
+            <td class="num good">2.9%</td>
+            <td class="num strong">99.0%</td>
+            <td class="num strong">96.8%</td>
+            <td class="num strong">29/36</td>
+          </tr>
+          <tr>
+            <td class="name">eleven_ota<br><span class="dev">same file played aloud and re-recorded</span></td>
+            <td><span class="tag">11L</span> George m, Daniel m</td>
+            <td>EN</td>
+            <td class="dev">Lenovo</td>
+            <td class="dev">none</td>
+            <td class="num dev">5m 11s</td>
+            <td class="num">2m 46s <span class="dev">(1.87&times;)</span></td>
+            <td class="num">99.3%</td>
+            <td class="num good">2.5%</td>
+            <td class="num">98.5%</td>
+            <td class="num">95.9%</td>
+            <td class="num">26/36</td>
+          </tr>
+          <tr>
+            <td class="name">eleven_ota<br><span class="dev">same file played aloud and re-recorded</span></td>
+            <td><span class="tag">11L</span> George m, Daniel m</td>
+            <td>EN</td>
+            <td class="dev">Xiaomi</td>
+            <td class="dev strong">7.4%</td>
+            <td class="num dev">5m 11s</td>
+            <td class="num">1m 28s <span class="dev">(3.53&times;)</span></td>
+            <td class="num">99.3%</td>
+            <td class="num good">2.5%</td>
+            <td class="num">98.3%</td>
+            <td class="num">96.0%</td>
+            <td class="num strong">29/36</td>
+          </tr>
+          <tr>
+            <td class="name">eleven_de<br><span class="dev">the same conversation in German</span></td>
+            <td><span class="tag">11L</span> George m, Daniel m</td>
+            <td>DE</td>
+            <td class="dev">Lenovo</td>
+            <td class="dev">0.4%</td>
+            <td class="num dev">3m 05s</td>
+            <td class="num">2m 07s <span class="dev">(1.46&times;)</span></td>
+            <td class="num">98.2%</td>
+            <td class="num good">2.5%</td>
+            <td class="num">98.2%</td>
+            <td class="num">95.3%</td>
+            <td class="num">16/24</td>
+          </tr>
+          <tr>
+            <td class="name">eleven_de<br><span class="dev">the same conversation in German</span></td>
+            <td><span class="tag">11L</span> George m, Daniel m</td>
+            <td>DE</td>
+            <td class="dev">Xiaomi</td>
+            <td class="dev">0.4%</td>
+            <td class="num dev">3m 05s</td>
+            <td class="num">37s <span class="dev">(4.96&times;)</span></td>
+            <td class="num">98.2%</td>
+            <td class="num good">2.5%</td>
+            <td class="num">98.2%</td>
+            <td class="num">95.3%</td>
+            <td class="num">16/24</td>
+          </tr>
+          <tr>
+            <td class="name">eleven_two_voice<br><span class="dev">probe: every pause cut out by hand</span></td>
+            <td><span class="tag">11L</span> George m, Daniel m</td>
+            <td>EN</td>
+            <td class="dev">Lenovo</td>
+            <td class="dev">3.3%</td>
+            <td class="num dev">4m 39s</td>
+            <td class="num">2m 42s <span class="dev">(1.73&times;)</span></td>
+            <td class="num">99.0%</td>
+            <td class="num good">2.5%</td>
+            <td class="num">98.8%</td>
+            <td class="num">95.5%</td>
+            <td class="num">27/36</td>
+          </tr>
+          <tr>
+            <td class="name">eleven_meeting_ota<br><span class="dev">40.5% dead air, played aloud and re-recorded</span></td>
+            <td><span class="tag">11L</span> George m, Daniel m</td>
+            <td>EN</td>
+            <td class="dev">Lenovo</td>
+            <td class="dev strong">36.7%</td>
+            <td class="num dev">7m 49s</td>
+            <td class="num">3m 38s <span class="dev">(2.15&times;)</span></td>
+            <td class="num">98.4%</td>
+            <td class="num good">2.8%</td>
+            <td class="num mid">95.8%</td>
+            <td class="num mid">93.1%</td>
+            <td class="num">26/36</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td class="lbl">Mean, 10 runs</td>
+            <td class="lbl">three voices</td>
+            <td class="lbl">EN+DE</td>
+            <td class="lbl">both</td>
+            <td class="lbl">n/a</td>
+            <td class="num">48m 10s</td>
+            <td class="num">26m 15s <span class="dev">(1.84&times;)</span></td>
+            <td class="num">98.9%</td>
+            <td class="num">2.65%</td>
+            <td class="num">98.3%</td>
+            <td class="num">95.7%</td>
+            <td class="num">254/336 &middot; 75.6%</td>
+          </tr>
+        </tfoot>
+        <caption>
+          The mean is unweighted across ten runs that differ in device, language and purpose, so it
+          summarises this table rather than stating a headline figure. Turn accuracy is pooled, 254
+          correct out of 336.
+        </caption>
+      </table>
+    </div>
+
+    <div class="callout">
+      <h3>The two devices produce the same numbers, not similar ones</h3>
+      <p>
+        English and German were run on both tablets and matched down to the frame count: 27,009 of
+        27,910 speech frames on both, 27 blocks on both, the same 29 turns out of 36. German matched
+        at 17,016 of 17,846 frames and produced identical clustering, four clusters folding to two.
+        Attribution is deterministic given the same audio and the same models, so these figures are
+        not a quirk of one tablet. The two English rows reading 98.6% and 99.0% are two different
+        enrolments rather than two different devices, and both tablets reproduced both values exactly.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">Added since these runs &middot; 27 August 2026</p>
+      <h2>A faster recogniser, a faster embedder, one ceiling that holds</h2>
+    </div>
+    <p class="prose">
+      The recogniser in the table is Parakeet, 639&nbsp;MB, chosen for its per-word timings. A smaller
+      sibling has since joined it: NeMo <strong>FastConformer</strong>, 105&nbsp;MB, covering English,
+      German, Spanish and French and reporting the same timings. On the German file above it scored
+      2.47% word error against Parakeet's 2.5% &mdash; level &mdash; and it transcribes about three
+      times faster, a twenty-minute recording's transcription falling from 114.7 to 38.9&nbsp;seconds.
+      On dense English it costs roughly 1.3 points of word error, so both stay on the shelf: Parakeet
+      for accuracy, FastConformer for speed and a fifth of the memory.
+    </p>
+    <p class="prose">
+      Combined with the pipeline running its two halves at once, folding and naming sharing a single
+      embedding pass, two chunks diarised in parallel, and the XNNPACK default above, that swap took
+      the whole speaker job on a twenty-minute recording from about 115&nbsp;seconds to 55 &mdash;
+      with every accuracy figure unchanged, because attribution is deterministic and the same audio
+      and models return the same numbers.
+    </p>
+    <p class="prose">
+      A faster voiceprint model was added too &mdash; 3D-Speaker's <strong>CAM++</strong>, 192
+      dimensions against ERes2Net's 512, about 2.8&times; quicker &mdash; and it sharpens the ceiling
+      this page describes rather than lifting it. On the two-men pairing it separates <em>less</em>
+      well: enrolled from their own voices, the German men scored 0.932 and 0.929 against one cluster,
+      a 0.003 gap the naming guard refuses to guess on, so only one was named and speaker accuracy sat
+      at 59% where ERes2Net &mdash; the model behind the table's 98.2% on the same file &mdash; keeps
+      them apart. CAM++ trades that separation for speed, so both remain a choice. A clean
+      man-and-woman pair separates under either: enrolled the same way, both named with a 0.5 margin
+      and 99.8% of words on the right speaker. Separable voiceprints are the whole game, and enrolment
+      &mdash; a naming step &mdash; cannot separate what clustering could not.
+    </p>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">Added since &middot; 28 August 2026</p>
+      <h2>Twenty minutes in under fifty seconds</h2>
+    </div>
+    <p class="prose">
+      The 27 August work above ended with the whole speaker job on a twenty-minute recording at about
+      55 seconds on the Xiaomi. Four further changes &mdash; each producing byte-identical output, and
+      verified digit-for-digit on both devices &mdash; took it below fifty, and cut the entry-level
+      Lenovo by 39% against where it started: chunks are now <strong>folded and named while later
+      chunks are still being diarised</strong>, so that work hides behind diarisation instead of
+      following it; <strong>every budgeted thread gets its own diarizer lane</strong> (four on the
+      Xiaomi), because sherpa runs one window at a time and parallel instances beat more threads;
+      <strong>transcription decodes on two recogniser instances</strong> taking alternate slices; and
+      <strong>the models stay warm between runs</strong>, so a repeat run does zero model loads.
+    </p>
+    <p class="prose">
+      The material is two ~20-minute two-voice conversations with per-turn ground truth, synthesised
+      locally (macOS voices for the English file, Piper for the German) &mdash; rougher renderings
+      than ElevenLabs, so the WER column is not comparable to the table above; on clean ElevenLabs
+      German the same recogniser scores 2.47%. These rows use the FastConformer recogniser and the
+      CAM++ embedder. VAD was off: wall-to-wall speech gives it nothing to cut.
+    </p>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Voices</th>
+            <th>Lang</th>
+            <th>Device</th>
+            <th class="num">Audio</th>
+            <th class="num">Before</th>
+            <th class="num">After</th>
+            <th class="num">Realtime</th>
+            <th class="num">WER</th>
+            <th class="num">Speaker</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name">german_mixed_long<br><span class="dev">one woman, one man, Piper voices</span></td>
+            <td>Kerstin f, Thorsten m</td>
+            <td>DE</td>
+            <td class="dev">Xiaomi</td>
+            <td class="num dev">22m 02s</td>
+            <td class="num">62.8s</td>
+            <td class="num strong">48.7s</td>
+            <td class="num">27.2&times;</td>
+            <td class="num mid">10.3%</td>
+            <td class="num">97.9%</td>
+          </tr>
+          <tr>
+            <td class="name">german_mixed_long<br><span class="dev">one woman, one man, Piper voices</span></td>
+            <td>Kerstin f, Thorsten m</td>
+            <td>DE</td>
+            <td class="dev">Lenovo</td>
+            <td class="num dev">22m 02s</td>
+            <td class="num">206.6s</td>
+            <td class="num strong">148.7s</td>
+            <td class="num">8.9&times;</td>
+            <td class="num mid">10.3%</td>
+            <td class="num">97.9%</td>
+          </tr>
+          <tr>
+            <td class="name">long_en<br><span class="dev">one man, one woman, macOS voices</span></td>
+            <td>Daniel m, Samantha f</td>
+            <td>EN</td>
+            <td class="dev">Xiaomi</td>
+            <td class="num dev">20m 36s</td>
+            <td class="num">55.5s</td>
+            <td class="num strong">46.1s</td>
+            <td class="num">26.8&times;</td>
+            <td class="num good">2.65%</td>
+            <td class="num">95.6%</td>
+          </tr>
+          <tr>
+            <td class="name">long_en<br><span class="dev">one man, one woman, macOS voices</span></td>
+            <td>Daniel m, Samantha f</td>
+            <td>EN</td>
+            <td class="dev">Lenovo</td>
+            <td class="num dev">20m 36s</td>
+            <td class="num">&mdash;</td>
+            <td class="num strong">152.5s</td>
+            <td class="num">8.1&times;</td>
+            <td class="num good">2.65%</td>
+            <td class="num">95.6%</td>
+          </tr>
+        </tbody>
+        <caption>
+          Times are the two concurrent branches' wall clock from the device logs; the app's own run
+          row adds file reading and scoring, about 1&ndash;2 s warm. The Lenovo long_en "before" is
+          blank because its only earlier run was throttled with the screen off and is not comparable.
+          Speaker accuracy holds at 97.9% on the German pair because Kerstin and Thorsten are a
+          mixed pair &mdash; separable voiceprints, the same ceiling story as above.
+        </caption>
+      </table>
+    </div>
+
+    <div class="callout">
+      <h3>Two findings worth keeping</h3>
+      <p>
+        On the MediaTek, two one-thread recogniser instances beat one two-thread instance by 28%
+        &mdash; sherpa's per-operation barriers were wasting the second thread, and a second decoding
+        stream is what actually uses the core. And keeping the models warm between runs is worth real
+        time on entry silicon: the Lenovo's first run after an install took 177.7&nbsp;s cold, the
+        repeat 148.7&nbsp;s with zero model loads &mdash; the pool holds diarizer lanes keyed by their
+        whole configuration, the screen pre-warms the recogniser behind the user's own think-time,
+        and memory pressure reclaims all of it.
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    Sources: docs/diarization-benchmark.md and docs/data/README.md. Scored with docs/diarscore.py and
+    docs/wer.py, the source of truth for every error rate here.<br>
+    Runs re-scored from the devices' own databases on 2026-08-28. Model identifiers and sizes read
+    from the app's own download catalogue.
+  </footer>
+
+</div>
+</body>
+</html>

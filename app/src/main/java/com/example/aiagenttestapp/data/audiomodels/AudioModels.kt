@@ -48,6 +48,25 @@ class AudioModelBundle internal constructor(
     /** Shown on the Settings card: what the feature does and what it costs. */
     val blurb: String,
     internal val payload: BundlePayload,
+    /**
+     * Written onto every voiceprint enrolled while this bundle is selected, or null for a bundle
+     * that produces no voiceprints.
+     *
+     * On the bundle rather than as one global constant, because the embedding model is now a
+     * choice. Two people enrolled under different models hold vectors that are not comparable and
+     * are not detectably wrong -- they simply match nobody -- so the id has to travel with whichever
+     * bundle produced them. See [com.example.aiagenttestapp.data.speakers.SpeakerRecord].
+     */
+    val embeddingModelId: String? = null,
+    /**
+     * This embedder's diarisation cost relative to the transcription branch, for the concurrent
+     * thread split -- see [com.example.aiagenttestapp.stt.ThreadBudget.Weights].
+     *
+     * Roughly relative core-seconds: ERes2Net-base ~10, CAM++ ~6 (it compares voices about 2.8x
+     * faster). Only meaningful for a bundle that actually diarises; the rest keep the default and it
+     * is never read. Meant to be re-measured.
+     */
+    val diariseWeight: Int = 10,
 ) {
     /** Bytes that cross the network. For an archive this is the compressed size, which is what the
      *  progress bar is actually measuring. */
@@ -111,14 +130,20 @@ internal object AudioModelCatalog {
     const val PUNCT_VOCAB = "punct-bpe.vocab"
 
     const val SPEAKER_BUNDLE_ID = "speaker"
+    const val SPEAKER_CAMPP_BUNDLE_ID = "speaker-campplus"
     const val KEYWORD_BUNDLE_ID = "keywords"
     const val PUNCTUATION_BUNDLE_ID = "punctuation"
 
     /**
-     * The identifier written onto every enrolled voiceprint, so a future change of embedding model is
-     * detectable instead of silently matching nothing. See [SpeakerRecord.embeddingModelId].
+     * Identifiers written onto enrolled voiceprints, so a change of embedding model is detectable
+     * instead of silently matching nothing. See [SpeakerRecord.embeddingModelId].
+     *
+     * One per model rather than one global constant, now that the model is selectable: vectors from
+     * ERes2Net and from CAM++ have different dimensions and different geometry, and a voiceprint has
+     * to say which it came from or the app would compare the incomparable.
      */
     const val EMBEDDING_MODEL_ID = "3dspeaker-eres2net-base-16k"
+    const val EMBEDDING_MODEL_ID_CAMPP = "3dspeaker-campplus-16k"
 
     /**
      * Speaker identification: pyannote for "who is talking when", WeSpeaker CAM++ for "and which of
@@ -160,6 +185,53 @@ internal object AudioModelCatalog {
                 ),
             ),
         ),
+        embeddingModelId = EMBEDDING_MODEL_ID,
+        // ERes2Net-base: the slower embedder, so the diarisation branch weighs more in the split.
+        diariseWeight = 10,
+    )
+
+    /**
+     * The same feature with 3D-Speaker's CAM++ in place of ERes2Net-base.
+     *
+     * **Why it is worth offering.** Embedding is most of what diarisation costs -- the segmentation
+     * window slides at half its length, and every active speaker in every window is embedded, which
+     * on a twenty-minute recording is roughly five hundred calls. Benchmarked head to head on the
+     * same five seconds of audio at four threads: ERes2Net-base 31.9 ms, CAM++ 11.4 ms. **2.8x**, on
+     * the single largest line item in the pipeline, from a model 11 MB smaller.
+     *
+     * **Why it is a choice and not a replacement.** CAM++ has been in this app before and was taken
+     * out: sherpa's stock `threshold = 0.5`, where the diariser cuts the dendrogram, is calibrated
+     * for the 3D-Speaker family, and running a model tuned elsewhere against it turned a two-speaker
+     * recording into eleven clusters. That was WeSpeaker's CAM++; this is 3D-Speaker's own, so the
+     * calibration argument that sank the last attempt does not obviously apply. "Does not obviously
+     * apply" is not "measured", which is exactly why both are on the shelf and the user picks.
+     *
+     * The embeddings are 192-dimensional against ERes2Net's 512, so voiceprints do not carry over.
+     */
+    val SPEAKER_CAMPP = AudioModelBundle(
+        id = SPEAKER_CAMPP_BUNDLE_ID,
+        label = "Speaker identification (CAM++)",
+        blurb = "The faster voiceprint model: about 2.8x quicker to compare voices, which is most " +
+            "of what identifying speakers costs. People already enrolled need enrolling again.",
+        payload = BundlePayload.DirectFiles(
+            listOf(
+                AudioModelFile(
+                    name = SEGMENTATION,
+                    url = "$HF/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/main/" +
+                        "model.onnx?download=true",
+                    sizeBytes = 5_992_913L,
+                ),
+                AudioModelFile(
+                    name = EMBEDDING,
+                    url = "$GH_SPEAKER/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx",
+                    sizeBytes = 28_281_138L,
+                ),
+            ),
+        ),
+        embeddingModelId = EMBEDDING_MODEL_ID_CAMPP,
+        // CAM++: ~2.8x faster to compare voices, so the diarisation branch weighs less and hands a
+        // thread to transcription when the recogniser is the heavier one.
+        diariseWeight = 6,
     )
 
     /**
@@ -258,5 +330,8 @@ internal object AudioModelCatalog {
         ),
     )
 
-    val all: List<AudioModelBundle> = listOf(SPEAKER, KEYWORDS, PUNCTUATION)
+    /** The speaker bundles, in the order the picker shows them. */
+    val speakerBundles: List<AudioModelBundle> = listOf(SPEAKER, SPEAKER_CAMPP)
+
+    val all: List<AudioModelBundle> = listOf(SPEAKER, SPEAKER_CAMPP, KEYWORDS, PUNCTUATION)
 }

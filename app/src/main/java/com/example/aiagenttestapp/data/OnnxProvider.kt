@@ -9,8 +9,13 @@ package com.example.aiagenttestapp.data
  * actually take -- and the only honest way to find out is to run the same recording through each on
  * a real device.
  *
- * [CPU] stays the default. It is the only one that is known to work on every device the app runs on;
- * the other two are experiments the user opts into.
+ * [XNNPACK] is the default. Every model this drives is int8, and XNNPACK is the one provider here
+ * with ARM int8 kernels built for exactly that -- measured on device it is the faster of the two CPU
+ * providers, which is why it now leads rather than sits behind an opt-in nobody would find. It is
+ * still a CPU provider, statically linked into the same AAR, and ONNX Runtime falls back to plain
+ * CPU per-operator if it ever cannot take a graph -- so defaulting to it cannot leave a device unable
+ * to run, which is what let it move ahead of [CPU]. [CPU] stays as the conservative baseline the user
+ * can pick to measure against.
  *
  * Deliberately not offering `qnn`. It is in the AAR, but it refuses ONNX files outright -- it wants
  * models pre-compiled into QNN context binaries with Qualcomm's SDK -- so a toggle for it would be
@@ -58,14 +63,16 @@ enum class OnnxProvider(
 
     companion object {
 
-        val DEFAULT = CPU
+        val DEFAULT = XNNPACK
 
         /**
          * Resolves a stored slug, falling back to [DEFAULT].
          *
          * Unrecognised means a setting written by a newer build, or one whose option has since been
-         * withdrawn. Either way the safe answer is the provider that works everywhere rather than a
-         * crash on a value nothing can honour any more.
+         * withdrawn -- and it is also the no-setting-yet case, since a fresh install has nothing
+         * stored. Either way the answer is [DEFAULT], which is safe to hand any device for the reason
+         * the class note gives: XNNPACK is a statically linked CPU provider that ONNX Runtime can
+         * fall back out of per-operator, so it can never be the thing that stops a model loading.
          */
         fun fromSlug(slug: String?): OnnxProvider =
             entries.firstOrNull { it.slug == slug } ?: DEFAULT

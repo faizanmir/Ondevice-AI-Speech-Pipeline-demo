@@ -45,6 +45,7 @@ import com.example.aiagenttestapp.data.OnnxProvider
 import com.example.aiagenttestapp.data.PlatformFeedChunk
 import com.example.aiagenttestapp.data.PlatformFeedPace
 import com.example.aiagenttestapp.data.SettingsStore
+import com.example.aiagenttestapp.data.audiomodels.AudioModelCatalog
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
 import com.example.aiagenttestapp.stt.SpeechModel
 import com.example.aiagenttestapp.ui.components.formatBytes
@@ -301,9 +302,13 @@ private fun SettingsDetail(
                 // them, so having them is the only "on" there is. Listed here because Settings
                 // is where every other model download lives, and the screen that needs it sends
                 // people here by name.
-                AudioBundleRow(
+                SpeakerModelSection(
                     repository = audioModels,
-                    bundle = audioModels.speaker,
+                    bundles = AudioModelCatalog.speakerBundles,
+                    selectedId = settings.speakerBundleId,
+                    onSelect = { bundle ->
+                        settingsStore.update { it.copy(speakerBundleId = bundle.id) }
+                    },
                 )
 
                 OnnxProviderRow(

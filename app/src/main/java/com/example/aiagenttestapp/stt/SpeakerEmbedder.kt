@@ -25,8 +25,20 @@ class SpeakerEmbedder {
     /** Vector length the loaded model produces. Read from the model, never hardcoded. */
     val dim: Int get() = extractor?.dim() ?: 0
 
-    /** Loads the embedding model. Tens of megabytes; never call from the main thread. */
-    fun load(model: File, threadCount: Int = recommendedThreadCount()) {
+    /**
+     * Loads the embedding model. Tens of megabytes; never call from the main thread.
+     *
+     * [provider] comes from Settings rather than being pinned here. This is the same 3D-Speaker model
+     * the diariser embeds with, and it folds and names the clusters that diarisation produces, so it
+     * has to run on the same execution provider as [SpeakerDiarizer] -- a split provider would make a
+     * run's timings describe two configurations. The caller passes the value; it is not read here,
+     * because this class is built per repository and has no business knowing about Settings.
+     */
+    fun load(
+        model: File,
+        threadCount: Int = recommendedThreadCount(),
+        provider: String = "cpu",
+    ) {
         release()
 
         val created = SpeakerEmbeddingExtractor(
@@ -35,13 +47,13 @@ class SpeakerEmbedder {
                 model = model.absolutePath,
                 numThreads = threadCount,
                 debug = false,
-                provider = "cpu",
+                provider = provider,
             ),
         )
 
         extractor = created
         manager = SpeakerEmbeddingManager(created.dim())
-        Log.i(TAG, "speaker embedder loaded, dim=${created.dim()}")
+        Log.i(TAG, "speaker embedder loaded, dim=${created.dim()}, provider=$provider")
     }
 
     /**

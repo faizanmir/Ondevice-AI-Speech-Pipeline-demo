@@ -55,15 +55,8 @@ class BenchmarkImporter @Inject constructor(
         onProgress: (Float) -> Unit = {},
     ): Result =
         withContext(Dispatchers.IO) {
-            val reference = runCatching {
-                context.contentResolver.openInputStream(transcript)?.use { stream ->
-                    val bytes = stream.readBytes()
-                    if (bytes.size > MAX_TRANSCRIPT_BYTES) null else String(bytes, Charsets.UTF_8)
-                }
-            }.getOrNull()
-                ?: return@withContext Result.Failure(
-                    "Could not read the reference transcript (is it a text file under 2 MB?).",
-                )
+            val reference = ReferenceText.read(context, transcript)
+                ?: return@withContext Result.Failure(ReferenceText.UNREADABLE)
 
             import(audio, reference, language, onProgress)
         }
@@ -149,8 +142,6 @@ class BenchmarkImporter @Inject constructor(
     }.getOrNull()
 
     companion object {
-        /** Far above any real reference script; a guard against picking the wrong file entirely. */
-        private const val MAX_TRANSCRIPT_BYTES = 2 * 1024 * 1024
 
         fun benchmarkDir(context: Context) = File(context.filesDir, "benchmark")
     }

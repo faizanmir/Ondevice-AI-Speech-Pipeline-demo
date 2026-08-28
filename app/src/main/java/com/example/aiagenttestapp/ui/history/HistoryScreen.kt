@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Speed
@@ -65,6 +66,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagenttestapp.ui.audit.shareAuditReport
+import com.example.aiagenttestapp.ui.components.EmptyState
+import com.example.aiagenttestapp.ui.components.FeatureHero
 import com.example.aiagenttestapp.ui.components.SwipeAction
 import com.example.aiagenttestapp.ui.components.SwipeActionTone
 import com.example.aiagenttestapp.ui.components.SwipeRevealBox
@@ -91,11 +94,12 @@ fun HistoryScreen(
     val chatModels = state.chatModels
     var newChatMenuExpanded by rememberSaveable { mutableStateOf(false) }
     var auditMenuOpen by rememberSaveable { mutableStateOf(false) }
+    var moreMenuOpen by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Chats", fontWeight = FontWeight.SemiBold) },
+                title = { Text("Workspace", fontWeight = FontWeight.SemiBold) },
                 actions = {
                     // Same two-option entry point as the chat top bar, so the choice is offered
                     // wherever a document can be started -- see ChatScreen's AuditMenuButton.
@@ -130,23 +134,58 @@ fun HistoryScreen(
                             }
                         }
                     }
-                    IconButton(onClick = onOpenNotes) {
-                        Icon(Icons.Default.Mic, contentDescription = "Voice notes")
-                    }
-                    // Straight to the rig rather than via Voice notes. The benchmark is run in
-                    // sittings of a dozen comparisons, and burying it one screen deep was enough
-                    // friction to keep sending the work back to a laptop.
-                    IconButton(onClick = onOpenBenchmark) {
-                        Icon(Icons.Default.Speed, contentDescription = "STT benchmark")
-                    }
-                    // Enrolment is a thing people do once, ahead of the recording it matters for --
-                    // so it needs to be findable *before* anyone has a transcript to fix, which a
-                    // link from the transcript screen would not be.
-                    IconButton(onClick = onOpenSpeakers) {
-                        Icon(Icons.Default.RecordVoiceOver, contentDescription = "Speakers")
-                    }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    // Five unlabeled icons used to compete here. Audit remains a primary action;
+                    // destinations live in one labelled menu, where new users can identify them and
+                    // the top bar no longer overflows on compact screens.
+                    Box {
+                        IconButton(onClick = { moreMenuOpen = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "More")
+                        }
+                        DropdownMenu(
+                            expanded = moreMenuOpen,
+                            onDismissRequest = { moreMenuOpen = false },
+                        ) {
+                            HomeDestination(
+                                label = "Voice notes",
+                                icon = Icons.Default.Mic,
+                                onClick = {
+                                    moreMenuOpen = false
+                                    onOpenNotes()
+                                },
+                            )
+                            HomeDestination(
+                                label = "Speaker transcripts",
+                                icon = Icons.Default.RecordVoiceOver,
+                                onClick = {
+                                    moreMenuOpen = false
+                                    onOpenSpeakers()
+                                },
+                            )
+                            HomeDestination(
+                                label = "STT benchmark",
+                                icon = Icons.Default.Speed,
+                                onClick = {
+                                    moreMenuOpen = false
+                                    onOpenBenchmark()
+                                },
+                            )
+                            HomeDestination(
+                                label = "Models",
+                                icon = Icons.Default.Memory,
+                                onClick = {
+                                    moreMenuOpen = false
+                                    onGetModels()
+                                },
+                            )
+                            HomeDestination(
+                                label = "Settings",
+                                icon = Icons.Default.Settings,
+                                onClick = {
+                                    moreMenuOpen = false
+                                    onOpenSettings()
+                                },
+                            )
+                        }
                     }
                 },
             )
@@ -169,10 +208,12 @@ fun HistoryScreen(
                     .padding(32.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    "Nothing yet. Tap New chat to begin, or audit a document from the check icon above.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                EmptyState(
+                    icon = Icons.Default.AutoAwesome,
+                    title = "Start on-device",
+                    body = "Chat with a local model, or use the document action above to run an audit.",
+                    actionLabel = "New chat",
+                    onAction = { newChatMenuExpanded = true },
                 )
             }
         } else {
@@ -185,6 +226,16 @@ fun HistoryScreen(
                 // Rows are capped at a readable width; on a tablet this centres them.
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                item {
+                    FeatureHero(
+                        eyebrow = "Private by design",
+                        title = "Your on-device workspace",
+                        body = "Continue a conversation or reopen a document audit. Your models " +
+                            "and content stay on this phone.",
+                        icon = Icons.Default.AutoAwesome,
+                        modifier = Modifier.readableWidth(),
+                    )
+                }
                 items(
                     items,
                     key = { entry ->
@@ -214,6 +265,19 @@ fun HistoryScreen(
             }
         }
     }
+}
+
+@Composable
+private fun HomeDestination(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = { Text(label) },
+        onClick = onClick,
+        leadingIcon = { Icon(icon, contentDescription = null) },
+    )
 }
 
 /**

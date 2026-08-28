@@ -26,4 +26,16 @@ class SpeakerDiarizationPolicyTest {
 
         assertEquals(0.2f, policy.minDurationOn, 1e-6f)
     }
+
+    /**
+     * Pinned because it is the pipeline's accuracy-for-time dial and the only evidence for the
+     * value is a measured table in the KDoc beside it. A change here moves published benchmark
+     * numbers, so it should have to be deliberate rather than incidental.
+     */
+    @Test
+    fun `the segmentation window advances half its length`() {
+        val policy = speakerDiarizationPolicy(expectedSpeakers = 0)
+
+        assertEquals(0.5f, policy.windowShiftRatio, 1e-6f)
+    }
 }

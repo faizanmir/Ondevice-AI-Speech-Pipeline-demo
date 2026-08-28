@@ -1,5 +1,5 @@
 [versions]
-agp = "9.3.1"
+agp = "9.3.2"
 hilt = "2.60.1"
 hiltWork = "1.3.0"
 # 1.19.0 requires compileSdk 37, which has not shipped in the SDK yet. 1.17.0 is the newest that
@@ -36,7 +36,7 @@ paging = "3.3.6"
 pdfbox = "2.0.27.0"
 navigationCompose = "2.9.6"
 # KSP must match the Kotlin version exactly or it refuses to load.
-ksp = "2.3.2"
+ksp = "2.3.6"
 # alpha09 requires compileSdk 37, which does not exist in any SDK channel yet (36.1 is the ceiling).
 # alpha08 needs only compileSdk 36. Bump once android-37 ships.
 appfunctions = "1.0.0-alpha08"

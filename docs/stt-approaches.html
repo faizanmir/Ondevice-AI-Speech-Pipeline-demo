@@ -80,7 +80,7 @@
 </style>
 
 <header>
-  <p class="sub">Speech-to-text on a mid-range Android phone (Xiaomi SM8735P, Android 16) · 19 August 2026</p>
+  <p class="sub">Speech-to-text on a mid-range Android phone (Xiaomi SM8735P, Android 16) · 19 August 2026 · addendum 27 August 2026</p>
   <h1>Two ways to transcribe speech on a phone</h1>
   <p class="lede">
     Seven recordings, two transcription engines, fourteen runs, all fed at normal speaking speed and scored the
@@ -206,6 +206,63 @@
         comes down to a different handset, a different speech-service version, and how the audio is divided: they
         send 17 minutes in one request, this app sends about 65 short ones.</li>
   </ul>
+</div>
+
+<h2 style="margin-top:9pt;">Addendum · a faster local recogniser</h2>
+
+<p class="note" style="font-size:7.2pt; color:var(--ink-2); margin-top:6pt;">
+  Measured a week later on the same phone (27 August 2026). Whisper is a general model pressed into
+  speech; the local route now also carries recognisers <em>built</em> for it, and both do the German
+  the built-in service was weakest on. Two are relevant. NVIDIA's <strong>Parakeet</strong> is the
+  accuracy leader; <strong>FastConformer</strong> is a smaller, faster sibling covering English, German,
+  Spanish and French. Both run locally through the same runtime as Whisper and both report per-word
+  timings, which is what lets a transcript be split by speaker. The word-error figures below use
+  number-normalised scoring on the speaker-attribution corpus, so they read against each other, not
+  against the raw-WER table above.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Local recogniser</th><th class="num">Download</th><th>Languages</th>
+        <th>Word timings</th><th>Built for</th></tr>
+  </thead>
+  <tbody>
+    <tr class="hero"><td>FastConformer (en/de/es/fr)</td><td class="num">~105 MB</td>
+        <td>English, German, Spanish, French</td><td>Yes</td><td>Speech</td></tr>
+    <tr><td>Parakeet TDT 0.6B v3</td><td class="num">~670 MB</td>
+        <td>English + 24 European</td><td>Yes</td><td>Speech</td></tr>
+    <tr><td>Whisper Small</td><td class="num">~375 MB</td>
+        <td>~100, detected</td><td>Yes, opt-in</td><td>General</td></tr>
+    <tr class="void"><td>SenseVoice</td><td class="num">~240 MB</td>
+        <td>5 fixed</td><td><span class="tag tag-void">no</span></td><td>Speech</td></tr>
+  </tbody>
+</table>
+
+<div class="cols">
+  <div>
+    <table style="margin-bottom:3pt;">
+      <thead><tr><th>Number-normalised WER</th>
+          <th class="num">Fast&shy;Conformer</th><th class="num">Parakeet</th></tr></thead>
+      <tbody>
+        <tr class="hero"><td>English narration, 20:36</td>
+            <td class="num">2.65%</td><td class="num">1.34%</td></tr>
+        <tr><td>German, clean 3:04</td>
+            <td class="num">2.47%</td><td class="num">2.50%</td></tr>
+      </tbody>
+    </table>
+    <p class="note">FastConformer costs about 1.3 points of English word error against Parakeet and
+    gives up nothing on German, where the two are level. Whisper Small remains the fallback for the
+    ~100 languages neither of these covers.</p>
+  </div>
+  <div>
+    <p class="note" style="font-size:7.2pt; color:var(--ink-2);"><strong>Speed and memory, same
+    20-minute recording, identical conditions.</strong> Inside the speaker job, FastConformer
+    transcribed the recording in <strong>38.9 s</strong> against Parakeet's <strong>114.7 s</strong> —
+    about three times faster, from a model with roughly a fifth of the compute per frame and a fifth
+    of the resident memory. That single swap took the whole speaker-attribution job from about 115 s
+    to under a minute. Every model now runs on XNNPACK, the ARM int8 kernels, which became the default
+    provider: a clear win on the recogniser, and about 3% on the diarisation embeddings.</p>
+  </div>
 </div>
 
 <footer>

@@ -37,7 +37,7 @@ internal fun speakerDiarizationPolicy(expectedSpeakers: Int) = SpeakerDiarizatio
     threshold = if (expectedSpeakers > 0) 0f else 0.5f,
     minDurationOn = 0.2f,
     minDurationOff = 0.5f,
-    windowShiftRatio = 0.25f,
+    windowShiftRatio = 0.5f,
 )
 
 /**
@@ -82,6 +82,12 @@ class SpeakerDiarizer {
         embeddingModel: File,
         expectedSpeakers: Int = 0,
         threadCount: Int = recommendedThreadCount(),
+        // The ONNX execution provider, from Settings rather than pinned. Segmentation and embedding
+        // take the same one on purpose: they are the two halves of one diarisation, and running them
+        // on different providers would make a phase timing describe two configurations at once. The
+        // caller is responsible for feeding the VAD and the naming embedder the same value, for the
+        // same reason.
+        provider: String = "cpu",
     ) {
         release()
 
@@ -102,24 +108,29 @@ class SpeakerDiarizer {
                 //     0.25     33.2s        96.0%           27/36
                 //     0.50     15.6s        94.5%           25/36
                 //
-                // 0.25 because the curve bends there: it buys back 49.7 seconds for half a point,
-                // where going on to 0.5 buys only 17.6 more and costs three times as much accuracy.
-                // Turn-level accuracy falls faster than frame-level at every step, which is the
-                // shape to expect -- coarser windows lose short turns first, and those are the
-                // backchannels this app's recordings are full of.
+                // 0.5, chosen for long recordings rather than for this five-minute one. Embedding
+                // cost is linear in duration, so the seconds this saves scale with the recording
+                // while the accuracy cost does not: on a twenty-minute audit it is minutes back for
+                // the same two turns. The accuracy is genuinely paid -- 96.0% to 94.5% by frame and
+                // 27/36 to 25/36 by turn -- and turn accuracy falls faster than frame accuracy at
+                // every step, which is the shape to expect, because coarser windows lose short
+                // turns first and those are the backchannels this app's recordings are full of.
+                //
+                // If short-turn attribution ever matters more than wall time here, this is the
+                // first thing to put back to 0.25.
                 pyannote = OfflineSpeakerSegmentationPyannoteModelConfig(
                     model = segmentationModel.absolutePath,
                     windowShiftRatio = policy.windowShiftRatio,
                 ),
                 numThreads = threadCount,
                 debug = false,
-                provider = "cpu",
+                provider = provider,
             ),
             embedding = SpeakerEmbeddingExtractorConfig(
                 model = embeddingModel.absolutePath,
                 numThreads = threadCount,
                 debug = false,
-                provider = "cpu",
+                provider = provider,
             ),
             // threshold is unread when numClusters is positive; carrying both values from one policy
             // keeps the native configuration and its JVM-testable contract together.
@@ -137,7 +148,7 @@ class SpeakerDiarizer {
         )
 
         diarization = OfflineSpeakerDiarization(assetManager = null, config = config)
-        Log.i(TAG, "diarizer loaded, expectedSpeakers=$expectedSpeakers")
+        Log.i(TAG, "diarizer loaded, expectedSpeakers=$expectedSpeakers, provider=$provider")
     }
 
     /**

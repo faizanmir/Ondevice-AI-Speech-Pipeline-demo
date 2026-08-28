@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import com.example.aiagenttestapp.data.benchmark.Wer
 import com.example.aiagenttestapp.data.benchmark.BenchmarkClip
 import com.example.aiagenttestapp.data.benchmark.BenchmarkRun
 import kotlinx.coroutines.Dispatchers
@@ -66,7 +67,7 @@ suspend fun shareBenchmarkRun(context: Context, run: BenchmarkRun, clip: Benchma
 /** The report itself: environment, then coverage, then the score, then what went wrong. */
 private fun summarise(context: Context, run: BenchmarkRun, clip: BenchmarkClip): String {
     val coverage = run.coveragePercent
-    val truncated = coverage != null && coverage < 90.0
+    val truncated = coverage != null && coverage < Wer.TRUNCATED_COVERAGE
 
     return buildString {
         appendLine("# STT benchmark — ${clip.name}")

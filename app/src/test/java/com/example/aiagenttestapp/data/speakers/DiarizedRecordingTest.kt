@@ -23,5 +23,8 @@ class DiarizedRecordingTest {
         )
 
         assertEquals(DiarizedStatus.Idle, fresh.status)
+        // And has no run time to show. The row prints one whenever it is present, so a non-null
+        // default would put "took 0s" against a recording that has never been through the models.
+        assertEquals(null, fresh.runMillis)
     }
 }

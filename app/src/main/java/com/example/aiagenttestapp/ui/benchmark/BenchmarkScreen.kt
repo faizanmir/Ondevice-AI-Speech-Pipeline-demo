@@ -79,6 +79,8 @@ import com.example.aiagenttestapp.ui.components.formatBytes
 import com.example.aiagenttestapp.ui.components.rememberListDetailState
 import com.example.aiagenttestapp.ui.settings.FeedChunkRow
 import com.example.aiagenttestapp.ui.settings.FeedPaceRow
+import com.example.aiagenttestapp.data.benchmark.ReferenceText
+import com.example.aiagenttestapp.data.benchmark.Wer
 import com.example.aiagenttestapp.data.benchmark.BenchmarkClip
 import com.example.aiagenttestapp.data.benchmark.BenchmarkRun
 import com.example.aiagenttestapp.data.benchmark.BenchmarkRunStatus
@@ -218,7 +220,7 @@ fun BenchmarkScreen(
             referenceText = referenceText,
             language = language,
             onPickAudio = { audioPicker.launch(arrayOf("audio/*", "*/*")) },
-            onPickReference = { transcriptPicker.launch(arrayOf("text/*", "*/*")) },
+            onPickReference = { transcriptPicker.launch(ReferenceText.MIME_TYPES) },
             onReferenceTextChange = {
                 referenceText = it
                 if (it.isNotBlank()) referenceFile = null
@@ -995,7 +997,7 @@ private fun RunRow(run: BenchmarkRun, clip: BenchmarkClip, onOpen: () -> Unit) {
             BenchmarkRunStatus.Done -> {
                 // Coverage before WER, and loudly when it is low: a truncated run reports a
                 // plausible-looking 30-60% error rate that is really a measure of missing audio.
-                val truncated = (run.coveragePercent ?: 100.0) < 90.0
+                val truncated = (run.coveragePercent ?: 100.0) < Wer.TRUNCATED_COVERAGE
                 Text(
                     buildString {
                         run.coveragePercent?.let { append("coverage %.0f%% · ".format(it)) }
@@ -1069,9 +1071,9 @@ private fun RunDetailSheet(run: BenchmarkRun, clip: BenchmarkClip?, onDismiss: (
             run.coveragePercent?.let { coverage ->
                 Text(
                     "Coverage %.1f%%".format(coverage) +
-                        if (coverage < 90.0) " — truncated run, the rate below is missing audio" else "",
+                        if (coverage < Wer.TRUNCATED_COVERAGE) " — truncated run, the rate below is missing audio" else "",
                     style = MaterialTheme.typography.bodyLarge,
-                    color = if (coverage < 90.0) {
+                    color = if (coverage < Wer.TRUNCATED_COVERAGE) {
                         MaterialTheme.colorScheme.error
                     } else {
                         MaterialTheme.colorScheme.onSurface

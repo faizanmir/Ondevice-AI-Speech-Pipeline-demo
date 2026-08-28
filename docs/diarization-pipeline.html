@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Diarisation Pipeline</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --bg: #e9edf1;
+    --surface: #ffffff;
+    --surface-2: #f3f6f8;
+    --ink: #111820;
+    --ink-2: #4a5763;
+    --ink-3: #74828e;
+    --line: #d4dce2;
+    --line-strong: #bcc7cf;
+
+    --accent: #c9761f;
+    --accent-ink: #1d1305;
+
+    --diar-line: #5b63d3;
+    --diar-fill: #edeffb;
+    --tx-line: #0d8f83;
+    --tx-fill: #e4f2f0;
+
+    --box-fill: var(--surface-2);
+    --box-line: var(--line-strong);
+
+    --font-display: 'Archivo', system-ui, -apple-system, sans-serif;
+    --font-body: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+    --maxw: 1080px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0c1116;
+      --surface: #131b22;
+      --surface-2: #18222b;
+      --ink: #e8eef3;
+      --ink-2: #98a8b5;
+      --ink-3: #6d7d8a;
+      --line: #26313b;
+      --line-strong: #33404b;
+      --accent: #eba24e;
+      --accent-ink: #1a1204;
+      --diar-line: #8f97ee;
+      --diar-fill: #1a2042;
+      --tx-line: #2bb8a8;
+      --tx-fill: #0f2f2c;
+      --box-fill: #18222b;
+      --box-line: #33404b;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0c1116;
+    --surface: #131b22;
+    --surface-2: #18222b;
+    --ink: #e8eef3;
+    --ink-2: #98a8b5;
+    --ink-3: #6d7d8a;
+    --line: #26313b;
+    --line-strong: #33404b;
+
+    --accent: #eba24e;
+    --accent-ink: #1a1204;
+
+    --diar-line: #8f97ee;
+    --diar-fill: #1a2042;
+    --tx-line: #2bb8a8;
+    --tx-fill: #0f2f2c;
+
+    --box-fill: #18222b;
+    --box-line: #33404b;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .wrap {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: clamp(28px, 5vw, 64px) clamp(18px, 4vw, 40px) 72px;
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 14px;
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: clamp(30px, 5.4vw, 50px);
+    line-height: 1.04;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+    margin: 0 0 16px;
+  }
+
+  .lede {
+    font-size: clamp(16px, 2vw, 19px);
+    color: var(--ink-2);
+    max-width: 60ch;
+    margin: 0;
+  }
+
+  /* headline stat */
+  .stat {
+    margin: 30px 0 8px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px 18px;
+    padding: 20px 22px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+  }
+  .stat .from, .stat .to {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+  .stat .from { font-size: clamp(22px, 3.4vw, 30px); color: var(--ink-3); text-decoration: line-through; text-decoration-thickness: 1px; }
+  .stat .arrow { color: var(--accent); font-size: 22px; }
+  .stat .to { font-size: clamp(30px, 5vw, 46px); color: var(--ink); }
+  .stat .cap { font-size: 14px; color: var(--ink-2); flex-basis: 100%; margin-top: 2px; }
+  .stat .cap b { color: var(--ink); font-weight: 600; }
+
+  section { margin-top: 56px; }
+
+  h2 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(19px, 2.6vw, 24px);
+    letter-spacing: -0.01em;
+    margin: 0 0 6px;
+  }
+  .sub {
+    color: var(--ink-2);
+    font-size: 15px;
+    margin: 0 0 22px;
+    max-width: 66ch;
+  }
+
+  /* figure */
+  figure { margin: 0; }
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: clamp(14px, 2.4vw, 26px);
+    overflow-x: auto;
+  }
+  .diagram svg { display: block; width: 100%; min-width: 720px; height: auto; color: var(--ink); }
+  figcaption {
+    color: var(--ink-2);
+    font-size: 13.5px;
+    margin-top: 12px;
+    max-width: 74ch;
+  }
+  figcaption .k { color: var(--accent); font-weight: 600; }
+
+  /* svg element styles (theme via tokens) */
+  .box-neutral rect { fill: var(--box-fill); stroke: var(--box-line); }
+  .lane-diar rect { fill: var(--diar-fill); stroke: var(--diar-line); }
+  .lane-tx rect { fill: var(--tx-fill); stroke: var(--tx-line); }
+  .box rect { stroke-width: 1.5; }
+  .box .lbl { font-family: var(--font-body); font-weight: 600; font-size: 15px; fill: var(--ink); }
+  .box .sub-lbl { font-family: var(--font-mono); font-weight: 400; font-size: 11.5px; fill: var(--ink-3); letter-spacing: .02em; }
+  .flow { fill: none; stroke: var(--ink-3); stroke-width: 1.6; }
+  #ah path { fill: var(--ink-3); }
+  .band { fill: none; stroke: var(--line-strong); stroke-width: 1.4; stroke-dasharray: 5 5; }
+  .band-lbl { font-family: var(--font-mono); font-size: 12px; letter-spacing: .04em; fill: var(--ink-2); }
+  .lane-tag { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; }
+  .tag-diar { fill: var(--diar-line); }
+  .tag-tx { fill: var(--tx-line); }
+  .pin circle { fill: var(--accent); }
+  .pin text { fill: var(--accent-ink); font-family: var(--font-display); font-weight: 800; font-size: 14px; }
+  .out-lbl { font-family: var(--font-body); font-size: 13px; fill: var(--ink-2); font-style: italic; }
+
+  /* change cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 18px 18px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .card .head { display: flex; align-items: center; gap: 12px; }
+  .badge {
+    flex: none;
+    width: 30px; height: 30px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--accent); color: var(--accent-ink);
+    font-family: var(--font-display); font-weight: 800; font-size: 16px;
+  }
+  .card h3 { font-family: var(--font-display); font-weight: 700; font-size: 16.5px; margin: 0; letter-spacing: -0.01em; line-height: 1.2; }
+  .where {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .card .num {
+    font-family: var(--font-mono); font-weight: 500; font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    display: inline-flex; align-items: baseline; gap: 8px;
+    color: var(--ink-2);
+  }
+  .card .num .b { color: var(--ink-3); text-decoration: line-through; text-decoration-thickness: 1px; }
+  .card .num .a { color: var(--ink); font-weight: 600; }
+  .card .why { font-size: 14px; color: var(--ink-2); margin: 2px 0 0; }
+
+  /* table */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  thead th { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; vertical-align: bottom; }
+  tbody th { text-align: left; font-weight: 500; color: var(--ink-2); font-family: var(--font-body); font-size: 14.5px; }
+  tbody td { font-family: var(--font-mono); font-size: 15px; color: var(--ink); }
+  tr:last-child td, tr:last-child th { border-bottom: none; }
+  .wallrow th, .wallrow td { border-top: 1.5px solid var(--line-strong); font-weight: 600; }
+  .wallrow td:last-child { color: var(--accent); }
+  .cell-dim { color: var(--ink-3) !important; }
+
+  .foot {
+    margin-top: 44px; padding-top: 20px; border-top: 1px solid var(--line);
+    color: var(--ink-3); font-size: 13.5px; max-width: 74ch;
+  }
+  .foot b { color: var(--ink-2); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">On-device · two concurrent branches</p>
+    <h1>Who spoke, what they said</h1>
+    <p class="lede">The speaker-transcript job answers two independent questions about a recording and joins them at the end. Because the two halves share no data until then, they run at the same time — and the wall clock is the longer branch, not the sum.</p>
+
+    <div class="stat" role="group" aria-label="Wall clock for a 20-minute recording went from about 115 seconds to 55.5 seconds">
+      <span class="from">~115s</span>
+      <span class="arrow" aria-hidden="true">→</span>
+      <span class="to">55.5s</span>
+      <span class="cap">wall clock for a <b>20-minute recording</b> · roughly <b>2× faster</b> · the speedups are <b>output-neutral</b> (WER and speaker accuracy unchanged)</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>The pipeline</h2>
+    <p class="sub">Read once into memory, split into two branches that run concurrently, join at alignment. The five amber marks are where the speedups act.</p>
+
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 1130 468" role="img" aria-label="Data-flow diagram. The recording is read into memory, then forks into two concurrent branches. The diarise branch runs chunk, then segment-embed-cluster, then fold-and-name. The transcribe branch runs slice, then decode into words with timings. Both join at an alignment stage that attributes words to speakers and saves. Five amber markers show where the speedups act: FastConformer on decode, embed-once and per-chunk naming on fold-and-name, XNNPACK on segment-embed-cluster, the recogniser-aware thread split at the fork, and two parallel chunk lanes on chunk.">
+
+          <!-- concurrency enclosure -->
+          <rect class="band" x="208" y="78" width="636" height="316" rx="14"></rect>
+          <text class="band-lbl" x="526" y="66" text-anchor="middle">running at the same time · wall = the longer branch</text>
+
+          <!-- lane tags -->
+          <text class="lane-tag tag-diar" x="222" y="108" text-anchor="start">diarise — who spoke when</text>
+          <text class="lane-tag tag-tx" x="222" y="392" text-anchor="start">transcribe — what they said</text>
+
+          <!-- flows -->
+          <!-- read to fork -->
+          <path class="flow" d="M165 230 H190"></path>
+          <path class="flow" d="M190 134 V338"></path>
+          <path class="flow" d="M190 134 H220" marker-end="url(#ah)"></path>
+          <path class="flow" d="M190 338 H220" marker-end="url(#ah)"></path>
+          <!-- diarise lane arrows -->
+          <path class="flow" d="M340 134 H370" marker-end="url(#ah)"></path>
+          <path class="flow" d="M624 134 H654" marker-end="url(#ah)"></path>
+          <!-- transcribe lane arrows -->
+          <path class="flow" d="M340 338 H370" marker-end="url(#ah)"></path>
+          <!-- join merge -->
+          <path class="flow" d="M828 134 H848 V226"></path>
+          <path class="flow" d="M624 338 H848 V238"></path>
+          <path class="flow" d="M848 230 H860" marker-end="url(#ah)"></path>
+          <!-- out -->
+          <path class="flow" d="M1052 230 H1088" marker-end="url(#ah)"></path>
+          <text class="out-lbl" x="1088" y="256" text-anchor="end">labelled transcript</text>
+
+          <!-- READ -->
+          <g class="box box-neutral">
+            <rect x="30" y="192" width="135" height="76" rx="9"></rect>
+            <text class="lbl" x="97" y="226" text-anchor="middle">Read WAV</text>
+            <text class="sub-lbl" x="97" y="245" text-anchor="middle">whole recording</text>
+          </g>
+
+          <!-- DIARISE lane -->
+          <g class="box lane-diar">
+            <rect x="222" y="118" width="118" height="72" rx="9"></rect>
+            <text class="lbl" x="281" y="151" text-anchor="middle">chunk</text>
+            <text class="sub-lbl" x="281" y="169" text-anchor="middle">if enrolled</text>
+          </g>
+          <g class="box lane-diar">
+            <rect x="370" y="118" width="254" height="72" rx="9"></rect>
+            <text class="lbl" x="497" y="151" text-anchor="middle">segment · embed · cluster</text>
+            <text class="sub-lbl" x="497" y="169" text-anchor="middle">sherpa · pyannote + CAM++</text>
+          </g>
+          <g class="box lane-diar">
+            <rect x="654" y="118" width="174" height="72" rx="9"></rect>
+            <text class="lbl" x="741" y="151" text-anchor="middle">fold + name</text>
+            <text class="sub-lbl" x="741" y="169" text-anchor="middle">match enrolled voices</text>
+          </g>
+
+          <!-- TRANSCRIBE lane -->
+          <g class="box lane-tx">
+            <rect x="222" y="322" width="118" height="72" rx="9"></rect>
+            <text class="lbl" x="281" y="355" text-anchor="middle">slice</text>
+          </g>
+          <g class="box lane-tx">
+            <rect x="370" y="322" width="254" height="72" rx="9"></rect>
+            <text class="lbl" x="497" y="355" text-anchor="middle">decode → words + timings</text>
+            <text class="sub-lbl" x="497" y="373" text-anchor="middle">recogniser</text>
+          </g>
+
+          <!-- ALIGN -->
+          <g class="box box-neutral">
+            <rect x="860" y="192" width="192" height="76" rx="9"></rect>
+            <text class="lbl" x="956" y="222" text-anchor="middle">align + attribute</text>
+            <text class="sub-lbl" x="956" y="243" text-anchor="middle">cut on speaker change · save</text>
+          </g>
+
+          <!-- change pins -->
+          <g class="pin"><circle cx="190" cy="230" r="13"></circle><text x="190" y="235" text-anchor="middle">4</text></g>
+          <g class="pin"><circle cx="337" cy="118" r="13"></circle><text x="337" y="123" text-anchor="middle">5</text></g>
+          <g class="pin"><circle cx="373" cy="118" r="13"></circle><text x="373" y="123" text-anchor="middle">3</text></g>
+          <g class="pin"><circle cx="825" cy="118" r="13"></circle><text x="825" y="123" text-anchor="middle">2</text></g>
+          <g class="pin"><circle cx="621" cy="322" r="13"></circle><text x="621" y="327" text-anchor="middle">1</text></g>
+
+          <!-- arrowhead -->
+          <defs>
+            <marker id="ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z"></path>
+            </marker>
+          </defs>
+        </svg>
+      </div>
+      <figcaption>The two branches are data-independent, so they run concurrently and the wall clock is whichever is longer. <span class="k">Amber marks 1–5</span> flag where each change below acts — they are five independent changes, not ordered steps. <em>Chunking</em> only runs when speakers are enrolled, because cluster IDs are meaningless across chunks and only naming can stitch a person back together across them. VAD silence-trimming (off by default) sits just before the diarise branch and touches diarisation only.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>The five changes</h2>
+    <p class="sub">Transcription was the pole at the start (114.7s vs a 73.7s speaker branch), so the recogniser swap moved the wall the most — and moved the pole to diarisation, which the last two changes then attack.</p>
+
+    <div class="cards">
+      <article class="card">
+        <div class="head"><span class="badge">1</span><h3>FastConformer recogniser</h3></div>
+        <span class="where">Transcribe branch</span>
+        <span class="num"><span class="b">114.7s</span>→<span class="a">38.9s</span></span>
+        <p class="why">A 17-layer / 512-dim encoder in place of Parakeet's 24 / 1024 — about 5.6× less compute per frame, same word-timing path. Costs ~1.3 points of WER on English; German is unchanged.</p>
+      </article>
+
+      <article class="card">
+        <div class="head"><span class="badge">2</span><h3>Embed each cluster once</h3></div>
+        <span class="where">Diarise · fold + name</span>
+        <span class="num"><span class="b">19s</span>→<span class="a">9.8s</span></span>
+        <p class="why">Folding fragments and naming speakers each embedded the same longest turns — identical audio, computed twice. Now computed once and shared, with naming moved inside the chunk loop.</p>
+      </article>
+
+      <article class="card">
+        <div class="head"><span class="badge">3</span><h3>XNNPACK provider</h3></div>
+        <span class="where">Both branches</span>
+        <span class="num"><span class="a">int8 ARM kernels</span></span>
+        <p class="why">Every model is int8; XNNPACK has the kernels for it. Big on the recogniser, only ~3% on diarisation — which was the clue for change 5. Now one provider for every sherpa model.</p>
+      </article>
+
+      <article class="card">
+        <div class="head"><span class="badge">4</span><h3>Recogniser-aware threads</h3></div>
+        <span class="where">The fork</span>
+        <span class="num"><span class="b">3 / 4</span>→<span class="a">4 / 3</span></span>
+        <p class="why">The diarise/transcribe thread budget was tuned for Parakeet, when transcription was the big job. FastConformer made diarisation the pole, so the spare thread flips to it.</p>
+      </article>
+
+      <article class="card">
+        <div class="head"><span class="badge">5</span><h3>Two chunks in parallel</h3></div>
+        <span class="where">Diarise · chunk</span>
+        <span class="num"><span class="b">53s</span>→<span class="a">45s</span></span>
+        <p class="why">sherpa runs one un-batched pass per analysis window, so a single chunk on four threads starves the cores. Two diarizers on two chunks use the same budget far better.</p>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where the seconds went</h2>
+    <p class="sub">A 20-minute recording, measured per phase on the device. Diarise branch = segment/embed/cluster + fold + name; the two branches overlap, so the wall is the longer one, not the row sum.</p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col" style="text-align:left">phase</th>
+            <th scope="col">Parakeet · CPU<br><span style="font-weight:400;text-transform:none;letter-spacing:0">the start</span></th>
+            <th scope="col">+ FastConformer<br><span style="font-weight:400;text-transform:none;letter-spacing:0">cache · XNNPACK</span></th>
+            <th scope="col">+ threads<br><span style="font-weight:400;text-transform:none;letter-spacing:0">+ parallel lanes</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">diarise branch</th>
+            <td class="cell-dim">73.7s</td>
+            <td class="cell-dim">62.9s</td>
+            <td>55.2s</td>
+          </tr>
+          <tr>
+            <th scope="row">transcribe</th>
+            <td class="cell-dim">114.7s</td>
+            <td>38.9s</td>
+            <td>43.7s</td>
+          </tr>
+          <tr class="wallrow">
+            <th scope="row">wall clock</th>
+            <td class="cell-dim">~115s</td>
+            <td>63.9s</td>
+            <td>55.5s</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <p class="foot">Measured on a <b>Xiaomi Pad 8</b> (SM8735P), 20-minute English recording, CAM++ embedder. Transcription reads the whole recording; only diarisation sees the optionally silence-trimmed audio. The concurrency and parallel-lane changes are <b>output-neutral</b> — WER and speaker accuracy came back byte-identical before and after — which is the property worth verifying whenever concurrency is added to native code.</p>
+</div>
+</body>
+</html>

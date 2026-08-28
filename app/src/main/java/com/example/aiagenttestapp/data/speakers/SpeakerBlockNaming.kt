@@ -15,7 +15,7 @@ data class NamedBlock(
  *
  * [SpeakerAlignment] cuts a block wherever the cluster id changes, which is the same question as
  * "did the speaker change" only while every speaker is exactly one cluster. They are not: the
- * diariser routinely emits one person as several clusters, and [SpeakerRepository.labelClusters]
+ * diariser routinely emits one person as several clusters, and [SpeakerRepository.foldAndName]
  * then quite correctly puts the same name on all of them. On a measured two-voice run, clusters 0, 3
  * and 5 were all named Tim -- and cutting on the id split his continuous speech into separate blocks
  * at every hop between them, which reads as several people finishing each other's sentence and is a

@@ -20,6 +20,23 @@ it, so any of them can be regenerated from the script alone.
 | `audit_script_en2_first60s.txt` | The same, cut for the 60-second pacing probe. |
 | `audit_script.txt`, `audit_de.txt` | Earlier English and German scripts. Their audio is gone. |
 | `dialog_*.txt` | Five auditor/auditee dialogues, synthesised from a third party's PDF transcripts to compare against their published numbers. |
+| `audit_de_dialog_say.txt` | The audit dialogue in German, 42 turns. Only the first 24 were rendered — the free tier ran out of characters. |
+| `audit_de_dialog_24_say.txt` | The 24 turns that were rendered, as `eleven_de.wav`. |
+| `*.ref.txt` | Speaker-tagged references for the diarisation benchmark — `[S1] … [S2] …`, one label per turn. Generated from the matching `.truth.json` in `~/Downloads/Archive/audio/`, so they stay in step with the audio rather than being edited by hand. |
+| `*.plain.txt` | The same text with the tags removed, for scoring with `wer.py`, which has no notion of speakers. |
+
+## Speaker attribution
+
+`../diarization-benchmark.md` scores who said what, not just what was said. Score a pulled
+`speakers.db` against a truth timeline with:
+
+```sh
+python3 docs/diarscore.py <speakers.db> <truth.json> --lang=en
+```
+
+It recomputes the app's own WER and speaker accuracy through `wer.py` — so a disagreement between
+device and desktop is visible — and adds frame and turn accuracy, which the on-device word-level
+figure cannot see.
 
 ## The scorer changed on 2026-08-19
 

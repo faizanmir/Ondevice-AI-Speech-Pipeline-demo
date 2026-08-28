@@ -70,6 +70,18 @@ object Wer {
     )
 
     /**
+     * Below this coverage, a transcript is short of its reference and the error rate beside it is
+     * measuring what is missing rather than what was heard.
+     *
+     * Here rather than on each screen because it is a property of the scoring protocol, not of a
+     * feature. It used to be four bare `90.0` literals across the benchmark screen and its sharing
+     * code, and a fifth arrived with the diarisation row carrying a comment promising it was "kept
+     * identical on purpose" -- a promise nothing could enforce. Two screens disagreeing about what
+     * truncated means is the one thing a scoring rig cannot afford.
+     */
+    const val TRUNCATED_COVERAGE = 90.0
+
+    /**
      * Scores [hypothesis] against [reference]. [lang] is "en" or "de" and picks the numeral
      * grammar, exactly as `--lang=` does; anything unrecognised behaves as German, the script's
      * default.
@@ -77,7 +89,7 @@ object Wer {
     fun report(reference: String, hypothesis: String, lang: String): Report {
         // say() silence directives ([[slnc 500]]) are stripped from the reference only, so the
         // Archive say-scripts work directly as references -- same as wer.py's main().
-        val ref = reference.replace(Regex("""\[\[[^\]]*\]\]"""), "")
+        val ref = DIRECTIVE.replace(reference, "")
 
         val raw = score(normalise(ref, expandNumbers = false, lang = lang),
             normalise(hypothesis, expandNumbers = false, lang = lang))
@@ -133,6 +145,16 @@ object Wer {
      * 600-word dialogue, for text nobody ever said.
      */
     private val TAG = Regex("""\[/?[a-z0-9\- ]+\]""")
+
+    /**
+     * `say()` silence directives, `[[slnc 500]]`, stripped from the reference before anything else.
+     *
+     * Named rather than inlined because [com.example.aiagenttestapp.data.speakers.SpeakerAccuracy]
+     * has to strip exactly the same thing before it looks for speaker tags -- the inner `[slnc 500]`
+     * reads as a speaker tag if the outer pair is taken apart first. Two copies of this pattern
+     * would be two chances for silence to become a person.
+     */
+    internal val DIRECTIVE = Regex("""\[\[[^\]]*\]\]""")
     private val NON_ALPHANUM = Regex("""[^a-zäöü0-9,.\- ]""")
     private val WHITESPACE = Regex("""\s+""")
 

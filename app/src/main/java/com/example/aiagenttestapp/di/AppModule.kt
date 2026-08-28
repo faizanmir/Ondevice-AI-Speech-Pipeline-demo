@@ -28,10 +28,12 @@ import com.example.aiagenttestapp.data.speakers.SpeakerDao
 import com.example.aiagenttestapp.data.speakers.SpeakerRepository
 import com.example.aiagenttestapp.stt.AudioRecorder
 import com.example.aiagenttestapp.stt.KeywordDetector
+import com.example.aiagenttestapp.stt.SpeakerDiarizer
 import com.example.aiagenttestapp.stt.SpeechModelRepository
 import com.example.aiagenttestapp.stt.SpeechRecognizer
 import com.example.aiagenttestapp.stt.Punctuator
 import com.example.aiagenttestapp.stt.StreamingRecognizer
+import com.example.aiagenttestapp.stt.WarmPool
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -175,13 +177,28 @@ object AppModule {
     /** Enrolled voices, and the search index used to put names on a diarised recording. */
     @Provides
     @Singleton
-    fun speakerRepository(dao: SpeakerDao, audioModels: AudioModelRepository) =
-        SpeakerRepository(dao, audioModels)
+    fun speakerRepository(
+        dao: SpeakerDao,
+        audioModels: AudioModelRepository,
+        settings: SettingsStore,
+    ) = SpeakerRepository(dao, audioModels, settings)
+
+    /**
+     * Diarizer lanes kept warm between runs, so a re-run skips their model loads. Capacity matches
+     * the largest lane fleet a run builds (DiarizeWorker.MAX_DIARIZE_LANES); freed under memory
+     * pressure by [com.example.aiagenttestapp.AIAgentApplication.onTrimMemory].
+     */
+    @Provides
+    @Singleton
+    fun diarizerPool(): WarmPool<SpeakerDiarizer> = WarmPool(capacity = 4) { it.release() }
 
     /** Optional bundles: speaker identification, keyword spotting and punctuation. */
     @Provides
     @Singleton
-    fun audioModelRepository(@ApplicationContext context: Context) = AudioModelRepository(context)
+    fun audioModelRepository(
+        @ApplicationContext context: Context,
+        settings: SettingsStore,
+    ) = AudioModelRepository(context, settings)
 
     @Provides
     @CacheDirPath

@@ -1,0 +1,251 @@
+Good morning. Thanks for making the time. This is the surveillance audit for the chilled ready meals site, and I'd like to start with the scope before we walk anywhere.
+Morning. Yes, of course.
+So the certificate covers manufacture and packing of chilled ready meals, and it also lists ambient sauces. Is the ambient line still running here, or has that moved?
+It moved. That went across to the Bexley site at the end of March, so everything ambient is theirs now. We kept the recipe development for it, but no production.
+Right. And has anyone told the certification body that?
+I assumed our head of quality did that. I'd have to check.
+Please do check, because the certificate in front of me still lists it, and a scope that names a process you no longer perform is a finding in its own right. It's usually a quick administrative fix, but it does need doing.
+Understood. I'll find out today.
+Good. Let's talk about document control then. Walk me through how a procedure gets changed here, from someone deciding it needs changing to the version on the floor being current.
+So we hold everything in the document management system. If somebody wants a change, they raise a change request, that goes to the document owner, and the owner drafts the revision. Then it needs approval from the department head and from quality before it's published.
+And who publishes it?
+Quality does. Usually me or my deputy.
+What happens to the copy that's already printed and hanging next to the line?
+There's a controlled copy register. When we publish a new revision the register tells us where the printed copies are, and the shift leader is supposed to swap them and destroy the old one.
+Supposed to.
+Well, that's the procedure.
+I ask because I was on the packing hall floor for twenty minutes before this meeting, and the metal detection procedure at the end of line four is revision six. What does the system say?
+I'd need to look.
+Have a look now if you can.
+It's revision eight. Published in February.
+So there's a printed copy two revisions behind sitting at the point of use, and the register says it should have been swapped. What changed between six and eight?
+Seven was a wording change, I think, about who records the check. Eight changed the reject bin check frequency from hourly to every thirty minutes.
+So the operator at line four is following a document that tells them to check a critical control point half as often as your current procedure requires. That's not a documentation problem, that's a food safety one.
+Yes. I see that.
+Are they actually checking every thirty minutes?
+Let me pull the records.
+Please.
+The line four records for this week show checks at thirty minute intervals. So they are doing it.
+Good, that helps. So the practice is correct and the document at the point of use is wrong, which is a lot better than the other way round. But I still need to raise it, because your control was the register and the register didn't work.
+I understand.
+Let me ask a broader question. How many controlled printed copies are there across the site?
+Around ninety, I think. It might be more.
+And when did anyone last verify the register against what's physically on the walls?
+There's an annual check. It's part of the internal audit programme.
+When was the last one?
+I believe last October.
+So ten months. And in those ten months the metal detection procedure went through two revisions and the floor copy didn't move. I'd suggest that an annual verification isn't frequent enough for a register of ninety documents in a plant that revises procedures this often. That's not a finding, that's an observation, but I'd think about it.
+That's fair.
+Let's move to training. Show me how you know that the person operating the metal detector is competent to do it.
+Every role has a training matrix. The matrix lists the required modules, and the record for each person shows the date they were trained and the date they were assessed as competent.
+Who does the assessment?
+The line manager, usually. For critical control points it has to be a trained assessor.
+How many trained assessors do you have?
+Four. Three on days and one on nights.
+One on nights. What happens if that person is on holiday and you need to sign someone off as competent?
+It waits, or we bring one across from days.
+Does that actually happen, or does it wait?
+Honestly, it usually waits.
+How long has it waited, at the longest?
+There was a case in June. It was about three weeks, I think, because we had two people off at once.
+And during those three weeks, was the person operating the metal detector?
+They were operating it under supervision.
+Documented supervision?
+There's a note on the shift handover.
+Mhm.
+I know that's not ideal.
+It's not ideal, but a shift handover note is a record, and if it names the supervisor and the supervised person then it's arguably adequate. What I'd want to see is that you decided that in advance rather than after the fact. Is there a procedure that says what happens when no assessor is available?
+No, there isn't.
+Then write one. Again, an observation rather than a finding, because you did control the risk. You just controlled it informally.
+Understood.
+Calibration next. How do you manage the metal detector test pieces?
+They're on the calibration schedule. Annual, sent to an external lab, and we get a certificate back with the certified sphere size.
+All of them?
+All the ones in use, yes.
+I picked up the test pack at line two this morning. The ferrous piece has a sticker saying calibration due July. It's August.
+That'll be the one that came back late. There was a delay with the lab.
+How late?
+I think it went out in June and we got it back a fortnight ago.
+So it was back before the due date lapsed, or after?
+I'd have to check the dates.
+Please check, because there's a real difference between a test piece that was recalibrated on time and had its sticker forgotten, and one that was used past its due date. The first is a labelling slip. The second means every metal detection check performed with it in that window has no verified basis.
+The certificate is dated the second of August. The sticker says due the eighteenth of July.
+So there's a fifteen day window where the piece was in use and out of calibration.
+Yes.
+Was it in use during that window?
+It would have been. Line two ran through July.
+Then that's a non-conformity, and it needs an impact assessment rather than just a new sticker. You'll need to establish what product ran on line two between the eighteenth of July and the second of August, and demonstrate the detector was actually functioning across that period even though the verification piece was out of date.
+We do have the check records. Every check passed.
+That helps you a great deal, and it may well be that the assessment concludes there's no product risk. But the assessment has to exist and be written down. Don't just tell me the checks passed. Show me the reasoning that gets from the checks passing to the conclusion that the product is safe.
+Okay. That's clear.
+Let's talk about how you found out about the lab delay. Did anyone flag it at the time?
+The engineering coordinator chased it. I don't think it came to quality.
+So an item on the calibration schedule went overdue, and the system that should have escalated it didn't.
+The schedule is a spreadsheet. It doesn't alert anybody.
+Right. And who looks at the spreadsheet?
+Engineering, monthly.
+Monthly is reasonable. So in the monthly review in July, did anybody notice that the piece was overdue?
+Apparently not.
+I'd look at that as the root cause rather than the lab delay. The lab being slow is an external factor you can't fully control. Your review not catching it is entirely within your control.
+That's a fair way to put it.
+Let's move on to corrective actions generally. How many are open right now?
+Twenty three, I think.
+And how many of those are past their due date?
+I'd have to look at the tracker.
+Go ahead.
+Nine are past due.
+Nine of twenty three. What's the oldest?
+There's one from November last year. It's about the drainage in the wash bay.
+Nine months. What's holding it up?
+It's a capital spend. It went into the budget cycle and didn't get approved, so it's been rolled forward.
+Is the risk it was raised against still present?
+Yes, but we put an interim control in. There's a squeegee routine and a check on the shift record.
+Is the interim control documented as an interim control, with a review date?
+It's in the corrective action record.
+With a review date?
+I don't think there's a date on it.
+That's the pattern I keep seeing this morning. The control is real, the thinking behind it is sound, and the record doesn't capture it. An interim control with no review date becomes a permanent control by default, and nobody ever decides that it should be.
+Mhm. Yes.
+How does your management review handle the overdue actions? Does it see the number?
+It sees the total open, and there's a slide on overdue.
+Does it see the age profile?
+No, just a count.
+So a count of nine looks the same whether they're all a week late or one of them is nine months late.
+That's true.
+I'd change that slide. Not a finding, just something that would tell your directors something they can act on.
+I'll take that away.
+Supplier approval. How do you approve a new raw material supplier?
+They complete a questionnaire, we review their certification, and for higher risk materials we do an audit, either ourselves or a second party.
+What makes a material higher risk?
+Ready to eat components, anything with allergens, anything where we can't apply a kill step afterwards.
+That's a sensible definition. Who decides the risk category?
+Technical, with input from me.
+Is the decision recorded with reasons, or just the category?
+Just the category, I think.
+So if I asked you why the cooked chicken supplier is category two rather than category one, what would you show me?
+I'd have to reconstruct that from memory.
+Which means the decision isn't really auditable. Again the thinking is probably fine. It just isn't written down.
+I'm noticing a theme.
+So am I, and it's worth naming it plainly, because it changes what you should do about it. You don't have a competence problem here. The people I've spoken to this morning know their processes well and the physical controls are in decent shape. What you have is a recording problem, and recording problems are cheap to fix but they're the ones that fail an audit, because an auditor can only assess what's evidenced.
+That's a helpful way to hear it.
+Let's do complaints. What's your complaint rate at the moment?
+It's around eleven per million units.
+Trending which way?
+It went up in the spring and it's come back down. We were at about eighteen in April.
+What drove April?
+Two things. There was a seal integrity issue on line three, and there was a run of foreign body complaints that turned out to be from a supplier.
+The seal issue, was that a machine fault?
+A worn sealing head. We replaced it and put it on the preventive maintenance schedule.
+Was it not on the schedule before?
+It was, but at the wrong interval.
+How did you determine the new interval?
+The manufacturer's recommendation.
+And how was the old interval determined?
+I genuinely don't know. It predates me.
+That's an honest answer and it's more useful than a guess. Can I suggest that if you don't know how any of your preventive maintenance intervals were set, that's worth a piece of work in its own right. You've now got one documented case where an interval was wrong and it reached the consumer.
+Yes. I'll raise that.
+The foreign body complaints from the supplier. How did you close that out?
+We raised it with them, they investigated, and they found a damaged sieve at their end. They replaced it and sent us evidence.
+Did you verify the evidence, or file it?
+We reviewed it and accepted it.
+Did anyone go and look?
+No, we didn't audit them for it.
+Was that a decision, or did it just not happen?
+It was a decision. They're a long standing supplier with a good record and the corrective action looked sound.
+Then that's fine, and it's a good example of the opposite of what we've been discussing, because you made a risk based decision. Is that reasoning in the record?
+Probably not.
+Write it in. One sentence. It converts an apparent gap into a documented judgement.
+Okay.
+Internal audits. Is the programme complete for this year?
+We're behind. We've done nine of the fourteen scheduled.
+With four months left, is that recoverable?
+It should be, yes. Three of the remaining five are short ones.
+Who does the auditing?
+Trained internal auditors from other departments. We don't let anyone audit their own area.
+Good. How do you assure the quality of the internal audits themselves?
+What do you mean?
+How do you know an internal audit was any good? If somebody walks a process, ticks conformant on everything, and writes nothing, does anyone challenge that?
+I review the reports.
+Have you ever sent one back?
+Yes, a couple of times. Where the evidence wasn't specific enough.
+That's exactly what I was hoping to hear. Is that review recorded anywhere?
+There's an approval field on the report.
+Then that's adequate. Good.
+Mhm.
+Management review. When was the last one?
+June.
+And the inputs. Did it cover the full set, customer feedback, process performance, audit results, supplier performance, resources, the improvement opportunities?
+I'd want to check the minutes rather than answer from memory.
+Sensible. Have a look.
+It covered customer feedback, audit results, process performance, and there's a section on resources. Supplier performance isn't a separate item but it's mentioned under complaints.
+Mentioned under complaints is not the same as reviewed. Did anyone look at supplier performance data as a set, across all suppliers, and draw a conclusion?
+No, I don't believe so.
+Then that's a gap against the standard, and it's a real one rather than a technicality, because supplier performance is where several of this morning's issues originated.
+I take the point.
+Let's talk about resources, since it's in the minutes. What did the review conclude?
+That we needed another technical resource. It was approved in principle.
+In principle meaning what?
+Meaning it hasn't been recruited.
+Since June.
+Yes.
+Is that connected to the internal audit programme being behind, and the corrective actions being overdue, and the controlled copy register not being verified?
+Almost certainly, yes.
+Then I'd want the management review to say so. At the moment you have a set of symptoms recorded in different places and a cause recorded in a fourth place, and nothing connecting them. If the connection were written down, the case for that recruitment would make itself.
+That's a good point, and it's one I'd like to be able to make upwards.
+Then make it with the evidence you already have. You don't need anything new. Let me summarise where I think we are, and then we'll go and walk the chilled store.
+Please.
+I have one non-conformity, which is the test piece used out of calibration on line two, and that needs an impact assessment, not just a new sticker. I have one minor issue on the document control register, which is the metal detection procedure at line four being two revisions behind at the point of use. And I have a set of observations, all of which are the same observation wearing different clothes, which is that your decisions are sound and your records don't capture them.
+That's a fair summary.
+The management review gap on supplier performance I'll write up as a minor as well, because it's an explicit requirement and it isn't being met.
+Understood.
+None of this is a bad audit. I want to be clear about that, because I've given you a long list and lists feel worse than they are. The physical controls are working, the people know what they're doing, and the checks that matter are being done. Fix the recording and this is a strong system.
+Thank you. That's genuinely useful.
+Shall we walk the chilled store before lunch?
+Yes, let's do that. I'll get you a coat.
+Right, the chilled store. What's the target temperature in here?
+Zero to four degrees. The alarm is set at five.
+And what happens when the alarm goes off?
+It goes to the duty engineer's phone, and it's logged automatically.
+Has it gone off in the last three months?
+Twice, I think. Both times during a defrost cycle.
+Both times legitimately, or both times you decided it was a defrost cycle?
+That's a sharper question than it sounds. It was logged as defrost both times.
+By whom?
+The duty engineer.
+Does the log require them to record why they concluded it was a defrost, or just to record the category?
+Just the category.
+Mhm. Same shape again.
+I can hear it now.
+I want to look at the racking here. There's product on the floor in the corner by the door. Is that intentional?
+No, that shouldn't be there. That's an inbound pallet that's waiting to be put away.
+How long has it been waiting?
+I don't know. There's a label on it with a receipt time.
+What does it say?
+Six forty this morning. So about three hours.
+Is there a limit on how long an inbound pallet can stand before it's put away?
+Not a written one.
+Is there a reason for one?
+The temperature is controlled either way, so I'd argue the product is fine.
+I'd agree with you on temperature. My concern is traceability, not safety. A pallet on the floor with no location is a pallet your stock system thinks is somewhere it isn't.
+That's true. It would show as received but not located.
+And if it were recalled this morning, how quickly could you find it?
+Someone would have to walk the store.
+Which is your answer to the recall test question, and it's slower than the four hours your procedure commits to.
+We've never actually tested it from a floor pallet.
+Then that's worth adding to your next mock recall. Not as a criticism, as a scenario. Mock recalls that only test the easy path tell you very little.
+That's a good idea. I'll build it in.
+Let's check date coding on a couple of these. Can you read me the code on that top case?
+It's the twenty second of August, batch four one seven.
+And what does four one seven mean?
+Julian day and line. Day one seven, line four.
+Day seventeen was five days ago and the case is coded the twenty second. Is that a five day shelf life?
+Seven days from production. So that's consistent.
+Good. And who verifies the coding at start up?
+The line operator checks it and the team leader countersigns.
+Is that on the record I saw for line four earlier?
+It's a separate record. Start up checks.
+Can you pull one for line four for the twenty second?
+Here. Both signatures, coding verified, allergen check done.
+That's exactly what I wanted to see, and it's worth saying so. That record does what a record should do. It tells me who checked, when, and what they found, and I can act on it without asking anybody a question.
+I'll pass that on to the team.
+Please do. Let's head back and I'll write this up.
