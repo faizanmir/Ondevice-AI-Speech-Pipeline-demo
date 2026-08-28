@@ -326,7 +326,7 @@
       <span class="chip real">ElevenLabs voices</span>
       <span class="chip">Lenovo TB336FU, MediaTek MT8755</span>
       <span class="chip">Xiaomi 25097RP43I, Snapdragon 8s Gen 4</span>
-      <span class="chip">2026-08-25 to 08-27</span>
+      <span class="chip">2026-08-25 to 08-28</span>
     </div>
   </header>
 
@@ -369,11 +369,13 @@
   <section>
     <div class="section-head">
       <p class="eyebrow">What was used</p>
-      <h2>The three models behind these results</h2>
+      <h2>Two shelves of models</h2>
     </div>
     <p class="prose">
-      Each is downloaded once and then runs locally through sherpa-onnx. Sizes are the files as they
-      sit on disk after download, 683 MB together.
+      Each is downloaded once and then runs locally through sherpa-onnx. There are now two shelves:
+      an <strong>accuracy</strong> shelf (Parakeet + ERes2Net, behind the accuracy table below) and a
+      <strong>speed</strong> shelf (FastConformer + CAM++, the current default, behind the long-file
+      speed table). Sizes are the files as they sit on disk after download.
     </p>
 
     <div class="scroller">
@@ -396,17 +398,31 @@
             <td class="dev">CPU</td>
           </tr>
           <tr>
-            <td class="name">Voiceprints</td>
+            <td class="name">Voiceprints, accuracy shelf</td>
             <td>3D-Speaker ERes2Net-base</td>
             <td class="dev">3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k</td>
             <td class="num">37.8 MB</td>
             <td class="dev">CPU</td>
           </tr>
           <tr>
-            <td class="name">Transcription</td>
+            <td class="name">Voiceprints, speed shelf (default)</td>
+            <td>3D-Speaker CAM++, ~2.8&times; faster embedding</td>
+            <td class="dev">3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced</td>
+            <td class="num">27.0 MB</td>
+            <td class="dev">CPU</td>
+          </tr>
+          <tr>
+            <td class="name">Transcription, accuracy shelf</td>
             <td>NVIDIA Parakeet TDT 0.6B v3, int8</td>
             <td class="dev">sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8</td>
             <td class="num">639 MB</td>
+            <td class="dev">CPU</td>
+          </tr>
+          <tr>
+            <td class="name">Transcription, speed shelf (default)</td>
+            <td>NeMo FastConformer en/de/es/fr, int8, ~3&times; faster</td>
+            <td class="dev">sherpa-onnx-nemo-fast-conformer-transducer-en-de-es-fr-14288-int8</td>
+            <td class="num">132 MB</td>
             <td class="dev">CPU</td>
           </tr>
         </tbody>
@@ -730,10 +746,124 @@
     </p>
   </section>
 
+  <section>
+    <div class="section-head">
+      <p class="eyebrow">Added since &middot; 28 August 2026</p>
+      <h2>Twenty minutes in under fifty seconds</h2>
+    </div>
+    <p class="prose">
+      The 27 August work above ended with the whole speaker job on a twenty-minute recording at about
+      55 seconds on the Xiaomi. Four further changes &mdash; each producing byte-identical output, and
+      verified digit-for-digit on both devices &mdash; took it below fifty, and cut the entry-level
+      Lenovo by 39% against where it started: chunks are now <strong>folded and named while later
+      chunks are still being diarised</strong>, so that work hides behind diarisation instead of
+      following it; <strong>every budgeted thread gets its own diarizer lane</strong> (four on the
+      Xiaomi), because sherpa runs one window at a time and parallel instances beat more threads;
+      <strong>transcription decodes on two recogniser instances</strong> taking alternate slices; and
+      <strong>the models stay warm between runs</strong>, so a repeat run does zero model loads.
+    </p>
+    <p class="prose">
+      The material is two ~20-minute two-voice conversations with per-turn ground truth, synthesised
+      locally (macOS voices for the English file, Piper for the German) &mdash; rougher renderings
+      than ElevenLabs, so the WER column is not comparable to the table above; on clean ElevenLabs
+      German the same recogniser scores 2.47%. These rows use the FastConformer recogniser and the
+      CAM++ embedder. VAD was off: wall-to-wall speech gives it nothing to cut.
+    </p>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Voices</th>
+            <th>Lang</th>
+            <th>Device</th>
+            <th class="num">Audio</th>
+            <th class="num">Before</th>
+            <th class="num">After</th>
+            <th class="num">Realtime</th>
+            <th class="num">WER</th>
+            <th class="num">Speaker</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name">german_mixed_long<br><span class="dev">one woman, one man, Piper voices</span></td>
+            <td>Kerstin f, Thorsten m</td>
+            <td>DE</td>
+            <td class="dev">Xiaomi</td>
+            <td class="num dev">22m 02s</td>
+            <td class="num">62.8s</td>
+            <td class="num strong">48.7s</td>
+            <td class="num">27.2&times;</td>
+            <td class="num mid">10.3%</td>
+            <td class="num">97.9%</td>
+          </tr>
+          <tr>
+            <td class="name">german_mixed_long<br><span class="dev">one woman, one man, Piper voices</span></td>
+            <td>Kerstin f, Thorsten m</td>
+            <td>DE</td>
+            <td class="dev">Lenovo</td>
+            <td class="num dev">22m 02s</td>
+            <td class="num">206.6s</td>
+            <td class="num strong">148.7s</td>
+            <td class="num">8.9&times;</td>
+            <td class="num mid">10.3%</td>
+            <td class="num">97.9%</td>
+          </tr>
+          <tr>
+            <td class="name">long_en<br><span class="dev">one man, one woman, macOS voices</span></td>
+            <td>Daniel m, Samantha f</td>
+            <td>EN</td>
+            <td class="dev">Xiaomi</td>
+            <td class="num dev">20m 36s</td>
+            <td class="num">55.5s</td>
+            <td class="num strong">46.1s</td>
+            <td class="num">26.8&times;</td>
+            <td class="num good">2.65%</td>
+            <td class="num">95.6%</td>
+          </tr>
+          <tr>
+            <td class="name">long_en<br><span class="dev">one man, one woman, macOS voices</span></td>
+            <td>Daniel m, Samantha f</td>
+            <td>EN</td>
+            <td class="dev">Lenovo</td>
+            <td class="num dev">20m 36s</td>
+            <td class="num">&mdash;</td>
+            <td class="num strong">152.5s</td>
+            <td class="num">8.1&times;</td>
+            <td class="num good">2.65%</td>
+            <td class="num">95.6%</td>
+          </tr>
+        </tbody>
+        <caption>
+          Times are the two concurrent branches' wall clock from the device logs; the app's own run
+          row adds file reading and scoring, about 1&ndash;2 s warm. The Lenovo long_en "before" is
+          blank because its only earlier run was throttled with the screen off and is not comparable.
+          Speaker accuracy holds at 97.9% on the German pair because Kerstin and Thorsten are a
+          mixed pair &mdash; separable voiceprints, the same ceiling story as above.
+        </caption>
+      </table>
+    </div>
+
+    <div class="callout">
+      <h3>Two findings worth keeping</h3>
+      <p>
+        On the MediaTek, two one-thread recogniser instances beat one two-thread instance by 28%
+        &mdash; sherpa's per-operation barriers were wasting the second thread, and a second decoding
+        stream is what actually uses the core. And keeping the models warm between runs is worth real
+        time on entry silicon: the Lenovo's first run after an install took 177.7&nbsp;s cold, the
+        repeat 148.7&nbsp;s with zero model loads &mdash; the pool holds diarizer lanes keyed by their
+        whole configuration, the screen pre-warms the recogniser behind the user's own think-time,
+        and memory pressure reclaims all of it.
+      </p>
+    </div>
+  </section>
+
   <footer>
     Sources: docs/diarization-benchmark.md and docs/data/README.md. Scored with docs/diarscore.py and
     docs/wer.py, the source of truth for every error rate here.<br>
-    Runs re-scored from the devices' own databases on 2026-08-27. Model identifiers and sizes read
+    Runs re-scored from the devices' own databases on 2026-08-28. Model identifiers and sizes read
     from the app's own download catalogue.
   </footer>
 
