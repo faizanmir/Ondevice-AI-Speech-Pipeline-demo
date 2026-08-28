@@ -1,5 +1,6 @@
 package com.example.aiagenttestapp.data.speakers
 
+import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
@@ -327,16 +328,34 @@ class DiarizeWorker @AssistedInject constructor(
                 // to sit still through.
                 val transcription = async(Dispatchers.Default) {
                     val started = System.currentTimeMillis()
+
+                    // A second decoding lane when there are threads to split and memory for a
+                    // second resident model. sherpa has no batch decode, so a second instance is
+                    // the only way this branch can put more than one core on a slice -- see
+                    // [SpeechRecognizer.transcribeSegments]. The thread budget is unchanged; like
+                    // the diarise lanes, only its division is.
+                    val transcribeLanes =
+                        if (threads.transcribe >= 2 && roomForSecondRecognizer()) 2 else 1
+                    if (transcribeLanes == 1 && threads.transcribe >= 2) {
+                        Log.i(TAG, "second transcribe lane refused: not enough free memory")
+                    }
+                    val laneThreads = ThreadBudget.share(threads.transcribe, transcribeLanes)
+
                     // Thread count as well as model id: a session built for a different share
                     // keeps it until it is rebuilt, so without this the budget would apply only to
-                    // the first run after a cold start.
+                    // the first run after a cold start. The resident recogniser is lane 0, so it
+                    // is sized to the lane's share, not the branch total.
                     if (recognizer.loadedModelId != model.id ||
-                        recognizer.loadedThreadCount != threads.transcribe
+                        recognizer.loadedThreadCount != laneThreads[0]
                     ) {
-                        recognizer.load(speechModels.selectedPaths(), threadCount = threads.transcribe)
+                        recognizer.load(speechModels.selectedPaths(), threadCount = laneThreads[0])
                     }
                     val bounds = recognizer.segmentBounds(samples)
-                    val pieces = recognizer.transcribeSegments(samples, bounds) { done, total, _ ->
+                    val pieces = recognizer.transcribeSegments(
+                        samples,
+                        bounds,
+                        extraLaneThreads = laneThreads.getOrNull(1),
+                    ) { done, total, _ ->
                         dao.updateProgress(id, 0.05f + (done.toFloat() / total) * 0.9f)
                     }
                     Transcribed(
@@ -635,6 +654,21 @@ class DiarizeWorker @AssistedInject constructor(
         return block()
     }
 
+    /**
+     * Whether a second transcribe recogniser fits in memory right now.
+     *
+     * The gate is deliberately blunt -- free memory above the system's own low-memory threshold --
+     * and deliberately generous, because what it guards against is not a slow run but the
+     * low-memory killer taking the process and the run with it. Refusing the lane costs seconds;
+     * being killed costs the whole recording's work.
+     */
+    private fun roomForSecondRecognizer(): Boolean {
+        val manager = context.getSystemService(ActivityManager::class.java) ?: return false
+        val info = ActivityManager.MemoryInfo()
+        manager.getMemoryInfo(info)
+        return info.availMem - info.threshold >= SECOND_RECOGNIZER_HEADROOM_BYTES
+    }
+
     private fun foregroundInfo(runId: Long, progress: Float): ForegroundInfo {
         val channelId = ensureChannel()
         val percent = (progress * 100).toInt().coerceIn(0, 100)
@@ -699,6 +733,15 @@ class DiarizeWorker @AssistedInject constructor(
          * incidental on the devices this app targets. See [diarizeChunks].
          */
         private const val MAX_DIARIZE_LANES = 4
+
+        /**
+         * Free memory required, beyond the low-memory threshold, before transcription spins up its
+         * second recogniser. Sized for the largest model offered (Whisper Small is roughly 750 MB
+         * resident) plus margin, not for the usual case: the gate cannot know a model's resident
+         * size without loading it, and erring small here is how a run gets killed instead of
+         * slowed. See [roomForSecondRecognizer].
+         */
+        private const val SECOND_RECOGNIZER_HEADROOM_BYTES = 1_500L * 1024 * 1024
 
         private const val TAG = "DiarizeWorker"
         private const val CHANNEL_ID = "speaker_diarization"

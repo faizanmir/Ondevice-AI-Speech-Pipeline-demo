@@ -10,8 +10,10 @@ import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig
 import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -88,6 +90,12 @@ class SpeechRecognizer(private val settings: SettingsStore) {
      *
      * A lock rather than a second recogniser instance: two loaded copies of Whisper Small is ~750 MB
      * of native memory, which is more than the phones this targets can spare.
+     *
+     * The one sanctioned exception is [transcribeSegments]' second lane: an *ephemeral* extra
+     * instance, built under this lock and released before it is, on a caller that has already
+     * checked the memory is there. The invariant the lock protects -- no decode against a
+     * recogniser some other caller can release -- holds, because the ephemeral instance never
+     * escapes the pass that built it.
      */
     private val decodeLock = Mutex()
 
@@ -108,6 +116,9 @@ class SpeechRecognizer(private val settings: SettingsStore) {
      */
     var loadedThreadCount: Int? = null
         private set
+
+    /** What [load] was given, kept so [transcribeSegments] can build its second lane from it. */
+    private var loadedPaths: SpeechModelPaths? = null
 
     val isLoaded: Boolean get() = loadedModelId != null
 
@@ -130,7 +141,15 @@ class SpeechRecognizer(private val settings: SettingsStore) {
         threadCount: Int = recommendedThreadCount(),
     ) = withContext(Dispatchers.IO) {
         releaseLocked()
+        recognizer = buildRecognizer(paths, threadCount)
+        loadedPaths = paths
+        loadedModelId = paths.id
+        loadedThreadCount = threadCount
+        Log.i(TAG, "ASR model loaded: ${paths.id}")
+    }
 
+    /** The construction half of [loadLocked], shared with [transcribeSegments]' second lane. */
+    private fun buildRecognizer(paths: SpeechModelPaths, threadCount: Int): OfflineRecognizer {
         val modelConfig = when (paths.kind) {
             SpeechEngineKind.SENSE_VOICE -> OfflineModelConfig(
                 senseVoice = OfflineSenseVoiceModelConfig(
@@ -213,10 +232,7 @@ class SpeechRecognizer(private val settings: SettingsStore) {
         )
 
         // assetManager is null: the model lives on the filesystem, not in the APK.
-        recognizer = OfflineRecognizer(assetManager = null, config = config)
-        loadedModelId = paths.id
-        loadedThreadCount = threadCount
-        Log.i(TAG, "ASR model loaded: ${paths.id}")
+        return OfflineRecognizer(assetManager = null, config = config)
     }
 
     /**
@@ -232,11 +248,13 @@ class SpeechRecognizer(private val settings: SettingsStore) {
      * recordings would append the new audio to the old and transcribe both together.
      */
     suspend fun transcribe(samples: FloatArray): Transcription = decodeLock.withLock {
-        decodeOnce(samples)
+        decodeOnce(recognizer ?: error("The speech model is not loaded"), samples)
     }
 
-    private suspend fun decodeOnce(samples: FloatArray): Transcription = withContext(Dispatchers.IO) {
-        val active = recognizer ?: error("The speech model is not loaded")
+    private suspend fun decodeOnce(
+        active: OfflineRecognizer,
+        samples: FloatArray,
+    ): Transcription = withContext(Dispatchers.IO) {
         if (samples.isEmpty()) return@withContext Transcription("", null)
 
         val stream = active.createStream()
@@ -299,50 +317,126 @@ class SpeechRecognizer(private val settings: SettingsStore) {
      * timestamps in sherpa-onnx, so on every other one there is nothing to align a character offset
      * against.
      *
+     * **[extraLaneThreads] buys a second decoding lane.** Slices are independent decodes, so two
+     * recogniser instances taking alternate slices can nearly halve the pass -- and a second
+     * instance is the *only* parallelism available, because sherpa's Kotlin binding has no batch
+     * decode: `decode` takes exactly one stream. The price is a full second copy of the model in
+     * native memory, which is why the lane is opt-in: the caller states the lane's thread share
+     * only after checking the memory is there, and the instance lives exactly as long as this
+     * pass. Same slices, same decodes, assembled by index -- the transcript is identical to the
+     * sequential path's.
+     *
      * The whole pass holds [decodeLock], so a model swap cannot land halfway through a recording.
      */
     suspend fun transcribeSegments(
         samples: FloatArray,
         bounds: List<IntRange>,
+        extraLaneThreads: Int? = null,
         onProgress: (suspend (done: Int, total: Int, joined: String) -> Unit)? = null,
     ): List<SegmentTranscription> = decodeLock.withLock {
         withContext(Dispatchers.IO) {
-            val results = mutableListOf<SegmentTranscription>()
+            val resident = recognizer ?: error("The speech model is not loaded")
 
-            bounds.forEachIndexed { index, range ->
-                currentCoroutineContext().ensureActive()
-
-                // Defensive clamp: a caller computing boundaries in seconds can round a range one
-                // sample past the buffer, and copyOfRange throws on that.
-                val from = range.first.coerceIn(0, samples.size)
-                val to = (range.last + 1).coerceIn(from, samples.size)
-
-                val piece = if (to > from) {
-                    decodeOnce(samples.copyOfRange(from, to))
-                } else {
-                    Transcription("", null)
+            if (extraLaneThreads == null || bounds.size < 2) {
+                val results = mutableListOf<SegmentTranscription>()
+                bounds.forEachIndexed { index, range ->
+                    currentCoroutineContext().ensureActive()
+                    results += decodeRange(resident, samples, range)
+                    onProgress?.invoke(index + 1, bounds.size, joinSegments(results))
                 }
-
-                results += SegmentTranscription(
-                    range = from until to,
-                    text = piece.text,
-                    language = piece.language,
-                    // Into recording coordinates here and nowhere else. Each slice is decoded on its
-                    // own and reports times from its own zero, so without this every slice's words
-                    // would claim to be at the start of the recording -- and the CLAUDE.md warning
-                    // about mixing window and recording coordinates is exactly this trap, one
-                    // abstraction up from the array indexing that has already caused a crash here.
-                    words = TimedWords.offsetBySamples(
-                        words = piece.words,
-                        offsetSamples = from,
-                        sampleRate = AudioRecorder.SAMPLE_RATE,
-                    ),
-                )
-                onProgress?.invoke(index + 1, bounds.size, joinSegments(results))
+                return@withContext results
             }
 
-            results
+            // Two lanes: the resident recogniser takes the even slices, an ephemeral second
+            // instance the odd. Building the instance is seconds of model load, which is why it
+            // happens once per pass rather than per slice, and is paid inside the branch's own
+            // wall clock where the phase log can see it.
+            val paths = loadedPaths ?: error("The speech model is not loaded")
+            val laneStarted = System.currentTimeMillis()
+            val ephemeral = buildRecognizer(paths, extraLaneThreads)
+            Log.i(
+                TAG,
+                "second transcribe lane up in %.1fs (%d thread(s))".format(
+                    (System.currentTimeMillis() - laneStarted) / 1000f,
+                    extraLaneThreads,
+                ),
+            )
+
+            val results = arrayOfNulls<SegmentTranscription>(bounds.size)
+            val progress = Mutex()
+            var done = 0
+            try {
+                coroutineScope {
+                    listOf(resident to 0, ephemeral to 1).forEach { (lane, parity) ->
+                        launch(Dispatchers.IO) {
+                            bounds.indices.filter { it % 2 == parity }.forEach { index ->
+                                currentCoroutineContext().ensureActive()
+                                val piece = decodeRange(lane, samples, bounds[index])
+                                progress.withLock {
+                                    results[index] = piece
+                                    done++
+                                    // The running preview only extends over the contiguous prefix:
+                                    // with a hole it would splice slice 3's text straight after
+                                    // slice 1's and read as a transcript missing words.
+                                    onProgress?.invoke(
+                                        done,
+                                        bounds.size,
+                                        joinSegments(
+                                            results.takeWhile { it != null }.filterNotNull(),
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            } finally {
+                // On failure and cancellation too -- an abandoned second model would otherwise stay
+                // resident until process death, invisibly halving the memory every later run sees.
+                runCatching { ephemeral.release() }
+                    .onFailure { Log.w(TAG, "releasing the second lane failed", it) }
+            }
+
+            // The scope completed, so every slot is filled; filterNotNull is for the type, not for
+            // gaps.
+            results.filterNotNull()
         }
+    }
+
+    /**
+     * One slice: clamp, decode, and put the words into recording coordinates.
+     *
+     * The clamp is defensive -- a caller computing boundaries in seconds can round a range one
+     * sample past the buffer, and copyOfRange throws on that. The offset is the important half.
+     * Each slice is decoded on its own and reports times from its own zero, so without it every
+     * slice's words would claim to be at the start of the recording -- the CLAUDE.md warning about
+     * mixing window and recording coordinates is exactly this trap, one abstraction up from the
+     * array indexing that has already caused a crash here.
+     */
+    private suspend fun decodeRange(
+        active: OfflineRecognizer,
+        samples: FloatArray,
+        range: IntRange,
+    ): SegmentTranscription {
+        val from = range.first.coerceIn(0, samples.size)
+        val to = (range.last + 1).coerceIn(from, samples.size)
+
+        val piece = if (to > from) {
+            decodeOnce(active, samples.copyOfRange(from, to))
+        } else {
+            Transcription("", null)
+        }
+
+        return SegmentTranscription(
+            range = from until to,
+            text = piece.text,
+            language = piece.language,
+            words = TimedWords.offsetBySamples(
+                words = piece.words,
+                offsetSamples = from,
+                sampleRate = AudioRecorder.SAMPLE_RATE,
+            ),
+        )
     }
 
     /** Where this recogniser's segment boundaries go. See [AudioSegmenter] for the arithmetic. */
@@ -375,6 +469,7 @@ class SpeechRecognizer(private val settings: SettingsStore) {
         runCatching { recognizer?.release() }
             .onFailure { Log.w(TAG, "releasing the recogniser failed", it) }
         recognizer = null
+        loadedPaths = null
         loadedModelId = null
         loadedThreadCount = null
     }
