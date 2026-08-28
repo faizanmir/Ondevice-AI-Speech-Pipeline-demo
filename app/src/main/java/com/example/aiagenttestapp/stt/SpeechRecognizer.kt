@@ -9,7 +9,9 @@ import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig
 import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -119,6 +121,30 @@ class SpeechRecognizer(private val settings: SettingsStore) {
 
     /** What [load] was given, kept so [transcribeSegments] can build its second lane from it. */
     private var loadedPaths: SpeechModelPaths? = null
+
+    /**
+     * The second decoding lane from the last pass, kept warm instead of released.
+     *
+     * Building it costs 1.6-4.3s measured, and the very next run asks for the identical instance --
+     * same model, same thread share -- so releasing it between runs was paying that load every
+     * time. Guarded by [decodeLock] like the resident instance; [warmLaneKey] is volatile because
+     * [hasWarmLane] reads it without the lock, as an advisory answer for the memory gate.
+     */
+    private var warmLane: OfflineRecognizer? = null
+
+    @Volatile
+    private var warmLaneKey: Pair<String, Int>? = null
+
+    /** Outlives a screen so the memory-pressure callback can queue a locked release. */
+    private val releaseScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * Whether a warm second lane exists for this model at this thread share.
+     *
+     * Advisory and lock-free: the caller uses it to skip the memory gate -- a warm lane is memory
+     * already spent -- and a stale answer only means the gate is consulted when it need not be.
+     */
+    fun hasWarmLane(modelId: String, threads: Int): Boolean = warmLaneKey == (modelId to threads)
 
     val isLoaded: Boolean get() = loadedModelId != null
 
@@ -352,15 +378,28 @@ class SpeechRecognizer(private val settings: SettingsStore) {
             // happens once per pass rather than per slice, and is paid inside the branch's own
             // wall clock where the phase log can see it.
             val paths = loadedPaths ?: error("The speech model is not loaded")
-            val laneStarted = System.currentTimeMillis()
-            val ephemeral = buildRecognizer(paths, extraLaneThreads)
-            Log.i(
-                TAG,
-                "second transcribe lane up in %.1fs (%d thread(s))".format(
-                    (System.currentTimeMillis() - laneStarted) / 1000f,
-                    extraLaneThreads,
-                ),
-            )
+            val key = paths.id to extraLaneThreads
+            val warmed = if (warmLaneKey == key) warmLane else null
+            val ephemeral = if (warmed != null) {
+                warmLane = null
+                warmLaneKey = null
+                Log.i(TAG, "second transcribe lane reused warm ($extraLaneThreads thread(s))")
+                warmed
+            } else {
+                // A warm lane under any other key is for a configuration that has been replaced;
+                // it would never be asked for again, so it goes before its successor is built.
+                dropWarmLane()
+                val laneStarted = System.currentTimeMillis()
+                buildRecognizer(paths, extraLaneThreads).also {
+                    Log.i(
+                        TAG,
+                        "second transcribe lane up in %.1fs (%d thread(s))".format(
+                            (System.currentTimeMillis() - laneStarted) / 1000f,
+                            extraLaneThreads,
+                        ),
+                    )
+                }
+            }
 
             val results = arrayOfNulls<SegmentTranscription>(bounds.size)
             val progress = Mutex()
@@ -391,10 +430,13 @@ class SpeechRecognizer(private val settings: SettingsStore) {
                     }
                 }
             } finally {
-                // On failure and cancellation too -- an abandoned second model would otherwise stay
-                // resident until process death, invisibly halving the memory every later run sees.
-                runCatching { ephemeral.release() }
-                    .onFailure { Log.w(TAG, "releasing the second lane failed", it) }
+                // Kept warm rather than released -- on failure and cancellation too, since the
+                // instance is idle again either way. The next run of the same model at the same
+                // share reuses it and skips the load; memory pressure and a model swap are what
+                // actually free it, so it never becomes the abandoned resident copy this used to
+                // guard against.
+                warmLane = ephemeral
+                warmLaneKey = key
             }
 
             // The scope completed, so every slot is filled; filterNotNull is for the type, not for
@@ -468,10 +510,29 @@ class SpeechRecognizer(private val settings: SettingsStore) {
     private fun releaseLocked() {
         runCatching { recognizer?.release() }
             .onFailure { Log.w(TAG, "releasing the recogniser failed", it) }
+        dropWarmLane()
         recognizer = null
         loadedPaths = null
         loadedModelId = null
         loadedThreadCount = null
+    }
+
+    /** Frees the warm second lane. Callers must hold [decodeLock]. */
+    private fun dropWarmLane() {
+        runCatching { warmLane?.release() }
+            .onFailure { Log.w(TAG, "releasing the warm second lane failed", it) }
+        warmLane = null
+        warmLaneKey = null
+    }
+
+    /**
+     * Hands the warm second lane back under real memory pressure.
+     *
+     * Launched rather than suspending because `onTrimMemory` is a plain callback; the lock is still
+     * taken, so a decode in flight on the lane finishes before the memory goes.
+     */
+    fun onMemoryPressure() {
+        releaseScope.launch { decodeLock.withLock { dropWarmLane() } }
     }
 
     /**

@@ -1,6 +1,5 @@
 package com.example.aiagenttestapp.data.speakers
 
-import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
@@ -31,6 +30,8 @@ import com.example.aiagenttestapp.stt.SpeechModelRepository
 import com.example.aiagenttestapp.stt.SpeechRecognizer
 import com.example.aiagenttestapp.stt.ThreadBudget
 import com.example.aiagenttestapp.stt.TimedWord
+import com.example.aiagenttestapp.stt.TranscribeLanes
+import com.example.aiagenttestapp.stt.WarmPool
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
@@ -40,9 +41,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.absoluteValue
 
@@ -72,6 +71,7 @@ class DiarizeWorker @AssistedInject constructor(
     private val speechModels: SpeechModelRepository,
     private val recognizer: SpeechRecognizer,
     private val settings: SettingsStore,
+    private val diarizerPool: WarmPool<SpeakerDiarizer>,
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
@@ -333,13 +333,15 @@ class DiarizeWorker @AssistedInject constructor(
                     // second resident model. sherpa has no batch decode, so a second instance is
                     // the only way this branch can put more than one core on a slice -- see
                     // [SpeechRecognizer.transcribeSegments]. The thread budget is unchanged; like
-                    // the diarise lanes, only its division is.
-                    val transcribeLanes =
-                        if (threads.transcribe >= 2 && roomForSecondRecognizer()) 2 else 1
-                    if (transcribeLanes == 1 && threads.transcribe >= 2) {
+                    // the diarise lanes, only its division is. The decision lives in
+                    // [TranscribeLanes] because the screen's pre-warm must reach the same answer,
+                    // and a lane already warm in memory skips the gate outright.
+                    val laneThreads = TranscribeLanes.laneThreads(context, threads.transcribe) {
+                        recognizer.hasWarmLane(model.id, it)
+                    }
+                    if (laneThreads.size == 1 && threads.transcribe >= 2) {
                         Log.i(TAG, "second transcribe lane refused: not enough free memory")
                     }
-                    val laneThreads = ThreadBudget.share(threads.transcribe, transcribeLanes)
 
                     // Thread count as well as model id: a session built for a different share
                     // keeps it until it is rebuilt, so without this the budget would apply only to
@@ -464,15 +466,12 @@ class DiarizeWorker @AssistedInject constructor(
             Log.e(TAG, "diarisation run $id failed", e)
             dao.fail(id, e.message ?: "The run failed.")
             Result.success()
-        } finally {
-            // Each diarisation lane releases its own diarizer in [diarizeChunks]; there is no
-            // longer a run-scoped one to release here.
-            //
-            // Work replacement and deletion cancel this coroutine. Native cleanup still has to wait
-            // for any concurrent enrolment operation and run to completion; abandoning it can retain
-            // the model indefinitely or tempt a later unsynchronised release.
-            withContext(NonCancellable) { speakers.release() }
         }
+        // Nothing is released on the way out any more, and that is the point: the diarizer lanes
+        // go back warm to the pool inside [diarizeChunks], the recogniser and its second lane stay
+        // resident in [SpeechRecognizer], and the naming embedder stays loaded in
+        // [SpeakerRepository] -- so the next run skips all of their loads. Memory pressure
+        // (AIAgentApplication.onTrimMemory) is what reclaims the whole warm set.
     }
 
     /**
@@ -580,28 +579,47 @@ class DiarizeWorker @AssistedInject constructor(
                 compacted.samples.copyOfRange(chunk.startSample, chunk.endSample)
             }
 
-        fun newDiarizer(threads: Int) = SpeakerDiarizer().apply {
-            load(
-                segmentationModel = segmentationModel,
-                embeddingModel = embeddingModel,
-                expectedSpeakers = expectedSpeakers,
-                threadCount = threads,
-                provider = provider,
-            )
+        // Everything baked into a diarizer at construction, which is exactly what makes one
+        // reusable: a warm instance whose whole key matches is the same diarizer this run would
+        // have built, minus the seconds of model load.
+        fun keyFor(threads: Int) = listOf(
+            segmentationModel.absolutePath,
+            embeddingModel.absolutePath,
+            expectedSpeakers,
+            threads,
+            provider,
+        )
+
+        fun acquireDiarizer(threads: Int): SpeakerDiarizer {
+            diarizerPool.acquire(keyFor(threads))?.let {
+                Log.i(TAG, "diarizer lane reused warm")
+                return it
+            }
+            return SpeakerDiarizer().apply {
+                load(
+                    segmentationModel = segmentationModel,
+                    embeddingModel = embeddingModel,
+                    expectedSpeakers = expectedSpeakers,
+                    threadCount = threads,
+                    provider = provider,
+                )
+            }
         }
 
         // One diarizer, sequential: the whole-recording case, and any case where the budget cannot
         // give each lane a thread. `ensureActive` between chunks is the only place a long
         // diarisation can be stopped -- process() itself is an uninterruptible native call.
         if (lanes <= 1) {
-            val diarizer = newDiarizer(diariseThreads)
+            val diarizer = acquireDiarizer(diariseThreads)
             try {
                 chunks.forEachIndexed { index, chunk ->
                     currentCoroutineContext().ensureActive()
                     emit(index, DiarizationChunks.toCompacted(diarizer.diarize(sliceFor(chunk)), chunk))
                 }
             } finally {
-                diarizer.release()
+                // Warm for the next run rather than released -- cancellation included, since the
+                // instance is idle again either way. Memory pressure empties the pool.
+                diarizerPool.stash(keyFor(diariseThreads), diarizer)
             }
             return
         }
@@ -613,7 +631,7 @@ class DiarizeWorker @AssistedInject constructor(
             (0 until lanes).forEach { lane ->
                 launch(Dispatchers.Default) {
                     val laneChunks = chunks.withIndex().filter { it.index % lanes == lane }
-                    val diarizer = newDiarizer(laneThreads[lane])
+                    val diarizer = acquireDiarizer(laneThreads[lane])
                     try {
                         laneChunks.forEach { (index, chunk) ->
                             currentCoroutineContext().ensureActive()
@@ -623,7 +641,7 @@ class DiarizeWorker @AssistedInject constructor(
                             )
                         }
                     } finally {
-                        diarizer.release()
+                        diarizerPool.stash(keyFor(laneThreads[lane]), diarizer)
                     }
                 }
             }
@@ -652,21 +670,6 @@ class DiarizeWorker @AssistedInject constructor(
     private suspend fun <T> withProgress(id: Long, to: Float, block: () -> T): T {
         dao.updateProgress(id, to)
         return block()
-    }
-
-    /**
-     * Whether a second transcribe recogniser fits in memory right now.
-     *
-     * The gate is deliberately blunt -- free memory above the system's own low-memory threshold --
-     * and deliberately generous, because what it guards against is not a slow run but the
-     * low-memory killer taking the process and the run with it. Refusing the lane costs seconds;
-     * being killed costs the whole recording's work.
-     */
-    private fun roomForSecondRecognizer(): Boolean {
-        val manager = context.getSystemService(ActivityManager::class.java) ?: return false
-        val info = ActivityManager.MemoryInfo()
-        manager.getMemoryInfo(info)
-        return info.availMem - info.threshold >= SECOND_RECOGNIZER_HEADROOM_BYTES
     }
 
     private fun foregroundInfo(runId: Long, progress: Float): ForegroundInfo {
@@ -733,15 +736,6 @@ class DiarizeWorker @AssistedInject constructor(
          * incidental on the devices this app targets. See [diarizeChunks].
          */
         private const val MAX_DIARIZE_LANES = 4
-
-        /**
-         * Free memory required, beyond the low-memory threshold, before transcription spins up its
-         * second recogniser. Sized for the largest model offered (Whisper Small is roughly 750 MB
-         * resident) plus margin, not for the usual case: the gate cannot know a model's resident
-         * size without loading it, and erring small here is how a run gets killed instead of
-         * slowed. See [roomForSecondRecognizer].
-         */
-        private const val SECOND_RECOGNIZER_HEADROOM_BYTES = 1_500L * 1024 * 1024
 
         private const val TAG = "DiarizeWorker"
         private const val CHANNEL_ID = "speaker_diarization"

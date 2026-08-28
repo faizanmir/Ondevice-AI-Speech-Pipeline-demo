@@ -95,9 +95,10 @@ class SpeakerRepository(
      * The ONNX execution provider the speaker models run on, read per load rather than held.
      *
      * The same value the recogniser and [SpeakerDiarizer] use, so a run's whole sherpa-onnx side is
-     * one configuration. Read fresh each time because the diarisation worker releases the embedder
-     * after every run, so a provider changed in Settings takes effect on the next run without a
-     * process restart.
+     * one configuration. The embedder now stays resident between runs -- the diarisation worker no
+     * longer releases it -- so [prepareLocked] compares this against [loadedProvider] and reloads on
+     * a change. Freshness used to rest on the per-run release; without this check, a provider
+     * changed in Settings would silently keep running on the old one until process death.
      */
     private fun provider(): String = settings.settings.value.onnxProvider.slug
 
@@ -121,6 +122,9 @@ class SpeakerRepository(
      * embedding does not look wrong, it just matches nobody.
      */
     private var loadedBundleId: String? = null
+
+    /** The provider the resident embedder was built on; a Settings change must force a reload. */
+    private var loadedProvider: String? = null
 
     /**
      * The id stamped on voiceprints right now, from whichever embedding bundle is selected.
@@ -166,20 +170,23 @@ class SpeakerRepository(
         if (!isAvailable()) return@withContext false
 
         val bundle = audioModels.speaker
-        if (!embedder.isLoaded || loadedBundleId != bundle.id) {
+        val provider = provider()
+        if (!embedder.isLoaded || loadedBundleId != bundle.id || loadedProvider != provider) {
             embedder.release()
             val loaded = runCatching {
                 embedder.load(
                     audioModels.fileFor(bundle, AudioModelCatalog.EMBEDDING),
-                    provider = provider(),
+                    provider = provider,
                 )
             }.onFailure { Log.w(TAG, "could not load the speaker embedder", it) }.isSuccess
 
             if (!loaded) {
                 loadedBundleId = null
+                loadedProvider = null
                 return@withContext false
             }
             loadedBundleId = bundle.id
+            loadedProvider = provider
             indexLoaded = false
         }
 
@@ -472,6 +479,17 @@ class SpeakerRepository(
                 taken
             }
             .sortedBy { it.first }
+
+    /**
+     * Gives the embedder back under real memory pressure.
+     *
+     * The diarisation worker no longer releases this after each run -- warm, the next run skips the
+     * model load -- so the trim callback is what actually frees it now. Launched on [releaseScope]
+     * because `onTrimMemory` is a plain callback and [release] must take the lock.
+     */
+    fun onMemoryPressure() {
+        releaseScope.launch { release() }
+    }
 
     /**
      * Releases native memory after every operation already holding [lock] has finished.

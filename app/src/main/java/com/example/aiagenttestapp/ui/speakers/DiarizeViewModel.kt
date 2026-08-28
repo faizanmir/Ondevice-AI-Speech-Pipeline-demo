@@ -16,6 +16,9 @@ import com.example.aiagenttestapp.data.speakers.SpeakerRepository
 import com.example.aiagenttestapp.stt.AudioRecorder
 import com.example.aiagenttestapp.stt.SpeechEngineKind
 import com.example.aiagenttestapp.stt.SpeechModelRepository
+import com.example.aiagenttestapp.stt.SpeechRecognizer
+import com.example.aiagenttestapp.stt.ThreadBudget
+import com.example.aiagenttestapp.stt.TranscribeLanes
 import com.example.aiagenttestapp.ui.mvi.MviViewModel
 import com.example.aiagenttestapp.ui.mvi.UiIntent
 import com.example.aiagenttestapp.ui.mvi.UiState
@@ -116,6 +119,7 @@ class DiarizeViewModel @Inject constructor(
     private val audioModels: AudioModelRepository,
     private val speechModels: SpeechModelRepository,
     private val speakers: SpeakerRepository,
+    private val recognizer: SpeechRecognizer,
 ) : MviViewModel<DiarizeUiState, DiarizeIntent, Nothing>(DiarizeUiState()) {
 
     private var captureJob: Job? = null
@@ -132,6 +136,51 @@ class DiarizeViewModel @Inject constructor(
 
         // A Running row whose job WorkManager has lost would show a progress bar forever.
         viewModelScope.launch { DiarizeWorker.reconcile(appContext, dao) }
+
+        // Opening this screen is the announcement that a run is coming, so the models start
+        // loading now, behind the user's own think-time -- picking a file, pasting a reference.
+        // By the time the worker asks, they are the resident instances it would have built.
+        viewModelScope.launch(Dispatchers.Default) { prewarm() }
+    }
+
+    /**
+     * Loads what the next run will need, before it is asked for.
+     *
+     * The recogniser is loaded with exactly the thread share [DiarizeWorker] will compute --
+     * [TranscribeLanes] is shared between them for that reason -- because a warm model at the
+     * wrong thread count gets reloaded, which pays the load twice and calls it an optimisation.
+     * The naming embedder warms through [SpeakerRepository.prepare]. Diarizer lanes are *not*
+     * warmed here: how many a run builds depends on the recording's length, unknown until one is
+     * picked, so they stay warm between runs via the pool instead of being guessed at.
+     *
+     * Every failure is swallowed on purpose: pre-warming is an optimisation, and the worker loads
+     * whatever is missing exactly as it would have without this.
+     */
+    private suspend fun prewarm() {
+        runCatching {
+            speakers.prepare()
+
+            val model = speechModels.selected
+            if (!model.kind.reportsWordTimings || !speechModels.isDownloaded(model)) return
+            val bundle = audioModels.speaker
+            if (!audioModels.isReady(bundle)) return
+
+            val threads = ThreadBudget.concurrent(
+                weights = ThreadBudget.Weights(
+                    diarise = bundle.diariseWeight,
+                    transcribe = model.transcribeWeight,
+                ),
+                fastCores = ThreadBudget.detectFastCores(),
+            )
+            val laneThreads = TranscribeLanes.laneThreads(appContext, threads.transcribe) {
+                recognizer.hasWarmLane(model.id, it)
+            }
+            if (recognizer.loadedModelId != model.id ||
+                recognizer.loadedThreadCount != laneThreads[0]
+            ) {
+                recognizer.load(speechModels.selectedPaths(), threadCount = laneThreads[0])
+            }
+        }
     }
 
     override fun reduce(intent: DiarizeIntent) = when (intent) {
