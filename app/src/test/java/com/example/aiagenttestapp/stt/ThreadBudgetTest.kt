@@ -145,4 +145,36 @@ class ThreadBudgetTest {
         assertEquals(3, ThreadBudget.exclusive(cores = 4))
         assertEquals(1, ThreadBudget.exclusive(cores = 1))
     }
+
+    @Test
+    fun `an even share divides cleanly`() {
+        assertEquals(listOf(2, 2), ThreadBudget.share(total = 4, lanes = 2))
+        assertEquals(listOf(1, 1, 1, 1), ThreadBudget.share(total = 4, lanes = 4))
+    }
+
+    @Test
+    fun `a remainder goes to the first lanes instead of being dropped`() {
+        // The regression this pins: 4 threads over 3 lanes used to run 1/1/1 and idle a thread.
+        assertEquals(listOf(2, 1, 1), ThreadBudget.share(total = 4, lanes = 3))
+        assertEquals(listOf(3, 2, 2), ThreadBudget.share(total = 7, lanes = 3))
+    }
+
+    @Test
+    fun `a lane is never left with zero threads`() {
+        // The caller caps lanes at the budget; if that ever slips, oversubscribed beats broken.
+        assertEquals(listOf(1, 1, 1), ThreadBudget.share(total = 2, lanes = 3))
+    }
+
+    @Test
+    fun `every budgeted thread is handed out`() {
+        for (total in 1..8) {
+            for (lanes in 1..total) {
+                assertEquals(
+                    "total=$total lanes=$lanes",
+                    total,
+                    ThreadBudget.share(total, lanes).sum(),
+                )
+            }
+        }
+    }
 }

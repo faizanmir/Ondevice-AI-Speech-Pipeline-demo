@@ -91,6 +91,22 @@ object ThreadBudget {
     }
 
     /**
+     * Divides [total] threads among [lanes] workers, spreading the remainder instead of dropping it.
+     *
+     * Plain integer division quietly idled a thread whenever the lanes did not divide the budget:
+     * four diarise threads over three lanes ran three and left the fourth parked for the whole run.
+     * The first `total % lanes` lanes carry one extra instead. Every lane still gets at least one
+     * thread even when [total] is short -- the caller is expected to cap lanes at the budget, and
+     * this floor keeps a mistake there slow rather than broken.
+     */
+    fun share(total: Int, lanes: Int): List<Int> {
+        require(lanes > 0) { "no lanes to share $total threads among" }
+        val base = total / lanes
+        val extra = total % lanes
+        return List(lanes) { lane -> (base + if (lane < extra) 1 else 0).coerceAtLeast(1) }
+    }
+
+    /**
      * How many of [cores] run at (near) the top clock -- the performance cores.
      *
      * Read from each core's `cpuinfo_max_freq` and counted as fast when within 15% of the fastest,

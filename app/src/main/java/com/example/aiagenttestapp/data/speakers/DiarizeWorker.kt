@@ -589,12 +589,12 @@ class DiarizeWorker @AssistedInject constructor(
 
         // Several lanes, each its own diarizer over a round-robin share of the chunks, each on its
         // share of the threads, each emitting its chunks the moment they are done.
-        val perLaneThreads = (diariseThreads / lanes).coerceAtLeast(1)
+        val laneThreads = ThreadBudget.share(diariseThreads, lanes)
         coroutineScope {
             (0 until lanes).forEach { lane ->
                 launch(Dispatchers.Default) {
                     val laneChunks = chunks.withIndex().filter { it.index % lanes == lane }
-                    val diarizer = newDiarizer(perLaneThreads)
+                    val diarizer = newDiarizer(laneThreads[lane])
                     try {
                         laneChunks.forEach { (index, chunk) ->
                             currentCoroutineContext().ensureActive()
@@ -686,14 +686,19 @@ class DiarizeWorker @AssistedInject constructor(
         private const val MAX_SPEECH_SAMPLES = 5 * 60 * AudioRecorder.SAMPLE_RATE
 
         /**
-         * How many chunks may be diarised at once. Two, because each lane is a second resident copy
-         * of the segmentation and embedding models (~46 MB) on top of the recogniser and the whole
-         * recording as floats -- and because the gain is from overlapping two thread-starved streams,
-         * which a second lane already delivers. Raising it trades memory for a smaller marginal
-         * speed-up and is the first thing to try if a device has cores and RAM to spare. See
-         * [diarizeChunks].
+         * How many chunks may be diarised at once. The working cap is the thread budget -- lanes
+         * never exceed [ThreadBudget.Split.diarise], so a two-fast-core device still runs two --
+         * and this constant only bounds the memory: each lane is another resident copy of the
+         * segmentation and embedding models (~46 MB).
+         *
+         * Raised from 2 because the single-lane tell repeats one level up: sherpa's `process()`
+         * cannot keep even a couple of threads fed (XNNPACK moved a 20-minute diarisation by only
+         * 3%, and splitting into two 2-thread lanes was worth ~15%), so lanes of one thread each
+         * are the shape that gives every budgeted core its own unbatched stream to own. Four rather
+         * than unbounded because ~184 MB of lane models is where the memory bill stops being
+         * incidental on the devices this app targets. See [diarizeChunks].
          */
-        private const val MAX_DIARIZE_LANES = 2
+        private const val MAX_DIARIZE_LANES = 4
 
         private const val TAG = "DiarizeWorker"
         private const val CHANNEL_ID = "speaker_diarization"
