@@ -24,6 +24,7 @@ it, so any of them can be regenerated from the script alone.
 | `audit_de_dialog_24_say.txt` | The 24 turns that were rendered, as `eleven_de.wav`. |
 | `*.ref.txt` | Speaker-tagged references for the diarisation benchmark — `[S1] … [S2] …`, one label per turn. Generated from the matching `.truth.json` in `~/Downloads/Archive/audio/`, so they stay in step with the audio rather than being edited by hand. |
 | `*.plain.txt` | The same text with the tags removed, for scoring with `wer.py`, which has no notion of speakers. |
+| `german_audit_bbg.ref.txt`, `german_audit_bbg.plain.txt` | **Draft, not a reference yet.** A real two-voice audit recording (22:48, `german audit bbg.mp3` on the Xiaomi), transcribed by the pipeline itself on 2026-08-31 with the two people enrolled from takes cut out of the recording (`[S1]` = the auditee, `[S2]` = the auditor). Machine output at roughly the German benchmark's ~10% WER: scored against itself it would read near-perfect and mean nothing. It exists to be corrected by hand into a real reference; until then use it for layout and speaker structure only. |
 
 ## Speaker attribution
 

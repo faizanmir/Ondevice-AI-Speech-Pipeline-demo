@@ -81,6 +81,32 @@ class SmallClusterMergeTest {
     }
 
     @Test
+    fun `a protected fragment is a speaker -- never folded, and it can receive fragments that sound like it`() {
+        val nearA = floatArrayOf(0.95f, 0.3f, 0f)
+        val remap = smallClusterRemap(
+            sizes = mapOf(0 to 800, 1 to 40, 2 to 10),          // 1 is short but recognised; 2 is a scrap near A
+            centroids = mapOf(0 to voiceA, 1 to voiceB, 2 to nearA),
+            minClusterSamples = 100,
+            protectedClusters = setOf(1),
+        )
+        assertEquals(mapOf(2 to 0), remap)
+        assertTrue(1 !in remap.keys)
+    }
+
+    @Test
+    fun `a protected minor cluster is not folded into a lookalike major one`() {
+        val almostA = floatArrayOf(0.95f, 0.2f, 0f)
+        val remap = lookalikeClusterRemap(
+            sizes = mapOf(0 to 800, 1 to 60),
+            centroids = mapOf(0 to voiceA, 1 to almostA),
+            maxShare = 0.10f,
+            minSimilarity = 0.6f,
+            protectedClusters = setOf(1),
+        )
+        assertTrue(remap.isEmpty())
+    }
+
+    @Test
     fun `a minor cluster that sounds like a major one is folded into it`() {
         val phantom = floatArrayOf(0.9f, 0.3f, 0f) // mostly voice A
         val remap = lookalikeClusterRemap(

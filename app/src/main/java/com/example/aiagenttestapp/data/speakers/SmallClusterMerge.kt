@@ -37,18 +37,32 @@ import com.example.aiagenttestapp.stt.cosineSimilarity
  * Position is only a proxy for that, and a poor one at a turn boundary -- exactly where these
  * fragments occur.
  *
+ * ## Recognised fragments are people
+ *
+ * Size is the wrong test for a cluster whose voice is *known*. A live session sees each speaker
+ * through a 30-45 s window, and in that window the person asking the questions may have said three
+ * seconds; the batch pass sees the same person through 300 s and never has this problem. Folding that
+ * three seconds into whoever was answering -- which "under six seconds is a fragment" does -- hands
+ * the question to the wrong person, and does so systematically on every question-and-answer
+ * recording. So the caller may name [protectedClusters]: small clusters whose voiceprint matched an
+ * enrolled person or a voice the session already knows. They are treated as speakers -- never
+ * folded, and able to receive fragments that sound like them -- because a recognised voice is a
+ * stronger fact about a cluster than its length.
+ *
  * @param sizes total speech, in samples, held by each cluster.
  * @param centroids one voiceprint per cluster. A cluster the embedder could not describe is absent,
  *   and is left alone rather than guessed at.
+ * @param protectedClusters clusters that are speakers however short, because their voice is known.
  * @return the clusters to rewrite, as old id to new id. Empty when nothing should move.
  */
 internal fun smallClusterRemap(
     sizes: Map<Int, Int>,
     centroids: Map<Int, FloatArray>,
     minClusterSamples: Int,
+    protectedClusters: Set<Int> = emptySet(),
 ): Map<Int, Int> {
-    val small = sizes.filter { it.value < minClusterSamples }.keys
-    val large = sizes.filter { it.value >= minClusterSamples }.keys
+    val small = sizes.filter { it.value < minClusterSamples && it.key !in protectedClusters }.keys
+    val large = sizes.keys - small
     // Nothing to move, or nothing to move it into. A recording that is *all* fragments is one the
     // diariser failed on outright, and inventing a winner among them would not make it right.
     if (small.isEmpty() || large.isEmpty()) return emptyMap()
@@ -81,6 +95,7 @@ internal fun smallClusterRemap(
  *
  * @param sizes total speech per cluster in samples, after the size fold has been applied.
  * @param centroids one voiceprint per cluster; a cluster without one is left alone.
+ * @param protectedClusters clusters whose voice is recognised; never folded, see [smallClusterRemap].
  * @return old id to new id for every minor cluster that has a lookalike major one.
  */
 internal fun lookalikeClusterRemap(
@@ -88,10 +103,11 @@ internal fun lookalikeClusterRemap(
     centroids: Map<Int, FloatArray>,
     maxShare: Float,
     minSimilarity: Float,
+    protectedClusters: Set<Int> = emptySet(),
 ): Map<Int, Int> {
     val total = sizes.values.sumOf { it.toLong() }
     if (total <= 0L) return emptyMap()
-    val minor = sizes.filter { it.value < total * maxShare }.keys
+    val minor = sizes.filter { it.value < total * maxShare && it.key !in protectedClusters }.keys
     val major = sizes.keys - minor
     if (minor.isEmpty() || major.isEmpty()) return emptyMap()
 

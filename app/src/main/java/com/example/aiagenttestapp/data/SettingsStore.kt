@@ -110,6 +110,15 @@ data class AppSettings(
      * talkers needs a way to rule it out.
      */
     val vadEnabled: Boolean = true,
+
+    /**
+     * How long a stretch of a recording is diarised on its own, in minutes; 0 means the whole
+     * recording at once. Five was the measured optimum for the 300 s default and stays the default;
+     * the choice is exposed because the trade is real and audible -- shorter chunks finish sooner
+     * and keep more cores busy, one long chunk clusters every voice against every other and keeps a
+     * person as one voice most reliably. See `DiarizationChunks`.
+     */
+    val diarizeChunkMinutes: Int = 5,
     /**
      * Which ONNX Runtime execution provider the speech models run on.
      *
@@ -217,6 +226,7 @@ class SettingsStore(context: Context) {
             thinkingEnabled = prefs.getBoolean(KEY_THINKING, true),
             keywordMarkersEnabled = prefs.getBoolean(KEY_KEYWORD_MARKERS, false),
             vadEnabled = prefs.getBoolean(KEY_VAD, true),
+            diarizeChunkMinutes = prefs.getInt(KEY_DIARIZE_CHUNK_MINUTES, 5).coerceIn(0, 60),
             onnxProvider = OnnxProvider.fromSlug(prefs.getString(KEY_ONNX_PROVIDER, null)),
             platformFeedPace = PlatformFeedPace.fromSlug(prefs.getString(KEY_PLATFORM_FEED_PACE, null)),
             platformFeedChunk = PlatformFeedChunk.fromSlug(prefs.getString(KEY_PLATFORM_FEED_CHUNK, null)),
@@ -251,6 +261,7 @@ class SettingsStore(context: Context) {
             putBoolean(KEY_THINKING, next.thinkingEnabled)
             putBoolean(KEY_KEYWORD_MARKERS, next.keywordMarkersEnabled)
             putBoolean(KEY_VAD, next.vadEnabled)
+            putInt(KEY_DIARIZE_CHUNK_MINUTES, next.diarizeChunkMinutes)
             putString(KEY_ONNX_PROVIDER, next.onnxProvider.slug)
             putString(KEY_PLATFORM_FEED_PACE, next.platformFeedPace.slug)
             putString(KEY_PLATFORM_FEED_CHUNK, next.platformFeedChunk.slug)
@@ -290,6 +301,7 @@ class SettingsStore(context: Context) {
         private const val KEY_THINKING = "thinking_enabled"
         private const val KEY_KEYWORD_MARKERS = "keyword_markers_enabled"
         private const val KEY_VAD = "vad_enabled"
+        private const val KEY_DIARIZE_CHUNK_MINUTES = "diarize_chunk_minutes"
         private const val KEY_ONNX_PROVIDER = "onnx_provider"
         private const val KEY_PLATFORM_FEED_PACE = "platform_feed_pace"
         private const val KEY_PLATFORM_FEED_CHUNK = "platform_feed_chunk"

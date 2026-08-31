@@ -288,17 +288,21 @@ class SpeechRecognizer(private val settings: SettingsStore) {
             stream.acceptWaveform(samples, AudioRecorder.SAMPLE_RATE)
             active.decode(stream)
             val result = active.getResult(stream)
+            // The one place a result is assembled, so a model-specific clean-up applied here reaches
+            // the plain text and the timed words alike. See [HallucinatedLabels].
+            val filter = HallucinatedLabels.applies(loadedModelId)
+            val words = TimedWords.fromTokens(
+                tokens = result.tokens?.toList().orEmpty(),
+                timestamps = result.timestamps ?: FloatArray(0),
+                clipEndSeconds = samples.size.toFloat() / AudioRecorder.SAMPLE_RATE,
+            )
             Transcription(
-                text = result.text.trim(),
+                text = result.text.trim().let { if (filter) HallucinatedLabels.stripText(it) else it },
                 language = normalizeLanguage(result.lang),
                 // Empty for the families that report none, which costs nothing: the arrays are
                 // parallel, so a model with no timestamps yields no words rather than words at
                 // time zero.
-                words = TimedWords.fromTokens(
-                    tokens = result.tokens?.toList().orEmpty(),
-                    timestamps = result.timestamps ?: FloatArray(0),
-                    clipEndSeconds = samples.size.toFloat() / AudioRecorder.SAMPLE_RATE,
-                ),
+                words = if (filter) HallucinatedLabels.stripWords(words) else words,
             )
         } finally {
             stream.release()

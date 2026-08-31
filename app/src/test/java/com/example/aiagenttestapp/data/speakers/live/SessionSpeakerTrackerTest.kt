@@ -95,6 +95,35 @@ class SessionSpeakerTrackerTest {
     }
 
     @Test
+    fun `a scrap of sound that matches nobody does not open a speaker`() {
+        val t = SessionSpeakerTracker()
+        t.assign(listOf(obs(0, bob, 60), obs(1, tim, 50)))
+        // a silent chunk: two blips under a second each, sounding like neither
+        val ids = t.assign(listOf(
+            ClusterObservation(0, 8_000, stranger, null),
+            ClusterObservation(1, 11_000, vec(0f, 0f, 1f, 1f), null),
+        ))
+        assertTrue(ids.isEmpty())
+        assertEquals(2, t.speakers.size)
+    }
+
+    @Test
+    fun `a scrap that does match an existing speaker still binds to them`() {
+        val t = SessionSpeakerTracker()
+        t.assign(listOf(obs(0, bob, 60)))
+        val ids = t.assign(listOf(ClusterObservation(0, 8_000, bobAgain, null)))
+        assertEquals(0, ids[0])
+    }
+
+    @Test
+    fun `a short cluster with an accepted enrolled name may open a speaker`() {
+        val t = SessionSpeakerTracker()
+        val ids = t.assign(listOf(ClusterObservation(0, 8_000, tim, "Tim")))
+        assertEquals(0, ids[0])
+        assertEquals("Tim", t.labels()[0])
+    }
+
+    @Test
     fun `letters run past Z`() {
         val t = SessionSpeakerTracker()
         repeat(27) { i ->

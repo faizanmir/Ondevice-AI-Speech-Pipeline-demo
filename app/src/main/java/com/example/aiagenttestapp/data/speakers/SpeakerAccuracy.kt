@@ -37,12 +37,18 @@ object SpeakerAccuracy {
         val matchedWords: Int,
         val comparedWords: Int,
         val mapping: Map<String, String>,
+        /**
+         * How many matched words each (reference speaker, transcript label) pair shares -- the table
+         * the mapping was solved from, kept so a comparison can show *where* the attribution went
+         * wrong rather than only how often.
+         */
+        val counts: Map<Pair<String, String>, Int> = emptyMap(),
     ) {
         val percent: Double get() = if (comparedWords == 0) 0.0 else 100.0 * matchedWords / comparedWords
     }
 
     /** One word of a transcript and who it is attributed to. */
-    private data class TaggedWord(val word: String, val speaker: String)
+    internal data class TaggedWord(val word: String, val speaker: String)
 
     /**
      * `[S1]`, `[Alice]`, `[SPEAKER 2]`: a bracketed label starts that speaker's turn.
@@ -99,7 +105,7 @@ object SpeakerAccuracy {
         val mapping = bestMapping(counts)
         val matched = mapping.entries.sumOf { (ref, hyp) -> counts[ref to hyp] ?: 0 }
 
-        return Result(matchedWords = matched, comparedWords = compared, mapping = mapping)
+        return Result(matchedWords = matched, comparedWords = compared, mapping = mapping, counts = counts)
     }
 
     /**
@@ -111,7 +117,7 @@ object SpeakerAccuracy {
      * cannot, which is both more correct here and the reason this word list is not required to
      * match the one `Wer` counts against -- the two measures are separate passes.
      */
-    private fun parseReference(reference: String, lang: String): List<TaggedWord> {
+    internal fun parseReference(reference: String, lang: String): List<TaggedWord> {
         val text = Wer.DIRECTIVE.replace(reference, " ")
         val out = mutableListOf<TaggedWord>()
 

@@ -293,12 +293,22 @@ class LiveDiarizeWorker @AssistedInject constructor(
         val turnsDeferred = async(Dispatchers.Default) {
             val t = System.currentTimeMillis()
             val local = diarizer.diarize(samples)
-            val profiles = speakers.profileClusters(samples, local)
+            // The voices met so far in this session count as known when folding, so a brief speaker
+            // the tracker has already lettered survives a short chunk instead of being folded away.
+            val sessionVoices = tracker.speakers
+                .filter { it.voiceprint.isNotEmpty() }
+                .associate { it.label to listOf(it.voiceprint) }
+            val profiles = speakers.profileClusters(samples, local, knownVoices = sessionVoices)
             Triple(profiles, System.currentTimeMillis() - t, local.size)
         }
         val wordsDeferred = async(Dispatchers.Default) {
             val t = System.currentTimeMillis()
-            val pieces = recognizer.transcribeSegments(samples, listOf(0..samples.lastIndex))
+            // Sliced exactly as the batch path slices, not decoded whole. A live chunk runs 30-45 s and
+            // the recogniser was chosen and tuned for 20-28 s pieces; handed 45 s in one go it drops
+            // words -- measured on the audit recording as 90 of 1,013 words missing from the live
+            // transcript against the batch one over the same eight minutes, almost all inside the
+            // long answers that were cut at the cap. The speaker labels agreed 100%; the words did not.
+            val pieces = recognizer.transcribeSegments(samples, recognizer.segmentBounds(samples))
             TimedWords.offsetBySamples(pieces.flatMap { it.words }, chunk.startSample, AudioRecorder.SAMPLE_RATE) to
                 (System.currentTimeMillis() - t)
         }

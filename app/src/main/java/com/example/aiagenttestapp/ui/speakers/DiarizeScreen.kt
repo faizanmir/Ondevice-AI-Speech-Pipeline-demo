@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
@@ -40,10 +41,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -94,6 +95,7 @@ fun DiarizeScreen(
     viewModel: DiarizeViewModel,
     onOpenSpeakers: () -> Unit,
     onOpenModels: () -> Unit,
+    onOpenReport: (Long) -> Unit,
     onBack: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -147,6 +149,7 @@ fun DiarizeScreen(
                     onStop = { viewModel.onIntent(DiarizeIntent.StopRecording) },
                     onLiveCapture = { viewModel.onIntent(DiarizeIntent.SetLiveCapture(it)) },
                     onExpected = { viewModel.onIntent(DiarizeIntent.SetExpectedSpeakers(it)) },
+                    onChunkMinutes = { viewModel.onIntent(DiarizeIntent.SetChunkMinutes(it)) },
                     onPickReference = { pendingReferencePicker.launch(ReferenceText.MIME_TYPES) },
                     onReference = { viewModel.onIntent(DiarizeIntent.AttachReference(null, it)) },
                     onLanguage = { viewModel.onIntent(DiarizeIntent.SetLanguage(null, it)) },
@@ -210,6 +213,7 @@ fun DiarizeScreen(
                         speakerCount = blocks.map { it.speakerName }.distinct().count { !isUnattributed(it) },
                         selected = recording.id == expandedId,
                         onOpen = { expandedId = if (expandedId == recording.id) null else recording.id },
+                        onStop = { viewModel.onIntent(DiarizeIntent.Stop(recording.id)) },
                         onDelete = { viewModel.onIntent(DiarizeIntent.Delete(recording.id)) },
                     )
                 }
@@ -232,7 +236,9 @@ fun DiarizeScreen(
                         TranscriptHeader(
                             recording = recording,
                             stats = stats,
+                            onOpenReport = { onOpenReport(recording.id) },
                             onRun = { viewModel.onIntent(DiarizeIntent.Run(recording.id)) },
+                            onStop = { viewModel.onIntent(DiarizeIntent.Stop(recording.id)) },
                             onPlayLive = { viewModel.onIntent(DiarizeIntent.PlayLive(recording.id)) },
                             onPickReference = { openReferencePicker.launch(ReferenceText.MIME_TYPES) },
                             onReference = {
@@ -267,6 +273,7 @@ private fun SourceCard(
     onStop: () -> Unit,
     onLiveCapture: (Boolean) -> Unit,
     onExpected: (Int) -> Unit,
+    onChunkMinutes: (Int) -> Unit,
     onPickReference: () -> Unit,
     onReference: (String) -> Unit,
     onLanguage: (String) -> Unit,
@@ -388,6 +395,36 @@ private fun SourceCard(
                 }
             }
 
+            Text(
+                "Chunking",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                "How much of a recording is diarised at once. Shorter chunks finish sooner and use " +
+                    "more cores; the whole recording at once keeps each person as one voice most " +
+                    "reliably. A setting for every run, not this recording alone.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                FilterChip(
+                    selected = state.chunkMinutes == 0,
+                    onClick = { onChunkMinutes(0) },
+                    label = { Text("Whole recording") },
+                )
+                listOf(2, 5, 8, 10).forEach { minutes ->
+                    FilterChip(
+                        selected = state.chunkMinutes == minutes,
+                        onClick = { onChunkMinutes(minutes) },
+                        label = { Text("$minutes min") },
+                    )
+                }
+            }
+
             ReferenceEditor(
                 reference = state.pendingReference,
                 language = state.pendingLanguage,
@@ -491,6 +528,7 @@ private fun RecordingRow(
     speakerCount: Int,
     selected: Boolean,
     onOpen: () -> Unit,
+    onStop: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Card(
@@ -530,6 +568,14 @@ private fun RecordingRow(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                // Stop lives on the row, where the progress bar is, so a run can be halted without
+                // opening the transcript -- and so the trash icon is no longer the only control in
+                // reach while a row is busy, which is how a live session was deleted mid-run once.
+                if (recording.status == DiarizedStatus.Running || recording.status == DiarizedStatus.Live) {
+                    IconButton(onClick = onStop) {
+                        Icon(Icons.Default.Stop, contentDescription = "Stop")
+                    }
                 }
                 IconButton(onClick = onDelete) {
                     Icon(Icons.Default.Delete, contentDescription = "Delete")
@@ -582,6 +628,12 @@ private fun RecordingRow(
                         color = MaterialTheme.colorScheme.tertiary,
                     )
                 }
+
+                DiarizedStatus.Stopped -> Text(
+                    "Stopped — Run or Play as live starts it over.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
                 DiarizedStatus.Done -> Unit
             }
@@ -661,7 +713,9 @@ private fun ScoreLine(recording: DiarizedRecording) {
 private fun TranscriptHeader(
     recording: DiarizedRecording,
     stats: List<SpeakerStat>,
+    onOpenReport: () -> Unit,
     onRun: () -> Unit,
+    onStop: () -> Unit,
     onPlayLive: () -> Unit,
     onPickReference: () -> Unit,
     onReference: (String) -> Unit,
@@ -686,6 +740,13 @@ private fun TranscriptHeader(
             // path on audio whose right answer is already known, and the way to measure its latency.
             OutlinedButton(onClick = onPlayLive, enabled = recording.status != DiarizedStatus.Live) {
                 Text(if (recording.status == DiarizedStatus.Live) "Playing live…" else "Play as live")
+            }
+            if (recording.status == DiarizedStatus.Running || recording.status == DiarizedStatus.Live) {
+                OutlinedButton(onClick = onStop) {
+                    Icon(Icons.Default.Stop, contentDescription = null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Stop")
+                }
             }
         }
         if (recording.status == DiarizedStatus.Live) {
@@ -729,6 +790,18 @@ private fun TranscriptHeader(
                 onReference = onReference,
                 onLanguage = onLanguage,
             )
+            // The itemised comparison opens on its own screen. It used to be a card right here,
+            // between the reference editor and the turns, and on a real transcript that card is
+            // long -- four tiles, a speaker table, the misattributed stretches and hundreds of word
+            // errors -- so the turns it was meant to explain sat below the fold and every look at
+            // the transcript meant scrolling past the report first. See [SpeakerReportScreen].
+            if (recording.referenceText != null) {
+                OutlinedButton(onClick = onOpenReport) {
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Open comparison report")
+                }
+            }
 
             if (recording.werPercent != null && recording.isTruncated) {
                 Text(
@@ -908,7 +981,7 @@ private val TRUNCATION_NOTE =
     "Under %.0f%% coverage the transcript is truncated — the error rate below that is measuring "
         .format(Wer.TRUNCATED_COVERAGE) + "what is missing rather than what was heard."
 
-private fun formatClock(millis: Long): String {
+internal fun formatClock(millis: Long): String {
     val seconds = (millis / 1000).coerceAtLeast(0)
     val hours = seconds / 3600
     return if (hours > 0) {

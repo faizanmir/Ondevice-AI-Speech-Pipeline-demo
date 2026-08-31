@@ -3,6 +3,7 @@ package com.example.aiagenttestapp.ui.speakers
 import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.viewModelScope
+import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
 import com.example.aiagenttestapp.data.notes.WavFile
 import com.example.aiagenttestapp.data.benchmark.ReferenceText
@@ -60,6 +61,8 @@ data class DiarizeUiState(
      * enrolling and un-enrolling someone.
      */
     val expectedSpeakers: Int = 0,
+    /** Diarisation chunk length in minutes, 0 for the whole recording; mirrors Settings. */
+    val chunkMinutes: Int = 5,
     /** How many voices are enrolled, which decides whether [expectedSpeakers] is consulted at all. */
     val enrolledCount: Int = 0,
     /**
@@ -89,11 +92,14 @@ sealed interface DiarizeIntent : UiIntent {
     data object StartRecording : DiarizeIntent
     data object StopRecording : DiarizeIntent
     data class Run(val id: Long) : DiarizeIntent
+    /** Cancel whatever is running on this row -- a batch run or a live session -- and leave it stopped. */
+    data class Stop(val id: Long) : DiarizeIntent
     /** Play a finished recording back at the speed it was spoken, transcribing it as it goes. */
     data class PlayLive(val id: Long) : DiarizeIntent
     data class SetLiveCapture(val enabled: Boolean) : DiarizeIntent
     data class Delete(val id: Long) : DiarizeIntent
     data class SetExpectedSpeakers(val count: Int) : DiarizeIntent
+    data class SetChunkMinutes(val minutes: Int) : DiarizeIntent
 
     /**
      * Attaches a reference transcript, and scores against it straight away.
@@ -130,6 +136,7 @@ class DiarizeViewModel @Inject constructor(
     private val speechModels: SpeechModelRepository,
     private val speakers: SpeakerRepository,
     private val recognizer: SpeechRecognizer,
+    private val settingsStore: SettingsStore,
 ) : MviViewModel<DiarizeUiState, DiarizeIntent, Nothing>(DiarizeUiState()) {
 
     private var captureJob: Job? = null
@@ -146,6 +153,7 @@ class DiarizeViewModel @Inject constructor(
             copy(blocks = all.groupBy { it.recordingId })
         }
         speakers.observeSpeakers().collectIntoState { copy(enrolledCount = it.size) }
+        settingsStore.settings.collectIntoState { copy(chunkMinutes = it.diarizeChunkMinutes) }
 
         // A Running row whose job WorkManager has lost would show a progress bar forever.
         viewModelScope.launch { DiarizeWorker.reconcile(appContext, dao) }
@@ -201,6 +209,7 @@ class DiarizeViewModel @Inject constructor(
         DiarizeIntent.StartRecording -> startRecording()
         DiarizeIntent.StopRecording -> stopRecording()
         is DiarizeIntent.Run -> run(intent.id)
+        is DiarizeIntent.Stop -> stop(intent.id)
         is DiarizeIntent.PlayLive -> playLive(intent.id)
         is DiarizeIntent.SetLiveCapture -> setState { copy(liveCapture = intent.enabled) }
         is DiarizeIntent.Delete -> viewModelScope.launch {
@@ -212,6 +221,8 @@ class DiarizeViewModel @Inject constructor(
         }.let { }
         is DiarizeIntent.SetExpectedSpeakers ->
             setState { copy(expectedSpeakers = intent.count.coerceIn(0, MAX_SPEAKERS)) }
+        is DiarizeIntent.SetChunkMinutes ->
+            settingsStore.update { it.copy(diarizeChunkMinutes = intent.minutes.coerceIn(0, 60)) }
         is DiarizeIntent.AttachReference -> attachReference(intent.id, intent.text)
         is DiarizeIntent.AttachReferenceFile -> attachReferenceFile(intent.id, intent.file)
         is DiarizeIntent.SetLanguage -> setLanguage(intent.id, intent.code)
@@ -439,6 +450,20 @@ class DiarizeViewModel @Inject constructor(
             return
         }
         viewModelScope.launch { start(id) }
+    }
+
+    /**
+     * Stops whatever is running on a row.
+     *
+     * Both workers are cancelled because the row does not say which one is behind it, and cancelling
+     * an idle unique work name is free. The status is written here rather than by the worker, since
+     * a cancelled coroutine does not get to write anything -- and the diariser's native call, which
+     * cannot be interrupted, may keep a core busy for up to a minute after this returns.
+     */
+    private fun stop(id: Long) {
+        DiarizeWorker.cancel(appContext, id)
+        LiveDiarizeWorker.cancel(appContext, id)
+        viewModelScope.launch { dao.markStopped(id) }
     }
 
     /**

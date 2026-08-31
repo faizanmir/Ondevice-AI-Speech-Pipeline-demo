@@ -416,15 +416,9 @@ class SpeakerRepository(
             if (turns.isEmpty()) {
                 return@withContext ClusterAttribution(turns, emptyMap(), startingPlaceholder)
             }
-            val folded = foldClustersLocked(samples, turns, minClusterSeconds)
+            val known = knownVoices(extraVoices)
+            val folded = foldClustersLocked(samples, turns, minClusterSeconds, known)
 
-            val known = if (extraVoices.isEmpty()) {
-                enrolledEmbeddings
-            } else {
-                (enrolledEmbeddings.keys + extraVoices.keys).associateWith { name ->
-                    enrolledEmbeddings[name].orEmpty() + extraVoices[name].orEmpty()
-                }
-            }
             val naming = nameClustersByVoiceprint(
                 turns = folded.turns,
                 voiceprints = folded.voiceprints,
@@ -464,10 +458,12 @@ class SpeakerRepository(
         samples: FloatArray,
         turns: List<DiarizedSegment>,
         minClusterSeconds: Float = MIN_CLUSTER_SECONDS,
+        /** Voices the live session already knows, by label: a short cluster matching one is a speaker, not a fragment. */
+        knownVoices: Map<String, List<FloatArray>> = emptyMap(),
     ): ClusterProfiles = lock.withLock {
         withContext(Dispatchers.Default) {
             if (turns.isEmpty()) return@withContext ClusterProfiles(turns, emptyList())
-            val folded = foldClustersLocked(samples, turns, minClusterSeconds)
+            val folded = foldClustersLocked(samples, turns, minClusterSeconds, knownVoices(knownVoices))
 
             val profiles = clusterSizes(folded.turns).map { (cluster, size) ->
                 val voiceprint = folded.voiceprints[cluster]
@@ -483,6 +479,16 @@ class SpeakerRepository(
 
     private class Folded(val turns: List<DiarizedSegment>, val voiceprints: Map<Int, FloatArray>)
 
+    /** Enrolled voices plus any the caller supplies for this recording, merged by name. Needs [lock]. */
+    private fun knownVoices(extra: Map<String, List<FloatArray>>): Map<String, List<FloatArray>> =
+        if (extra.isEmpty()) {
+            enrolledEmbeddings
+        } else {
+            (enrolledEmbeddings.keys + extra.keys).associateWith { name ->
+                enrolledEmbeddings[name].orEmpty() + extra[name].orEmpty()
+            }
+        }
+
     /**
      * The one embedding pass and the fold, shared by [foldAndName] and [profileClusters]. Must be
      * called with [lock] held.
@@ -497,6 +503,7 @@ class SpeakerRepository(
         samples: FloatArray,
         turns: List<DiarizedSegment>,
         minClusterSeconds: Float,
+        known: Map<String, List<FloatArray>>,
     ): Folded {
         val ready = prepareLocked()
 
@@ -511,10 +518,36 @@ class SpeakerRepository(
         }
 
         val minSamples = (minClusterSeconds * AudioRecorder.SAMPLE_RATE).toInt()
+
+        // Recognised fragments are people. A cluster too short to be a speaker by size is kept when
+        // its voice matches someone known -- an enrolled person, or a voice the live session has
+        // already met -- because that match is a stronger fact than its length. Without this the
+        // three-second question inside a 35 s live chunk went to whoever was answering. See
+        // [smallClusterRemap].
+        val protected = if (known.isEmpty()) {
+            emptySet()
+        } else {
+            sizes.filter { it.value < minSamples }.keys.filter { cluster ->
+                val print = voiceprints[cluster] ?: return@filter false
+                val decision = matchSpeaker(print, known, MATCH_THRESHOLD, MATCH_MARGIN)
+                decision.acceptedName?.also { name ->
+                    Log.i(
+                        TAG,
+                        "cluster %d (%.1fs) kept although short -- sounds like %s (%.3f)".format(
+                            cluster,
+                            sizes.getValue(cluster) / AudioRecorder.SAMPLE_RATE.toFloat(),
+                            name,
+                            decision.bestScore,
+                        ),
+                    )
+                } != null
+            }.toSet()
+        }
+
         val remap = if (voiceprints.isEmpty()) {
             emptyMap()
         } else {
-            smallClusterRemap(sizes, voiceprints, minSamples)
+            smallClusterRemap(sizes, voiceprints, minSamples, protected)
         }
         remap.forEach { (from, to) ->
             Log.i(
@@ -535,7 +568,7 @@ class SpeakerRepository(
         val lookalike = if (voiceprints.isEmpty()) {
             emptyMap()
         } else {
-            lookalikeClusterRemap(survivors, voiceprints, LOOKALIKE_MAX_SHARE, LOOKALIKE_MIN_SIMILARITY)
+            lookalikeClusterRemap(survivors, voiceprints, LOOKALIKE_MAX_SHARE, LOOKALIKE_MIN_SIMILARITY, protected)
         }
         lookalike.forEach { (from, to) ->
             val total = survivors.values.sumOf { it.toLong() }.coerceAtLeast(1L)

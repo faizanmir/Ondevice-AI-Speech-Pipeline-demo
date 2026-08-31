@@ -26,17 +26,14 @@ data class DiarizationChunk(
  * chunking earns its keep through the lanes and the fold overlap more than through the clustering
  * bound. A recording that cannot be chunked is slower, not hopeless.
  *
- * **Why it is only safe when everyone is enrolled.** Cluster ids are meaningless across chunks:
- * cluster 0 in the first chunk has no relationship to cluster 0 in the second, and nothing
- * downstream can discover that they are the same person. Naming is what stitches the chunks back
- * together, and naming only works for a voice that has been enrolled. With nobody enrolled the
- * chunks would come back as a row of strangers, so [DiarizeWorker] diarises the whole recording at
- * once in that case, and accepts the cost.
- *
- * **A stranger in an enrolled recording still fragments.** Someone with no voiceprint gets a fresh
- * "Speaker N" in every chunk they appear in, because there is nothing to match them against. That
- * is the known cost of this split and the reason chunks are as long as they are: fewer boundaries,
- * fewer duplicates of an unenrolled voice.
+ * **How the chunks are stitched back together.** Cluster ids are meaningless across chunks:
+ * cluster 0 in the first chunk has no relationship to cluster 0 in the second. Naming is what joins
+ * them -- each chunk is matched to the same enrolled voiceprints -- and since 2026-08-31 the pass
+ * also carries the voices it could not name into every later chunk's naming under the number they
+ * were given, so a stranger is one "Unknown Speaker" for the whole recording rather than one per
+ * chunk. Until then chunking was only allowed with somebody enrolled, and a stranger fragmented;
+ * both constraints are gone, and the chunk length is a Settings choice (`diarizeChunkMinutes`,
+ * 0 = the whole recording at once).
  *
  * Cuts prefer a splice left by silence compaction. A splice is where at least 1.5 seconds of
  * silence used to be, which makes it the least likely place in the whole recording to be in the

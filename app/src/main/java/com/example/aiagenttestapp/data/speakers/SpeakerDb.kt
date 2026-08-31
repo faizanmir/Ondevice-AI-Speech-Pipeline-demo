@@ -114,7 +114,17 @@ data class SpeakerWithSamples(
  * ends. Stored as its name like the others, so an older build that does not know it reads it as
  * [Failed] via the converter's fallback rather than crashing on the row.
  */
-enum class DiarizedStatus { Idle, Running, Done, Failed, Live }
+enum class DiarizedStatus {
+    Idle, Running, Done, Failed, Live,
+
+    /**
+     * The user stopped a run or a live session before it finished. Not [Failed]: nothing went wrong,
+     * and a red message for a deliberate tap would be the wrong tone. Not [Idle]: a stopped live
+     * session leaves its provisional blocks in place, and "not run yet" would deny they exist. Run
+     * or Play as live starts the row over.
+     */
+    Stopped,
+}
 
 /**
  * One recording put through diarisation and transcription.
@@ -316,6 +326,10 @@ interface DiarizedDao {
     @Query("SELECT * FROM diarized_recordings WHERE id = :id")
     suspend fun byId(id: Long): DiarizedRecording?
 
+    /** Null once the row is deleted, which a screen showing only this recording has to notice. */
+    @Query("SELECT * FROM diarized_recordings WHERE id = :id")
+    fun observeById(id: Long): Flow<DiarizedRecording?>
+
     @Insert
     suspend fun insert(recording: DiarizedRecording): Long
 
@@ -421,6 +435,9 @@ interface DiarizedDao {
     @Query("UPDATE diarized_recordings SET status = 'Failed', error = :error WHERE id = :id")
     suspend fun fail(id: Long, error: String)
 
+    @Query("UPDATE diarized_recordings SET status = 'Stopped', progress = 0.0, error = NULL WHERE id = :id")
+    suspend fun markStopped(id: Long)
+
     @Query("DELETE FROM diarized_recordings WHERE id = :id")
     suspend fun delete(id: Long)
 
@@ -429,6 +446,9 @@ interface DiarizedDao {
 
     @Query("SELECT * FROM diarized_blocks WHERE recordingId = :recordingId ORDER BY startSample ASC")
     suspend fun blocksFor(recordingId: Long): List<DiarizedBlock>
+
+    @Query("SELECT * FROM diarized_blocks WHERE recordingId = :recordingId ORDER BY startSample ASC")
+    fun observeBlocksFor(recordingId: Long): Flow<List<DiarizedBlock>>
 
     /** Replaced wholesale on a re-run: a half-updated transcript would mix two runs' attributions. */
     @Query("DELETE FROM diarized_blocks WHERE recordingId = :recordingId")

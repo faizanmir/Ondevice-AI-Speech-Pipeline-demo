@@ -91,6 +91,13 @@ class SessionSpeaker internal constructor(
  *     already said they are different voices, and that verdict is better evidence than a close cosine.
  *     Two clusters that both matched the same enrolled name are allowed to -- that is
  *     over-segmentation of one person, and naming is how the batch path heals it too.
+ *  4. A cluster needs [minSamplesToOpen] of speech before it may **open** a new speaker; with less it
+ *     may still bind to one that exists, or it is left unassigned. A 34-second chunk of the audit
+ *     recording in which nobody spoke came back as two blips of 0.5 s and 0.7 s -- a chair, a
+ *     breath -- matching nothing, and the tracker opened "Speaker C" and "Speaker D" for them. The
+ *     batch fold never meets this case: it leaves a chunk of nothing-but-fragments alone, which is
+ *     right for folding and wrong for opening a speaker. Six seconds is the fold's own bar for what
+ *     counts as a person. An accepted enrolled match is exempt: that evidence does not need length.
  *
  * Labels are provisional by construction and the batch pass replaces them; this exists so the
  * provisional view is *consistent* -- the same voice keeps the same letter -- not so it is final.
@@ -98,6 +105,7 @@ class SessionSpeaker internal constructor(
 class SessionSpeakerTracker(
     private val threshold: Float = SESSION_MATCH_THRESHOLD,
     private val margin: Float = SESSION_MATCH_MARGIN,
+    private val minSamplesToOpen: Int = MIN_SAMPLES_TO_OPEN,
 ) {
     private val roster = mutableListOf<SessionSpeaker>()
 
@@ -106,8 +114,9 @@ class SessionSpeakerTracker(
     /**
      * Binds this chunk's clusters to session speakers, opening new ones as needed.
      *
-     * @return cluster id to session speaker id. A cluster with neither a voiceprint nor an accepted
-     *   name is absent -- there is nothing to match it with -- and the caller treats it as unattributed.
+     * @return cluster id to session speaker id. A cluster is absent when there is nothing to match it
+     *   with (no voiceprint and no accepted name), or when it is too short to open a speaker and
+     *   matches none that exist; the caller treats it as unattributed.
      */
     fun assign(observations: List<ClusterObservation>): Map<Int, Int> {
         val result = HashMap<Int, Int>()
@@ -137,7 +146,11 @@ class SessionSpeakerTracker(
             val accepted = best != null &&
                 best.second >= threshold &&
                 (runnerUp == null || best.second - runnerUp.second >= margin)
-            val speaker = if (accepted) best!!.first else open(o)
+            val speaker = when {
+                accepted -> best!!.first
+                o.samples >= minSamplesToOpen -> open(o)
+                else -> continue
+            }
             speaker.absorb(o)
             result[o.cluster] = speaker.id
             claimed += speaker.id
@@ -173,5 +186,8 @@ class SessionSpeakerTracker(
          */
         const val SESSION_MATCH_THRESHOLD = 0.55f
         const val SESSION_MATCH_MARGIN = 0.05f
+
+        /** Six seconds at 16 kHz -- the batch fold's `MIN_CLUSTER_SECONDS`, expressed in samples. */
+        const val MIN_SAMPLES_TO_OPEN = 6 * 16_000
     }
 }
