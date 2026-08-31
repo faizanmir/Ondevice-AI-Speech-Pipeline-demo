@@ -36,6 +36,9 @@ import com.example.aiagenttestapp.ui.benchmark.BenchmarkScreen
 import com.example.aiagenttestapp.ui.benchmark.BenchmarkViewModel
 import com.example.aiagenttestapp.ui.speakers.DiarizeScreen
 import com.example.aiagenttestapp.ui.speakers.DiarizeViewModel
+import com.example.aiagenttestapp.ui.speakers.SpeakerReportIntent
+import com.example.aiagenttestapp.ui.speakers.SpeakerReportScreen
+import com.example.aiagenttestapp.ui.speakers.SpeakerReportViewModel
 import com.example.aiagenttestapp.ui.speakers.SpeakersScreen
 import com.example.aiagenttestapp.ui.speakers.SpeakersViewModel
 import com.example.aiagenttestapp.ui.audit.AuditViewModel
@@ -170,6 +173,15 @@ private object Routes {
     const val AUDIT_REPORT = "auditReport?docId={docId}"
 
     fun auditReport(docId: Long) = "auditReport?docId=$docId"
+
+    /**
+     * The comparison report for one speaker transcript -- the reference against what was heard.
+     * A destination of its own rather than a section of the transcript pane; see
+     * [com.example.aiagenttestapp.ui.speakers.SpeakerReportScreen] for why.
+     */
+    const val SPEAKER_REPORT = "speakerReport?recordingId={recordingId}"
+
+    fun speakerReport(recordingId: Long) = "speakerReport?recordingId=$recordingId"
 
     const val HISTORY = "history"
 }
@@ -385,6 +397,20 @@ private fun AppNavHost(
                 // and you come back to attribute recordings many times.
                 onOpenSpeakers = { navController.navigate(Routes.SPEAKERS) },
                 onOpenModels = { navController.navigate(Routes.CATALOG) },
+                onOpenReport = { recordingId -> navController.navigate(Routes.speakerReport(recordingId)) },
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(
+            route = Routes.SPEAKER_REPORT,
+            arguments = listOf(navArgument("recordingId") { type = NavType.LongType }),
+        ) { backStackEntry ->
+            val recordingId = backStackEntry.arguments?.getLong("recordingId") ?: -1L
+            val reportViewModel: SpeakerReportViewModel = hiltViewModel()
+            LaunchedEffect(recordingId) { reportViewModel.onIntent(SpeakerReportIntent.Load(recordingId)) }
+            SpeakerReportScreen(
+                viewModel = reportViewModel,
                 onBack = { navController.popBackStack() },
             )
         }
