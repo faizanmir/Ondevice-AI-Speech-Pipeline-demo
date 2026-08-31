@@ -8,6 +8,7 @@ import com.example.aiagenttestapp.data.notes.WavFile
 import com.example.aiagenttestapp.data.benchmark.ReferenceText
 import com.example.aiagenttestapp.data.speakers.DiarizationScore
 import com.example.aiagenttestapp.data.speakers.DiarizeWorker
+import com.example.aiagenttestapp.data.speakers.LiveDiarizeWorker
 import com.example.aiagenttestapp.data.speakers.DiarizedAudioStore
 import com.example.aiagenttestapp.data.speakers.DiarizedBlock
 import com.example.aiagenttestapp.data.speakers.DiarizedDao
@@ -72,6 +73,12 @@ data class DiarizeUiState(
     val pendingReference: String = "",
     /** Numeral grammar for the next recording, and what the language chips show. "en" or "de". */
     val pendingLanguage: String = DEFAULT_LANGUAGE,
+    /**
+     * Whether the next recording is labelled **while it is being made** -- a live session writing
+     * provisional speakers and words as the microphone runs -- instead of after Stop. Off by default:
+     * the live view costs a second model set for the whole recording and its labels can change.
+     */
+    val liveCapture: Boolean = false,
     val error: String? = null,
     /** What is missing before a run can start, or null when everything is ready. */
     val blocker: String? = null,
@@ -82,6 +89,9 @@ sealed interface DiarizeIntent : UiIntent {
     data object StartRecording : DiarizeIntent
     data object StopRecording : DiarizeIntent
     data class Run(val id: Long) : DiarizeIntent
+    /** Play a finished recording back at the speed it was spoken, transcribing it as it goes. */
+    data class PlayLive(val id: Long) : DiarizeIntent
+    data class SetLiveCapture(val enabled: Boolean) : DiarizeIntent
     data class Delete(val id: Long) : DiarizeIntent
     data class SetExpectedSpeakers(val count: Int) : DiarizeIntent
 
@@ -123,6 +133,9 @@ class DiarizeViewModel @Inject constructor(
 ) : MviViewModel<DiarizeUiState, DiarizeIntent, Nothing>(DiarizeUiState()) {
 
     private var captureJob: Job? = null
+
+    /** The row a live capture is writing into, from Start until Stop; null for an ordinary recording. */
+    private var liveRowId: Long? = null
     private var writer: WavFile.Writer? = null
     private var liveFile: File? = null
     private var capturedSamples = 0
@@ -188,10 +201,13 @@ class DiarizeViewModel @Inject constructor(
         DiarizeIntent.StartRecording -> startRecording()
         DiarizeIntent.StopRecording -> stopRecording()
         is DiarizeIntent.Run -> run(intent.id)
+        is DiarizeIntent.PlayLive -> playLive(intent.id)
+        is DiarizeIntent.SetLiveCapture -> setState { copy(liveCapture = intent.enabled) }
         is DiarizeIntent.Delete -> viewModelScope.launch {
             // Cancelled before the row goes, not after: the worker holds the whole recording in
             // memory and would carry on for minutes over audio the user has already deleted.
             DiarizeWorker.cancel(appContext, intent.id)
+            LiveDiarizeWorker.cancel(appContext, intent.id)
             store.delete(intent.id)
         }.let { }
         is DiarizeIntent.SetExpectedSpeakers ->
@@ -272,6 +288,17 @@ class DiarizeViewModel @Inject constructor(
 
         setState { copy(recordingMillis = 0L, error = null) }
 
+        // A live capture gets its row now, not at Stop, and a session that follows the file as it
+        // grows. If something blocks a run the recording still happens -- it is just labelled after
+        // Stop like any other, and the blocker is already showing at the top of the screen.
+        if (currentState.liveCapture && blockerFor() == null) {
+            viewModelScope.launch {
+                val id = store.adoptLive(file, "Recording ${stamp()}", currentState.expectedSpeakers)
+                liveRowId = id
+                LiveDiarizeWorker.enqueue(appContext, id, LiveDiarizeWorker.Mode.Follow)
+            }
+        }
+
         captureJob = viewModelScope.launch(Dispatchers.Default) {
             try {
                 audioRecorder.record().collect { chunk ->
@@ -309,6 +336,14 @@ class DiarizeViewModel @Inject constructor(
 
             if (file == null || !finished) {
                 setState { copy(error = "The recording could not be saved.") }
+                return@launch
+            }
+
+            // A live capture already has its row; telling it the duration is what ends the session,
+            // and the session hands the finished file to the batch worker itself.
+            liveRowId?.let { id ->
+                liveRowId = null
+                dao.setDuration(id, capturedSamples * 1000L / AudioRecorder.SAMPLE_RATE)
                 return@launch
             }
 
@@ -407,6 +442,23 @@ class DiarizeViewModel @Inject constructor(
     }
 
     /**
+     * The same recording, transcribed as if it were being spoken now.
+     *
+     * A live session and a batch run on one row would write over each other, so whichever is running
+     * is cancelled first. The session ends by enqueueing the batch run itself, so the row's final
+     * transcript is the same one Run would have produced.
+     */
+    private fun playLive(id: Long) {
+        val blocker = blockerFor()
+        if (blocker != null) {
+            setState { copy(error = blocker) }
+            return
+        }
+        DiarizeWorker.cancel(appContext, id)
+        LiveDiarizeWorker.enqueue(appContext, id, LiveDiarizeWorker.Mode.FilePaced)
+    }
+
+    /**
      * Starts the run a new recording exists to have.
      *
      * Automatic rather than waiting for the Run button, because there is nothing else a row on this
@@ -448,6 +500,7 @@ class DiarizeViewModel @Inject constructor(
         // them to be overwritten at the end -- see the note there. The reference itself survives:
         // a re-run is scored against the same text, which is the only way its number is comparable
         // to the one before it.
+        LiveDiarizeWorker.cancel(appContext, id)
         dao.beginRun(id, currentState.expectedSpeakers)
         DiarizeWorker.enqueue(appContext, id)
     }

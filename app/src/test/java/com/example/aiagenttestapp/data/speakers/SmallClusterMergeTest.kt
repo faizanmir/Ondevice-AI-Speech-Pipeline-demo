@@ -81,6 +81,53 @@ class SmallClusterMergeTest {
     }
 
     @Test
+    fun `a minor cluster that sounds like a major one is folded into it`() {
+        val phantom = floatArrayOf(0.9f, 0.3f, 0f) // mostly voice A
+        val remap = lookalikeClusterRemap(
+            sizes = mapOf(0 to 800, 1 to 700, 2 to 60),
+            centroids = mapOf(0 to voiceA, 1 to voiceB, 2 to phantom),
+            maxShare = 0.10f,
+            minSimilarity = 0.6f,
+        )
+        assertEquals(mapOf(2 to 0), remap)
+    }
+
+    @Test
+    fun `a minor cluster with its own voice is left alone`() {
+        val stranger = floatArrayOf(0f, 0f, 1f)
+        val remap = lookalikeClusterRemap(
+            sizes = mapOf(0 to 800, 1 to 700, 2 to 60),
+            centroids = mapOf(0 to voiceA, 1 to voiceB, 2 to stranger),
+            maxShare = 0.10f,
+            minSimilarity = 0.6f,
+        )
+        assertTrue(remap.isEmpty())
+    }
+
+    @Test
+    fun `a major cluster is never folded however alike it sounds`() {
+        val almostA = floatArrayOf(0.95f, 0.2f, 0f)
+        val remap = lookalikeClusterRemap(
+            sizes = mapOf(0 to 800, 1 to 700),
+            centroids = mapOf(0 to voiceA, 1 to almostA),
+            maxShare = 0.10f,
+            minSimilarity = 0.6f,
+        )
+        assertTrue(remap.isEmpty())
+    }
+
+    @Test
+    fun `a minor cluster without a voiceprint is left where it is`() {
+        val remap = lookalikeClusterRemap(
+            sizes = mapOf(0 to 800, 2 to 60),
+            centroids = mapOf(0 to voiceA),
+            maxShare = 0.10f,
+            minSimilarity = 0.6f,
+        )
+        assertTrue(remap.isEmpty())
+    }
+
+    @Test
     fun `applying a remap rewrites only the clusters it names`() {
         val turns = listOf(
             DiarizedSegment(0, 16_000, cluster = 0),

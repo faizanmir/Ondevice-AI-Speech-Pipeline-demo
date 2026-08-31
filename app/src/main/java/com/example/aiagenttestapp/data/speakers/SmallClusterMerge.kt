@@ -63,6 +63,49 @@ internal fun smallClusterRemap(
     }.toMap()
 }
 
+/**
+ * Folds a **minor** cluster into the major cluster it sounds like.
+ *
+ * [smallClusterRemap] catches fragments by size alone: anything under a few seconds is not a
+ * speaker. It cannot catch the other thing clustering produces on a long recording -- a *phantom*: a
+ * cluster of a minute or so made of scraps of two real voices, which the threshold cut left standing
+ * because its mixed voiceprint sits between them. On the 22-minute German recording that phantom
+ * held 30-60 s and appeared as a third "Unknown Speaker" with thirty-odd short turns.
+ *
+ * Two conditions, both required. The cluster must be **minor** -- under [maxShare] of all the speech
+ * in what was diarised, because a real participant in a conversation holds far more than a few per
+ * cent of it. And its voiceprint must be at least [minSimilarity] to the major cluster it would join,
+ * so that a quiet third person who genuinely sounds different is left alone. Neither alone is safe:
+ * size alone would swallow a taciturn participant; similarity alone would merge the two same-gender
+ * voices that sit at ~0.73 on this app's benchmark file.
+ *
+ * @param sizes total speech per cluster in samples, after the size fold has been applied.
+ * @param centroids one voiceprint per cluster; a cluster without one is left alone.
+ * @return old id to new id for every minor cluster that has a lookalike major one.
+ */
+internal fun lookalikeClusterRemap(
+    sizes: Map<Int, Int>,
+    centroids: Map<Int, FloatArray>,
+    maxShare: Float,
+    minSimilarity: Float,
+): Map<Int, Int> {
+    val total = sizes.values.sumOf { it.toLong() }
+    if (total <= 0L) return emptyMap()
+    val minor = sizes.filter { it.value < total * maxShare }.keys
+    val major = sizes.keys - minor
+    if (minor.isEmpty() || major.isEmpty()) return emptyMap()
+
+    return minor.mapNotNull { from ->
+        val source = centroids[from] ?: return@mapNotNull null
+        val (nearest, similarity) = major
+            .filter { centroids[it] != null }
+            .map { it to cosineSimilarity(source, centroids.getValue(it)) }
+            .maxByOrNull { it.second }
+            ?: return@mapNotNull null
+        if (similarity >= minSimilarity) from to nearest else null
+    }.toMap()
+}
+
 /** Applies [smallClusterRemap]'s decision to the turns themselves. */
 internal fun applyClusterRemap(
     turns: List<DiarizedSegment>,

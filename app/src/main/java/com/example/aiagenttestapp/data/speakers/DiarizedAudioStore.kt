@@ -117,6 +117,25 @@ class DiarizedAudioStore @Inject constructor(
             Result.Imported(record(name, file, samples, expectedSpeakers))
         }
 
+    /**
+     * A row for a recording that is **still being made**, so a live session can write against it.
+     *
+     * [adopt] runs when the user stops; this runs when they start. The duration is zero until
+     * [DiarizedDao.setDuration] fills it in at stop, and the row is born [DiarizedStatus.Live] because
+     * that is what it is -- a transcript being written while the audio arrives. Nothing here checks
+     * the file has samples yet, because it does not.
+     */
+    suspend fun adoptLive(file: File, name: String, expectedSpeakers: Int): Long = dao.insert(
+        DiarizedRecording(
+            name = name,
+            audioPath = file.absolutePath,
+            durationMillis = 0L,
+            createdAtMillis = System.currentTimeMillis(),
+            status = DiarizedStatus.Live,
+            expectedSpeakers = expectedSpeakers,
+        ),
+    )
+
     private suspend fun record(
         name: String,
         file: File,

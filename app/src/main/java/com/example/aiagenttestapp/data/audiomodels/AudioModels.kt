@@ -131,6 +131,7 @@ internal object AudioModelCatalog {
 
     const val SPEAKER_BUNDLE_ID = "speaker"
     const val SPEAKER_CAMPP_BUNDLE_ID = "speaker-campplus"
+    const val SPEAKER_REVERB_BUNDLE_ID = "speaker-reverb-campplus"
     const val KEYWORD_BUNDLE_ID = "keywords"
     const val PUNCTUATION_BUNDLE_ID = "punctuation"
 
@@ -151,6 +152,20 @@ internal object AudioModelCatalog {
      *
      * The float pyannote build rather than its 1.5 MB int8 sibling: segmentation decides every
      * boundary downstream, and 6 MB is nothing beside the ASR model already on disk.
+     *
+     * **Measured, not assumed (2026-08-31, Xiaomi Pad 8, whole recording, nobody enrolled).** Both
+     * diarisation models run in fp32 on XNNPACK, whose advantage is its int8 kernels -- the likely
+     * reason XNNPACK moved diarisation by only ~3% while it transformed the recogniser -- so int8 was
+     * tried on both. sherpa's own int8 pyannote diarised the 22-minute German recording in 57.8s
+     * against 60.6s (-4.6%), took speaker accuracy from 96.50% to 93.68%, and returned a two-man
+     * three-minute recording as **one** speaker; the quantisation lands on its LSTM layers, which is
+     * where it hurts. CAM++ quantised with onnxruntime: static QDQ moved a voiceprint 0.13-0.31
+     * cosine from its fp32 value, several times the 0.05 margin naming relies on; dynamic int8 kept
+     * voiceprints within ~0.05 but ran 2.6x *slower* on the device (160.5s), because `ConvInteger`
+     * re-quantises activations at each of 225 convolutions and XNNPACK has no kernel for it.
+     * Segmentation is ~59 model calls per five minutes against ~150 embeddings, so even a lossless
+     * int8 segmentation could not have moved the branch much. Neither earns its accuracy cost; both
+     * stay fp32, and a faster diarisation has to come from fewer embeddings, not cheaper ones.
      *
      * 3D-Speaker ERes2Net-base for the embeddings, replacing WeSpeaker CAM++, because the clustering
      * that consumes them is calibrated against this model and not against CAM++. sherpa's stock
@@ -231,6 +246,49 @@ internal object AudioModelCatalog {
         embeddingModelId = EMBEDDING_MODEL_ID_CAMPP,
         // CAM++: ~2.8x faster to compare voices, so the diarisation branch weighs less and hands a
         // thread to transcription when the recogniser is the heavier one.
+        diariseWeight = 6,
+    )
+
+    /**
+     * Rev.ai's `reverb-diarization-v1` in place of pyannote for the segmentation half, over the same
+     * CAM++ voiceprints. On the shelf to be **measured**, not shipped.
+     *
+     * **What it is.** A fine-tune of pyannote segmentation-3.0 on Rev's expert-labelled English
+     * corpus; Rev reports a lower diarisation error rate than the stock model on its own benchmarks.
+     * The ONNX metadata is identical to pyannote's -- `model_type = pyannote-segmentation-3.0`, the
+     * same 10 s window, receptive field and seven powerset classes -- so sherpa loads it through the
+     * same `pyannote` config and [com.example.aiagenttestapp.stt.SpeakerDiarizer] needs no change.
+     * Same [embeddingModelId] because the embedder is the same file: enrolled people carry over and
+     * naming margins are untouched, so a difference in speaker accuracy is segmentation's alone.
+     *
+     * **Licence.** Rev's non-commercial licence (linked from the model's own metadata). The research
+     * pass in `docs/diarization-research.html` marked it disqualified for a commercial build, and that
+     * has not changed; the label says so. It is here for the one thing a licence like that permits --
+     * finding out whether a better-trained segmentation model moves the numbers, on the same device
+     * and files as the 2026-08-31 int8 measurement (pyannote fp32 baseline: 60.6 s diarise, 96.50%
+     * speaker accuracy on the 22-minute German recording, two clusters on `eleven_de`).
+     */
+    val SPEAKER_REVERB = AudioModelBundle(
+        id = SPEAKER_REVERB_BUNDLE_ID,
+        label = "Speaker identification (Reverb v1 segmentation · non-commercial)",
+        blurb = "Rev.ai's fine-tuned segmentation model with CAM++ voiceprints. Evaluation only: " +
+            "its licence does not permit commercial use. People already enrolled carry over.",
+        payload = BundlePayload.DirectFiles(
+            listOf(
+                AudioModelFile(
+                    name = SEGMENTATION,
+                    url = "$HF/csukuangfj/sherpa-onnx-reverb-diarization-v1/resolve/main/" +
+                        "model.onnx?download=true",
+                    sizeBytes = 9_512_223L,
+                ),
+                AudioModelFile(
+                    name = EMBEDDING,
+                    url = "$GH_SPEAKER/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx",
+                    sizeBytes = 28_281_138L,
+                ),
+            ),
+        ),
+        embeddingModelId = EMBEDDING_MODEL_ID_CAMPP,
         diariseWeight = 6,
     )
 
@@ -331,7 +389,8 @@ internal object AudioModelCatalog {
     )
 
     /** The speaker bundles, in the order the picker shows them. */
-    val speakerBundles: List<AudioModelBundle> = listOf(SPEAKER, SPEAKER_CAMPP)
+    val speakerBundles: List<AudioModelBundle> = listOf(SPEAKER, SPEAKER_CAMPP, SPEAKER_REVERB)
 
-    val all: List<AudioModelBundle> = listOf(SPEAKER, SPEAKER_CAMPP, KEYWORDS, PUNCTUATION)
+    val all: List<AudioModelBundle> =
+        listOf(SPEAKER, SPEAKER_CAMPP, SPEAKER_REVERB, KEYWORDS, PUNCTUATION)
 }

@@ -95,11 +95,20 @@ class SpeakerEmbedder {
     }
 
     /**
-     * The enrolled name whose voiceprint [embedding] matches above [threshold], or null.
+     * The enrolled name whose voiceprint [embedding] matches above [threshold], or null when nobody does.
      *
-     * Null is a perfectly good outcome and the caller shows "Speaker 2" for it. The threshold is biased
-     * high on purpose: putting the wrong person's name against something they did not say is worse, in a
-     * record someone may rely on, than declining to name them at all.
+     * This is the *enrolment* check, not the naming one. `SpeakerRepository.enroll` asks it whether a
+     * new person's averaged takes already sound like somebody on file, so the user is warned before two
+     * voices that naming could never tell apart both end up in the index. Null is the good outcome
+     * there -- nobody close enough -- and enrolment carries on.
+     *
+     * Naming a diarised cluster used to come through here as well, and stopped. The manager answers
+     * with a name and nothing else, so the caller could not tell a winner that cleared the threshold
+     * by a hair from one that tied the runner-up, and could not log the score that separates a
+     * clustering collapse from an alignment bug. That comparison now lives in [matchSpeaker], over the
+     * same enrolled vectors, where the margin rule and the per-take maximum can be expressed. A yes/no
+     * against one vector per person -- sherpa's manager folds several takes into a single normalised
+     * vector -- is exactly enough for the collision check and not enough for a transcript.
      */
     fun search(embedding: FloatArray, threshold: Float): String? {
         val active = manager ?: return null
@@ -130,10 +139,13 @@ class SpeakerEmbedder {
 /**
  * Cosine similarity between two voiceprints, in -1..1.
  *
- * Used for the checks the sherpa manager cannot do: whether a person's own enrolment takes agree with
- * each other, and whether a new enrolment collides with somebody already on file. The manager only
- * answers "does this match a *stored* speaker", which is the wrong question during enrolment, when
- * nothing has been stored yet.
+ * Used where the sherpa manager's answer is the wrong shape. Take agreement
+ * (`SpeakerRepository.lowestPairwiseSimilarity`) compares a person's own enrolment takes with each
+ * other before anything has been stored, so there is nothing in the manager to search. [matchSpeaker]
+ * needs every candidate's score rather than only the winner's name, so it can hold the winner to a
+ * margin over the runner-up and log the decision. The one comparison that does go through the manager
+ * is the enrolment collision check -- see [SpeakerEmbedder.search] -- because there a bare name above a
+ * threshold is all the caller wants.
  */
 fun cosineSimilarity(a: FloatArray, b: FloatArray): Float {
     if (a.isEmpty() || a.size != b.size) return 0f
@@ -175,9 +187,7 @@ internal fun matchSpeaker(
 ): SpeakerMatchDecision {
     val ranked = enrolled.mapNotNull { (name, takes) ->
         val score = takes.asSequence()
-            .filter { it.size == embedding.size }
-            .map { cosineSimilarity(embedding, it) }
-            .maxOrNull()
+            .filter { it.size == embedding.size }.maxOfOrNull { cosineSimilarity(embedding, it) }
             ?: return@mapNotNull null
         name to score
     }.sortedWith(compareByDescending<Pair<String, Float>> { it.second }.thenBy { it.first })

@@ -45,10 +45,19 @@ object SpeakerAlignment {
      * they keep the word; otherwise an overlap is honestly unattributed. Choosing whichever segment
      * started first invented certainty the model did not provide.
      *
-     * Words falling in no turn inherit a speaker only when the turns on both sides agree. Diarisation
-     * reports confident speech rather than continuous coverage, so this preserves a breath in one
-     * person's paragraph without carrying that person indefinitely across an unsupported gap into
-     * somebody else's turn.
+     * Words falling in no turn inherit a speaker when the turns on both sides agree -- diarisation
+     * reports confident speech rather than continuous coverage, and a breath mid-sentence must not
+     * shred a paragraph. When the two sides **disagree**, the word goes to whichever turn edge is
+     * nearer, provided that edge is within [MAX_GAP_REACH_SECONDS]; otherwise it is unattributed.
+     *
+     * This used to leave every disagreeing gap unattributed. On the 22-minute German recording that
+     * produced 144 "Unknown Speaker ?" blocks holding 76 s of words -- every one under two seconds,
+     * 68 of them under half a second -- each a turn boundary where one person stopped and the other
+     * started and the recogniser heard a word in between. A transcript with a hundred and forty-four
+     * headers for nobody is unreadable, and the smoothing pass could not help: its rule also refuses
+     * to choose between two different neighbours. The nearer edge is the honest guess -- the word
+     * before a hand-over belongs to whoever was already speaking -- and the reach keeps it a guess
+     * about a boundary rather than a licence to carry a speaker across a long unsupported hole.
      */
     fun blocks(
         words: List<TimedWord>,
@@ -64,28 +73,52 @@ object SpeakerAlignment {
         var currentWords = mutableListOf<TimedWord>()
         var currentStart = 0
 
-        fun nearestClusterBefore(sample: Int): Int? {
+        /** A turn boundary next to a gap: which voice, and where the turn ended or begins. */
+        data class Edge(val cluster: Int, val sample: Int)
+
+        fun edgeBefore(sample: Int): Edge? {
             val nearestEnd = ordered.asSequence()
                 .filter { it.endSample <= sample }
                 .maxOfOrNull { it.endSample }
                 ?: return null
-            return ordered.asSequence()
+            val cluster = ordered.asSequence()
                 .filter { it.endSample == nearestEnd }
                 .map { it.cluster }
                 .distinct()
                 .singleOrNull()
+                ?: return null
+            return Edge(cluster, nearestEnd)
         }
 
-        fun nearestClusterAfter(sample: Int): Int? {
+        fun edgeAfter(sample: Int): Edge? {
             val nearestStart = ordered.asSequence()
                 .filter { it.startSample > sample }
                 .minOfOrNull { it.startSample }
                 ?: return null
-            return ordered.asSequence()
+            val cluster = ordered.asSequence()
                 .filter { it.startSample == nearestStart }
                 .map { it.cluster }
                 .distinct()
                 .singleOrNull()
+                ?: return null
+            return Edge(cluster, nearestStart)
+        }
+
+        /**
+         * The speaker for a word in no turn: both neighbours if they agree, else the nearer edge if
+         * it is within reach, else nobody. Ties go to the turn before -- the person already speaking.
+         */
+        fun gapCluster(sample: Int): Int? {
+            val before = edgeBefore(sample)
+            val after = edgeAfter(sample)
+            if (before != null && after != null && before.cluster == after.cluster) return before.cluster
+
+            val reach = (MAX_GAP_REACH_SECONDS * sampleRate).toInt()
+            val nearest = listOfNotNull(
+                before?.let { it.cluster to (sample - it.sample) },
+                after?.let { it.cluster to (it.sample - sample) },
+            ).minByOrNull { it.second } ?: return null
+            return nearest.first.takeIf { nearest.second <= reach }
         }
 
         fun flush() {
@@ -109,14 +142,12 @@ object SpeakerAlignment {
                 .map { it.cluster }
                 .distinct()
                 .toList()
-            val bracketedGapCluster = nearestClusterBefore(evidenceSample)
-                ?.takeIf { cluster -> nearestClusterAfter(evidenceSample) == cluster }
             val cluster = when {
                 candidates.size == 1 -> candidates.single()
                 currentCluster != null && currentCluster in candidates -> currentCluster
                 candidates.size > 1 -> null
                 // No turn covers it: only matching evidence on both sides can fill the gap.
-                else -> bracketedGapCluster
+                else -> gapCluster(evidenceSample)
             }
 
             if (currentWords.isNotEmpty() && cluster != currentCluster) {
@@ -136,12 +167,21 @@ object SpeakerAlignment {
     /**
      * The cluster id used when diarisation had nothing to say about a stretch of speech.
      *
-     * Only reachable when the *first* words of a recording fall outside every turn -- after that
-     * there is always a previous speaker to carry forward. Negative so it can never collide with a
-     * real cluster index, which sherpa numbers from zero.
+     * Reached by a word farther than [MAX_GAP_REACH_SECONDS] from every turn -- the opening words of
+     * a recording, or a hole diarisation left in the middle -- and by a word inside two overlapping
+     * turns with no established speaker to keep it. Negative so it can never collide with a real
+     * cluster index, which sherpa numbers from zero.
      */
     const val UNATTRIBUTED = -1
 
     /** Far enough inside a word to clear a rounded boundary, but never far enough to cross a pause. */
     private const val MAX_WORD_EVIDENCE_OFFSET_SECONDS = 0.2f
+
+    /**
+     * How far a word in a gap may be from a turn's edge and still be given that turn's speaker when
+     * the other side disagrees. The boundary scraps this exists for were all under two seconds long,
+     * so a second and a half reaches every one of them from its nearer side while leaving a genuine
+     * hole -- a stretch neither neighbour plausibly owns -- unattributed as before.
+     */
+    const val MAX_GAP_REACH_SECONDS = 1.5f
 }

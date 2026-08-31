@@ -40,6 +40,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -54,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Box
@@ -72,6 +74,7 @@ import com.example.aiagenttestapp.data.speakers.DiarizedStatus
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonOutline
 import com.example.aiagenttestapp.data.speakers.SpeakerStat
+import com.example.aiagenttestapp.data.speakers.SpeakerRepository
 import com.example.aiagenttestapp.data.speakers.SpeakerStats
 import com.example.aiagenttestapp.ui.theme.speakerAccent
 import com.example.aiagenttestapp.stt.AudioRecorder
@@ -142,6 +145,7 @@ fun DiarizeScreen(
                     onImport = { picker.launch(arrayOf("audio/*")) },
                     onStart = { viewModel.onIntent(DiarizeIntent.StartRecording) },
                     onStop = { viewModel.onIntent(DiarizeIntent.StopRecording) },
+                    onLiveCapture = { viewModel.onIntent(DiarizeIntent.SetLiveCapture(it)) },
                     onExpected = { viewModel.onIntent(DiarizeIntent.SetExpectedSpeakers(it)) },
                     onPickReference = { pendingReferencePicker.launch(ReferenceText.MIME_TYPES) },
                     onReference = { viewModel.onIntent(DiarizeIntent.AttachReference(null, it)) },
@@ -203,7 +207,7 @@ fun DiarizeScreen(
                 item(key = recording.id) {
                     RecordingRow(
                         recording = recording,
-                        speakerCount = blocks.map { it.speakerName }.distinct().size,
+                        speakerCount = blocks.map { it.speakerName }.distinct().count { !isUnattributed(it) },
                         selected = recording.id == expandedId,
                         onOpen = { expandedId = if (expandedId == recording.id) null else recording.id },
                         onDelete = { viewModel.onIntent(DiarizeIntent.Delete(recording.id)) },
@@ -214,7 +218,10 @@ fun DiarizeScreen(
                 // as its own items rather than a nested scroller -- a twenty-minute conversation is
                 // dozens of turns, and a list inside a list is the overlap this layout removes.
                 if (recording.id == expandedId) {
+                    // Words diarisation never covered are shown, but they are not a speaker: they
+                    // get no row in the roster and no place in the count. See [UnattributedRow].
                     val stats = SpeakerStats.from(blocks, AudioRecorder.SAMPLE_RATE)
+                        .filterNot { isUnattributed(it.name) }
                     val turns = DialogTurns.from(blocks)
                     // The summary is already ordered by first speech, so a speaker's position in it
                     // *is* their colour index. One ordering serves both halves of the screen, which
@@ -226,6 +233,7 @@ fun DiarizeScreen(
                             recording = recording,
                             stats = stats,
                             onRun = { viewModel.onIntent(DiarizeIntent.Run(recording.id)) },
+                            onPlayLive = { viewModel.onIntent(DiarizeIntent.PlayLive(recording.id)) },
                             onPickReference = { openReferencePicker.launch(ReferenceText.MIME_TYPES) },
                             onReference = {
                                 viewModel.onIntent(DiarizeIntent.AttachReference(recording.id, it))
@@ -236,10 +244,14 @@ fun DiarizeScreen(
                         )
                     }
                     items(turns, key = { "turn-" + it.id }) { turn ->
-                        DialogTurnRow(
-                            turn = turn,
-                            accent = speakerAccent(order.indexOf(turn.speakerName)),
-                        )
+                        if (isUnattributed(turn.speakerName)) {
+                            UnattributedRow(turn)
+                        } else {
+                            DialogTurnRow(
+                                turn = turn,
+                                accent = speakerAccent(order.indexOf(turn.speakerName)),
+                            )
+                        }
                     }
                 }
             }
@@ -253,6 +265,7 @@ private fun SourceCard(
     onImport: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    onLiveCapture: (Boolean) -> Unit,
     onExpected: (Int) -> Unit,
     onPickReference: () -> Unit,
     onReference: (String) -> Unit,
@@ -269,6 +282,26 @@ private fun SourceCard(
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
             )
+
+            // Only offered while nothing is recording: flipping it mid-take could not retroactively
+            // give the running capture a row to write into.
+            if (state.recordingMillis == null) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Label speakers while recording", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Words and speakers appear as you talk; the final transcript follows at Stop.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = state.liveCapture, onCheckedChange = onLiveCapture)
+                }
+            }
 
             state.importing?.let { importing ->
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -534,6 +567,22 @@ private fun RecordingRow(
                     color = MaterialTheme.colorScheme.error,
                 )
 
+                DiarizedStatus.Live -> {
+                    if (recording.progress > 0f) {
+                        LinearProgressIndicator(
+                            progress = { recording.progress },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    Text(
+                        "Live · provisional labels",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+
                 DiarizedStatus.Done -> Unit
             }
         }
@@ -613,6 +662,7 @@ private fun TranscriptHeader(
     recording: DiarizedRecording,
     stats: List<SpeakerStat>,
     onRun: () -> Unit,
+    onPlayLive: () -> Unit,
     onPickReference: () -> Unit,
     onReference: (String) -> Unit,
     onLanguage: (String) -> Unit,
@@ -623,7 +673,7 @@ private fun TranscriptHeader(
         // Offered even while the row says Running, which looks wrong and is the safety valve: a run
         // whose worker died leaves the row claiming to be in progress forever, and hiding the only
         // button that restarts it makes the state unrecoverable without deleting the recording.
-        run {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onRun) {
                 Icon(Icons.Default.PlayArrow, contentDescription = null, Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
@@ -631,6 +681,20 @@ private fun TranscriptHeader(
                 // or after enrolling whoever came back as "Speaker 2", is the normal thing here.
                 Text(if (hasBlocks) "Run again" else "Run")
             }
+            // The same recording fed at the speed it was spoken, with speakers and words appearing
+            // as it goes and the ordinary run replacing them at the end. A demonstration of the live
+            // path on audio whose right answer is already known, and the way to measure its latency.
+            OutlinedButton(onClick = onPlayLive, enabled = recording.status != DiarizedStatus.Live) {
+                Text(if (recording.status == DiarizedStatus.Live) "Playing live…" else "Play as live")
+            }
+        }
+        if (recording.status == DiarizedStatus.Live) {
+            Text(
+                "Live — these speakers and words are provisional. The final transcript replaces " +
+                    "them when the audio ends.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
         }
         if (!hasBlocks && recording.status == DiarizedStatus.Done) {
             Text(
@@ -733,6 +797,44 @@ private fun SpeakerStatRow(stat: SpeakerStat, accent: Color) {
             "${(stat.share * 100).toInt()}% · ${formatClock(stat.speakingMillis)} · " +
                 if (stat.turns == 1) "1 turn" else "${stat.turns} turns",
             style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** The label alignment gives words that fell in no turn -- not a person, and never shown as one. */
+private fun isUnattributed(name: String): Boolean =
+    name == "${SpeakerRepository.UNKNOWN_SPEAKER_PREFIX} ?"
+
+/**
+ * Words nobody was attributed: shown, but not as a speaker.
+ *
+ * These used to be rendered as a full turn under the header "Unknown Speaker ?", the same way as a
+ * real person's turn, and a long recording had over a hundred of them -- one for every hand-over
+ * where the recogniser heard a word between two turns. Most of those are now given to the nearer
+ * speaker by alignment; the few that remain are genuinely unplaced, and the honest presentation is
+ * text without a name: quiet, indented, unaccented, so the eye reads past it to the next real turn
+ * instead of stopping at a header for nobody. The words are still there -- hiding them would make
+ * the transcript claim less was said than was heard.
+ */
+@Composable
+private fun UnattributedRow(turn: DialogTurn) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 15.dp, end = 12.dp, top = 2.dp, bottom = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            formatClock(turn.startSample * 1000L / AudioRecorder.SAMPLE_RATE),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        Text(
+            turn.text,
+            style = MaterialTheme.typography.bodySmall,
+            fontStyle = FontStyle.Italic,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
