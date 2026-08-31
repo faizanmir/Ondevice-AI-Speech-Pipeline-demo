@@ -193,18 +193,26 @@ class DiarizeWorker @AssistedInject constructor(
                 val diarisation = async(Dispatchers.Default) {
                     // Clustering and folding both compare turns against each other, so their cost
                     // grows faster than the recording does. Chunking bounds that to whatever fits
-                    // in one chunk -- but only naming can tell the chunks apart afterwards, so this
-                    // is allowed only when there is somebody to name: an enrolled person, or a voice
-                    // a live session already followed across this recording. See [DiarizationChunks].
-                    val chunks = if (enrolledSpeakers > 0 || liveVoices.isNotEmpty()) {
+                    // in one chunk. It used to be allowed only when somebody was enrolled, because
+                    // only naming could tell the chunks apart afterwards; now the pass carries the
+                    // voices it could not name into every later chunk (see `carried` below), so a
+                    // stranger stays one speaker across chunks too, and the length is the user's
+                    // choice -- zero meaning the whole recording at once. See [DiarizationChunks].
+                    val chunkMinutes = settings.settings.value.diarizeChunkMinutes
+                    val chunks = if (chunkMinutes > 0) {
                         DiarizationChunks.plan(
                             totalSamples = compacted.samples.size,
                             sampleRate = AudioRecorder.SAMPLE_RATE,
                             spliceBoundaries = compacted.pieces.drop(1).map { it.compactedStart },
+                            targetSeconds = chunkMinutes * 60,
                         )
                     } else {
                         listOf(DiarizationChunk(0, compacted.samples.size))
                     }
+                    Log.i(
+                        TAG,
+                        "chunking: " + if (chunkMinutes > 0) "$chunkMinutes min -> ${chunks.size} chunk(s)" else "off (whole recording)",
+                    )
 
                     // How many chunks to diarise at once. sherpa's process() is one unbatched ONNX
                     // run per window, so a single chunk on all the diarise threads leaves the machine
