@@ -9,6 +9,7 @@ import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
+import androidx.room.Transaction
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
@@ -106,7 +107,14 @@ data class SpeakerWithSamples(
  * that had never been started -- and the detail pane hides its Run button while a row is running, so
  * there was no way to start one either. The bar spun forever and nothing was ever identified.
  */
-enum class DiarizedStatus { Idle, Running, Done, Failed }
+/**
+ * [Live] is a run whose transcript is being written **while the audio is still arriving** -- a file
+ * played back in real time, or a recording in progress -- and whose blocks are provisional: the live
+ * session rewrites them after every chunk, and the batch worker replaces them all when the audio
+ * ends. Stored as its name like the others, so an older build that does not know it reads it as
+ * [Failed] via the converter's fallback rather than crashing on the row.
+ */
+enum class DiarizedStatus { Idle, Running, Done, Failed, Live }
 
 /**
  * One recording put through diarisation and transcription.
@@ -384,6 +392,32 @@ interface DiarizedDao {
     @Query("SELECT * FROM diarized_recordings WHERE status = 'Running'")
     suspend fun running(): List<DiarizedRecording>
 
+    @Query("SELECT * FROM diarized_recordings WHERE status = 'Live'")
+    suspend fun live(): List<DiarizedRecording>
+
+    /**
+     * Marks a row as a live session and clears the previous run's figures, the way [beginRun] does
+     * for a batch run. The reference survives for the same reason it does there.
+     */
+    @Query(
+        """
+        UPDATE diarized_recordings
+        SET status = 'Live', progress = 0.0, error = NULL, runMillis = NULL,
+            diariseMillis = NULL, transcribeMillis = NULL,
+            coveragePercent = NULL, werPercent = NULL, speakerAccuracyPercent = NULL
+        WHERE id = :id
+        """,
+    )
+    suspend fun beginLive(id: Long)
+
+    /**
+     * The length of a recording that was created before it was finished -- a live capture's row
+     * exists from the first second so the session has somewhere to write, and learns its duration
+     * when the user stops. A non-zero duration is also how the live worker knows the capture ended.
+     */
+    @Query("UPDATE diarized_recordings SET durationMillis = :durationMillis WHERE id = :id")
+    suspend fun setDuration(id: Long, durationMillis: Long)
+
     @Query("UPDATE diarized_recordings SET status = 'Failed', error = :error WHERE id = :id")
     suspend fun fail(id: Long, error: String)
 
@@ -402,6 +436,17 @@ interface DiarizedDao {
 
     @Insert
     suspend fun insertBlocks(blocks: List<DiarizedBlock>)
+
+    /**
+     * Swaps a recording's blocks in one transaction, so an observer of [observeAllBlocks] never sees
+     * the recording empty in between. The live session does this after every chunk -- a flicker per
+     * chunk would be the whole screen blinking every thirty seconds.
+     */
+    @Transaction
+    suspend fun replaceBlocks(recordingId: Long, blocks: List<DiarizedBlock>) {
+        deleteBlocksFor(recordingId)
+        insertBlocks(blocks)
+    }
 }
 
 internal object SpeakerConverters {

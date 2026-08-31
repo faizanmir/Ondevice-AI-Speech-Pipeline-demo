@@ -40,6 +40,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -142,6 +143,7 @@ fun DiarizeScreen(
                     onImport = { picker.launch(arrayOf("audio/*")) },
                     onStart = { viewModel.onIntent(DiarizeIntent.StartRecording) },
                     onStop = { viewModel.onIntent(DiarizeIntent.StopRecording) },
+                    onLiveCapture = { viewModel.onIntent(DiarizeIntent.SetLiveCapture(it)) },
                     onExpected = { viewModel.onIntent(DiarizeIntent.SetExpectedSpeakers(it)) },
                     onPickReference = { pendingReferencePicker.launch(ReferenceText.MIME_TYPES) },
                     onReference = { viewModel.onIntent(DiarizeIntent.AttachReference(null, it)) },
@@ -226,6 +228,7 @@ fun DiarizeScreen(
                             recording = recording,
                             stats = stats,
                             onRun = { viewModel.onIntent(DiarizeIntent.Run(recording.id)) },
+                            onPlayLive = { viewModel.onIntent(DiarizeIntent.PlayLive(recording.id)) },
                             onPickReference = { openReferencePicker.launch(ReferenceText.MIME_TYPES) },
                             onReference = {
                                 viewModel.onIntent(DiarizeIntent.AttachReference(recording.id, it))
@@ -253,6 +256,7 @@ private fun SourceCard(
     onImport: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    onLiveCapture: (Boolean) -> Unit,
     onExpected: (Int) -> Unit,
     onPickReference: () -> Unit,
     onReference: (String) -> Unit,
@@ -269,6 +273,26 @@ private fun SourceCard(
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
             )
+
+            // Only offered while nothing is recording: flipping it mid-take could not retroactively
+            // give the running capture a row to write into.
+            if (state.recordingMillis == null) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Label speakers while recording", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Words and speakers appear as you talk; the final transcript follows at Stop.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = state.liveCapture, onCheckedChange = onLiveCapture)
+                }
+            }
 
             state.importing?.let { importing ->
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -534,6 +558,22 @@ private fun RecordingRow(
                     color = MaterialTheme.colorScheme.error,
                 )
 
+                DiarizedStatus.Live -> {
+                    if (recording.progress > 0f) {
+                        LinearProgressIndicator(
+                            progress = { recording.progress },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    Text(
+                        "Live · provisional labels",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+
                 DiarizedStatus.Done -> Unit
             }
         }
@@ -613,6 +653,7 @@ private fun TranscriptHeader(
     recording: DiarizedRecording,
     stats: List<SpeakerStat>,
     onRun: () -> Unit,
+    onPlayLive: () -> Unit,
     onPickReference: () -> Unit,
     onReference: (String) -> Unit,
     onLanguage: (String) -> Unit,
@@ -623,7 +664,7 @@ private fun TranscriptHeader(
         // Offered even while the row says Running, which looks wrong and is the safety valve: a run
         // whose worker died leaves the row claiming to be in progress forever, and hiding the only
         // button that restarts it makes the state unrecoverable without deleting the recording.
-        run {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onRun) {
                 Icon(Icons.Default.PlayArrow, contentDescription = null, Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
@@ -631,6 +672,20 @@ private fun TranscriptHeader(
                 // or after enrolling whoever came back as "Speaker 2", is the normal thing here.
                 Text(if (hasBlocks) "Run again" else "Run")
             }
+            // The same recording fed at the speed it was spoken, with speakers and words appearing
+            // as it goes and the ordinary run replacing them at the end. A demonstration of the live
+            // path on audio whose right answer is already known, and the way to measure its latency.
+            OutlinedButton(onClick = onPlayLive, enabled = recording.status != DiarizedStatus.Live) {
+                Text(if (recording.status == DiarizedStatus.Live) "Playing live…" else "Play as live")
+            }
+        }
+        if (recording.status == DiarizedStatus.Live) {
+            Text(
+                "Live — these speakers and words are provisional. The final transcript replaces " +
+                    "them when the audio ends.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
         }
         if (!hasBlocks && recording.status == DiarizedStatus.Done) {
             Text(

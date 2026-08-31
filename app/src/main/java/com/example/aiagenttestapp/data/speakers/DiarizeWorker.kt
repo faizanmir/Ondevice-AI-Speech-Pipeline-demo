@@ -19,6 +19,7 @@ import com.example.aiagenttestapp.data.audiomodels.AudioModelCatalog
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
 import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.notes.WavFile
+import com.example.aiagenttestapp.data.speakers.live.LiveSessionRosters
 import com.example.aiagenttestapp.stt.AudioRecorder
 import com.example.aiagenttestapp.stt.CompactedAudio
 import com.example.aiagenttestapp.stt.SpeechActivityDetector
@@ -72,6 +73,7 @@ class DiarizeWorker @AssistedInject constructor(
     private val recognizer: SpeechRecognizer,
     private val settings: SettingsStore,
     private val diarizerPool: WarmPool<SpeakerDiarizer>,
+    private val rosters: LiveSessionRosters,
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
@@ -150,6 +152,14 @@ class DiarizeWorker @AssistedInject constructor(
             // failure: it means nothing could be named, so the recording has to be clustered whole.
             val enrolledSpeakers = speakers.enrolledCount()
 
+            // Voices a live session already followed across this recording, if one ran. They are
+            // named against like enrolled people, so the final transcript keeps the session's labels
+            // instead of numbering the same stranger afresh in every chunk. See [LiveSessionRosters].
+            val liveVoices = rosters.asVoices(id)
+            if (liveVoices.isNotEmpty()) {
+                Log.i(TAG, "final pass seeded with ${liveVoices.size} live voice(s): ${liveVoices.keys.joinToString()}")
+            }
+
             // One budget rather than two independent guesses. Both branches used to size their own
             // pool from availableProcessors() and cap it at 4, which on an eight-core device asked
             // for eight ONNX threads plus the dispatcher's own pool -- measured at 590-615% of
@@ -184,8 +194,9 @@ class DiarizeWorker @AssistedInject constructor(
                     // Clustering and folding both compare turns against each other, so their cost
                     // grows faster than the recording does. Chunking bounds that to whatever fits
                     // in one chunk -- but only naming can tell the chunks apart afterwards, so this
-                    // is allowed only when there is somebody to name. See [DiarizationChunks].
-                    val chunks = if (enrolledSpeakers > 0) {
+                    // is allowed only when there is somebody to name: an enrolled person, or a voice
+                    // a live session already followed across this recording. See [DiarizationChunks].
+                    val chunks = if (enrolledSpeakers > 0 || liveVoices.isNotEmpty()) {
                         DiarizationChunks.plan(
                             totalSamples = compacted.samples.size,
                             sampleRate = AudioRecorder.SAMPLE_RATE,
@@ -230,6 +241,16 @@ class DiarizeWorker @AssistedInject constructor(
                     var nextCluster = 0
                     var placeholder = 0
                     var rawTurnCount = 0
+
+                    // Voices this run has already met and could not name, carried into the naming
+                    // of every later chunk under the number they were given. Without this a stranger
+                    // was "Unknown Speaker 1" in the first chunk and 3, 7 and 6 in the next three --
+                    // ten labels for three people on a 23-minute audit recording. Chunk-local cluster
+                    // ids cannot recognise each other, but voiceprints can: the same voice on the same
+                    // microphone matches its own earlier chunk at ~0.9, far above the enrolment bar
+                    // used for the comparison. Enrolled people need no carrying; they are matched from
+                    // enrolment in every chunk already.
+                    val carried = mutableMapOf<String, List<FloatArray>>()
                     var diariseMillis = 0L
                     var foldMillis = 0L
                     val turns = mutableListOf<DiarizedSegment>()
@@ -275,10 +296,20 @@ class DiarizeWorker @AssistedInject constructor(
                                 // placeholder counter is threaded through so the "Unknown Speaker N"
                                 // numbering stays global. See [SpeakerRepository.foldAndName].
                                 val foldStarted = System.currentTimeMillis()
-                                val attribution =
-                                    speakers.foldAndName(compacted.samples, inCompacted, placeholder)
+                                val attribution = speakers.foldAndName(
+                                    compacted.samples,
+                                    inCompacted,
+                                    placeholder,
+                                    extraVoices = liveVoices + carried,
+                                )
                                 foldMillis += System.currentTimeMillis() - foldStarted
                                 placeholder = attribution.nextPlaceholder
+                                attribution.names.forEach { (cluster, name) ->
+                                    val print = attribution.voiceprints[cluster] ?: return@forEach
+                                    if (name.startsWith(SpeakerRepository.UNKNOWN_SPEAKER_PREFIX)) {
+                                        carried[name] = carried[name].orEmpty() + listOf(print)
+                                    }
+                                }
 
                                 // Namespace the folded turns and their names by the same offset:
                                 // sherpa numbers clusters from zero in every chunk, so without this
@@ -775,10 +806,36 @@ class DiarizeWorker @AssistedInject constructor(
          * restarting itself hours later would be work nobody asked for.
          */
         suspend fun reconcile(context: Context, dao: DiarizedDao) {
+            val workManager = WorkManager.getInstance(context.applicationContext)
+
+            // A live session that died with the process. Its audio is on disk -- capture streams to
+            // the WAV as it goes -- and the batch worker is exactly the "rebuild the whole transcript"
+            // step the session would have ended with, so recovery is to run it now rather than to
+            // report a failure. Only what has no live worker behind it; a session still running is
+            // left alone.
+            for (row in dao.live()) {
+                val alive = runCatching {
+                    workManager.getWorkInfosForUniqueWorkFlow(LiveDiarizeWorker.uniqueName(row.id)).first()
+                        .any { info -> !info.state.isFinished }
+                }.getOrDefault(false)
+                if (alive) continue
+
+                val file = File(row.audioPath)
+                val samples = runCatching { WavFile.Reader(file).use { it.sampleCount } }.getOrDefault(0)
+                if (samples <= 0) {
+                    dao.fail(row.id, "The live session was interrupted before any audio was saved.")
+                    continue
+                }
+                if (row.durationMillis <= 0L) {
+                    dao.setDuration(row.id, samples * 1000L / AudioRecorder.SAMPLE_RATE)
+                }
+                dao.beginRun(row.id, row.expectedSpeakers)
+                enqueue(context, row.id)
+            }
+
             val stuck = dao.running()
             if (stuck.isEmpty()) return
 
-            val workManager = WorkManager.getInstance(context.applicationContext)
             for (row in stuck) {
                 // The Flow variant, not `getWorkInfosForUniqueWork(...).get()`. The blocking one
                 // was called from `viewModelScope`, which is the main thread: it either stalls the

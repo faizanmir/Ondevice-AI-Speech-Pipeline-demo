@@ -6,6 +6,8 @@ import com.example.aiagenttestapp.data.audiomodels.AudioModelCatalog
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
 import com.example.aiagenttestapp.stt.AudioRecorder
 import com.example.aiagenttestapp.stt.DiarizedSegment
+import com.example.aiagenttestapp.stt.SpeakerMatchDecision
+import com.example.aiagenttestapp.stt.matchSpeaker
 import com.example.aiagenttestapp.stt.SpeakerDiarizer
 import com.example.aiagenttestapp.stt.SpeakerEmbedder
 import com.example.aiagenttestapp.stt.averageEmbedding
@@ -396,76 +398,154 @@ class SpeakerRepository(
      * counter across chunks so the numbering is global even though the naming is not; a stranger who
      * appears in two chunks still fragments into two numbers, which is the known cost of chunking and
      * not a regression from the old global pass, which could not match them across chunks either.
+     *
+     * [extraVoices] closes that gap when there is something to close it with: voices a live session
+     * already tracked across this recording, labelled as it labelled them. They are matched exactly
+     * like enrolled people, so a stranger the session called "Speaker C" is "Speaker C" in every
+     * chunk of the final pass too, instead of a fresh number per chunk. Recorded on this microphone
+     * minutes ago, they match their own voice far above the enrolment bar; a different voice does not.
      */
     internal suspend fun foldAndName(
         samples: FloatArray,
         turns: List<DiarizedSegment>,
         startingPlaceholder: Int,
         minClusterSeconds: Float = MIN_CLUSTER_SECONDS,
+        extraVoices: Map<String, List<FloatArray>> = emptyMap(),
     ): ClusterAttribution = lock.withLock {
         withContext(Dispatchers.Default) {
             if (turns.isEmpty()) {
                 return@withContext ClusterAttribution(turns, emptyMap(), startingPlaceholder)
             }
-            val ready = prepareLocked()
+            val folded = foldClustersLocked(samples, turns, minClusterSeconds)
 
-            val sizes = clusterSizes(turns)
-
-            // The one embedding pass. A cluster the model cannot describe is left out of the map,
-            // which folding and naming both read as "unusable" rather than guessing at it.
-            val voiceprints = if (!ready) {
-                emptyMap()
+            val known = if (extraVoices.isEmpty()) {
+                enrolledEmbeddings
             } else {
-                sizes.keys.mapNotNull { cluster ->
-                    embedder.embed(concatenate(samples, longestTurnRanges(turns, cluster)))
-                        ?.let { cluster to it }
-                }.toMap()
+                (enrolledEmbeddings.keys + extraVoices.keys).associateWith { name ->
+                    enrolledEmbeddings[name].orEmpty() + extraVoices[name].orEmpty()
+                }
             }
-
-            val minSamples = (minClusterSeconds * AudioRecorder.SAMPLE_RATE).toInt()
-            val remap = if (voiceprints.isEmpty()) {
-                emptyMap()
-            } else {
-                smallClusterRemap(sizes, voiceprints, minSamples)
-            }
-            remap.forEach { (from, to) ->
-                Log.i(
-                    TAG,
-                    "cluster %d (%.1fs) folded into cluster %d (%.1fs) -- too small to be a speaker".format(
-                        from,
-                        sizes.getValue(from) / AudioRecorder.SAMPLE_RATE.toFloat(),
-                        to,
-                        sizes.getValue(to) / AudioRecorder.SAMPLE_RATE.toFloat(),
-                    ),
-                )
-            }
-            val folded = applyClusterRemap(turns, remap)
-
             val naming = nameClustersByVoiceprint(
-                turns = folded,
-                voiceprints = voiceprints,
-                enrolled = enrolledEmbeddings,
+                turns = folded.turns,
+                voiceprints = folded.voiceprints,
+                enrolled = known,
                 threshold = MATCH_THRESHOLD,
                 minimumMargin = MATCH_MARGIN,
                 unknownPrefix = UNKNOWN_SPEAKER_PREFIX,
                 startingPlaceholder = startingPlaceholder,
+                tieBreakable = extraVoices.keys - enrolledEmbeddings.keys,
             )
-            naming.decisions.forEach { (cluster, decision) ->
-                Log.i(
-                    TAG,
-                    "cluster %d match: best=%s %.3f, runner-up=%s %s, accepted=%s".format(
-                        cluster,
-                        decision.bestName ?: "none",
-                        decision.bestScore,
-                        decision.runnerUpName ?: "none",
-                        decision.runnerUpScore?.let { score -> "%.3f".format(score) } ?: "none",
-                        decision.acceptedName ?: "unknown",
-                    ),
-                )
-            }
+            naming.decisions.forEach { (cluster, decision) -> logDecision(cluster, decision) }
 
-            ClusterAttribution(folded, naming.names, naming.nextPlaceholder)
+            ClusterAttribution(
+                folded.turns,
+                naming.names,
+                naming.nextPlaceholder,
+                folded.voiceprints.filterKeys { it in naming.names },
+            )
         }
+    }
+
+    /**
+     * Folds fragment clusters and **describes** the survivors instead of naming them.
+     *
+     * The live pipeline's version of [foldAndName]. A batch run names each chunk against enrolment
+     * and throws the voiceprints away, because naming is all the stitching it needs. A live session
+     * has to carry speaker identity from one chunk to the next with or without enrolment, so it
+     * needs the voiceprint itself -- to match against the voices heard so far -- and the enrolment
+     * decision as evidence rather than as a verdict. Same fold, same embedding pass, same enrolment
+     * comparison; the difference is only what comes back.
+     *
+     * The placeholder counter is deliberately absent: a live session's unnamed voices are lettered by
+     * the tracker, which knows which of them are the same person across chunks. Numbering them here
+     * would restart at one in every chunk.
+     */
+    internal suspend fun profileClusters(
+        samples: FloatArray,
+        turns: List<DiarizedSegment>,
+        minClusterSeconds: Float = MIN_CLUSTER_SECONDS,
+    ): ClusterProfiles = lock.withLock {
+        withContext(Dispatchers.Default) {
+            if (turns.isEmpty()) return@withContext ClusterProfiles(turns, emptyList())
+            val folded = foldClustersLocked(samples, turns, minClusterSeconds)
+
+            val profiles = clusterSizes(folded.turns).map { (cluster, size) ->
+                val voiceprint = folded.voiceprints[cluster]
+                val decision = voiceprint?.let {
+                    matchSpeaker(it, enrolledEmbeddings, MATCH_THRESHOLD, MATCH_MARGIN)
+                }
+                decision?.let { logDecision(cluster, it) }
+                ClusterProfile(cluster, size, voiceprint, decision)
+            }
+            ClusterProfiles(folded.turns, profiles)
+        }
+    }
+
+    private class Folded(val turns: List<DiarizedSegment>, val voiceprints: Map<Int, FloatArray>)
+
+    /**
+     * The one embedding pass and the fold, shared by [foldAndName] and [profileClusters]. Must be
+     * called with [lock] held.
+     *
+     * Each cluster's voiceprint is computed once from its longest turns and handed to both the fold
+     * and whatever comes after it -- naming or profiling. Embedding is most of what the speaker
+     * branch costs on a long recording, and this used to be paid twice. A cluster the model cannot
+     * describe is left out of the map, which folding and naming both read as "unusable" rather than
+     * guessing at it.
+     */
+    private suspend fun foldClustersLocked(
+        samples: FloatArray,
+        turns: List<DiarizedSegment>,
+        minClusterSeconds: Float,
+    ): Folded {
+        val ready = prepareLocked()
+
+        val sizes = clusterSizes(turns)
+        val voiceprints = if (!ready) {
+            emptyMap()
+        } else {
+            sizes.keys.mapNotNull { cluster ->
+                embedder.embed(concatenate(samples, longestTurnRanges(turns, cluster)))
+                    ?.let { cluster to it }
+            }.toMap()
+        }
+
+        val minSamples = (minClusterSeconds * AudioRecorder.SAMPLE_RATE).toInt()
+        val remap = if (voiceprints.isEmpty()) {
+            emptyMap()
+        } else {
+            smallClusterRemap(sizes, voiceprints, minSamples)
+        }
+        remap.forEach { (from, to) ->
+            Log.i(
+                TAG,
+                "cluster %d (%.1fs) folded into cluster %d (%.1fs) -- too small to be a speaker".format(
+                    from,
+                    sizes.getValue(from) / AudioRecorder.SAMPLE_RATE.toFloat(),
+                    to,
+                    sizes.getValue(to) / AudioRecorder.SAMPLE_RATE.toFloat(),
+                ),
+            )
+        }
+        return Folded(applyClusterRemap(turns, remap), voiceprints)
+    }
+
+    /**
+     * The per-cluster match line. Kept because it is what tells a clustering collapse apart from an
+     * alignment bug in a log, and the memory note says to keep it.
+     */
+    private fun logDecision(cluster: Int, decision: SpeakerMatchDecision) {
+        Log.i(
+            TAG,
+            "cluster %d match: best=%s %.3f, runner-up=%s %s, accepted=%s".format(
+                cluster,
+                decision.bestName ?: "none",
+                decision.bestScore,
+                decision.runnerUpName ?: "none",
+                decision.runnerUpScore?.let { score -> "%.3f".format(score) } ?: "none",
+                decision.acceptedName ?: "unknown",
+            ),
+        )
     }
 
     /** A cluster's longest turns, capped at [LABEL_SAMPLE_SECONDS], in the order they were spoken. */
