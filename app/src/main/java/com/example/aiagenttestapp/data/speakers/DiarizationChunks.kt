@@ -20,6 +20,12 @@ data class DiarizationChunk(
  * audio, a 1236s one at 0.367. Scaled from the short run the long one should have taken 250s; it
  * took 454. Splitting bounds the quadratic term to whatever fits in one chunk.
  *
+ * Those figures are from before CAM++, the 0.5 window shift and XNNPACK. Re-measured on 2026-08-31
+ * on the same Xiaomi, the whole 1322s German recording diarised in 60.6s against 48.5s for four
+ * chunks on four lanes: the quadratic term is now a quarter of the time rather than most of it, and
+ * chunking earns its keep through the lanes and the fold overlap more than through the clustering
+ * bound. A recording that cannot be chunked is slower, not hopeless.
+ *
  * **Why it is only safe when everyone is enrolled.** Cluster ids are meaningless across chunks:
  * cluster 0 in the first chunk has no relationship to cluster 0 in the second, and nothing
  * downstream can discover that they are the same person. Naming is what stitches the chunks back

@@ -389,7 +389,7 @@
         <div class="head"><span class="badge">3</span><h3>XNNPACK provider</h3></div>
         <span class="where">Both branches</span>
         <span class="num"><span class="a">int8 ARM kernels</span></span>
-        <p class="why">Every model is int8; XNNPACK has the kernels for it. Big on the recogniser, only ~3% on diarisation — which was the clue for change 5. Now one provider for every sherpa model.</p>
+        <p class="why">The recogniser is int8; XNNPACK has the kernels for it. Big there, only ~3% on diarisation, whose two models are fp32 — which was the clue for change 5. int8 builds of both were measured on 31 Aug and lost: the quantised segmentation cost 2.8 points of speaker accuracy for 3 s, the quantised embedder ran 2.6× slower. Now one provider for every sherpa model.</p>
       </article>
 
       <article class="card">
