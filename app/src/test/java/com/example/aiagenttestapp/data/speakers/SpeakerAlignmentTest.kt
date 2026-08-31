@@ -124,7 +124,9 @@ class SpeakerAlignmentTest {
     }
 
     @Test
-    fun `a gap between different speakers is unattributed rather than inherited`() {
+    fun `a gap between different speakers goes to the nearer turn when it is within reach`() {
+        // "uncertain" starts 1.2 s after cluster 0 stopped and 2.8 s before cluster 1 began: it is
+        // the tail of the first person's turn, not a header for nobody.
         val words = listOf(
             word("before", 0.5f, 1f),
             word("uncertain", 4f, 5f),
@@ -134,7 +136,41 @@ class SpeakerAlignmentTest {
 
         val blocks = SpeakerAlignment.blocks(words, turns, rate)
 
+        assertEquals(listOf(0, 1), blocks.map { it.cluster })
+        assertEquals("before uncertain", blocks.first().text)
+    }
+
+    @Test
+    fun `a gap word nearer the next speaker opens their turn`() {
+        val words = listOf(word("before", 0.5f, 1f), word("well", 6.2f, 6.5f), word("after", 8f, 9f))
+        val turns = listOf(turn(0f, 3f, cluster = 0), turn(7f, 10f, cluster = 1))
+
+        val blocks = SpeakerAlignment.blocks(words, turns, rate)
+
+        assertEquals(listOf(0, 1), blocks.map { it.cluster })
+        assertEquals("well after", blocks.last().text)
+    }
+
+    @Test
+    fun `a gap word beyond reach of both turns stays unattributed`() {
+        // 2.7 s from the turn before and 3.3 s from the turn after: a genuine hole, not a boundary.
+        val words = listOf(word("before", 0.5f, 1f), word("lost", 5.5f, 6f), word("after", 10f, 11f))
+        val turns = listOf(turn(0f, 3f, cluster = 0), turn(9f, 12f, cluster = 1))
+
+        val blocks = SpeakerAlignment.blocks(words, turns, rate)
+
         assertEquals(listOf(0, SpeakerAlignment.UNATTRIBUTED, 1), blocks.map { it.cluster })
+    }
+
+    @Test
+    fun `a gap word the same distance from both sides stays with the person already speaking`() {
+        val words = listOf(word("before", 0.5f, 1f), word("hmm", 4.8f, 5f), word("after", 8f, 9f))
+        val turns = listOf(turn(0f, 4f, cluster = 0), turn(6f, 10f, cluster = 1))
+
+        val blocks = SpeakerAlignment.blocks(words, turns, rate)
+
+        assertEquals(0, blocks[0].cluster)
+        assertEquals("before hmm", blocks[0].text)
     }
 
     @Test

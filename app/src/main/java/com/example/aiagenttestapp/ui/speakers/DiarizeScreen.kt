@@ -55,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Box
@@ -73,6 +74,7 @@ import com.example.aiagenttestapp.data.speakers.DiarizedStatus
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonOutline
 import com.example.aiagenttestapp.data.speakers.SpeakerStat
+import com.example.aiagenttestapp.data.speakers.SpeakerRepository
 import com.example.aiagenttestapp.data.speakers.SpeakerStats
 import com.example.aiagenttestapp.ui.theme.speakerAccent
 import com.example.aiagenttestapp.stt.AudioRecorder
@@ -205,7 +207,7 @@ fun DiarizeScreen(
                 item(key = recording.id) {
                     RecordingRow(
                         recording = recording,
-                        speakerCount = blocks.map { it.speakerName }.distinct().size,
+                        speakerCount = blocks.map { it.speakerName }.distinct().count { !isUnattributed(it) },
                         selected = recording.id == expandedId,
                         onOpen = { expandedId = if (expandedId == recording.id) null else recording.id },
                         onDelete = { viewModel.onIntent(DiarizeIntent.Delete(recording.id)) },
@@ -216,7 +218,10 @@ fun DiarizeScreen(
                 // as its own items rather than a nested scroller -- a twenty-minute conversation is
                 // dozens of turns, and a list inside a list is the overlap this layout removes.
                 if (recording.id == expandedId) {
+                    // Words diarisation never covered are shown, but they are not a speaker: they
+                    // get no row in the roster and no place in the count. See [UnattributedRow].
                     val stats = SpeakerStats.from(blocks, AudioRecorder.SAMPLE_RATE)
+                        .filterNot { isUnattributed(it.name) }
                     val turns = DialogTurns.from(blocks)
                     // The summary is already ordered by first speech, so a speaker's position in it
                     // *is* their colour index. One ordering serves both halves of the screen, which
@@ -239,10 +244,14 @@ fun DiarizeScreen(
                         )
                     }
                     items(turns, key = { "turn-" + it.id }) { turn ->
-                        DialogTurnRow(
-                            turn = turn,
-                            accent = speakerAccent(order.indexOf(turn.speakerName)),
-                        )
+                        if (isUnattributed(turn.speakerName)) {
+                            UnattributedRow(turn)
+                        } else {
+                            DialogTurnRow(
+                                turn = turn,
+                                accent = speakerAccent(order.indexOf(turn.speakerName)),
+                            )
+                        }
                     }
                 }
             }
@@ -788,6 +797,44 @@ private fun SpeakerStatRow(stat: SpeakerStat, accent: Color) {
             "${(stat.share * 100).toInt()}% · ${formatClock(stat.speakingMillis)} · " +
                 if (stat.turns == 1) "1 turn" else "${stat.turns} turns",
             style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** The label alignment gives words that fell in no turn -- not a person, and never shown as one. */
+private fun isUnattributed(name: String): Boolean =
+    name == "${SpeakerRepository.UNKNOWN_SPEAKER_PREFIX} ?"
+
+/**
+ * Words nobody was attributed: shown, but not as a speaker.
+ *
+ * These used to be rendered as a full turn under the header "Unknown Speaker ?", the same way as a
+ * real person's turn, and a long recording had over a hundred of them -- one for every hand-over
+ * where the recogniser heard a word between two turns. Most of those are now given to the nearer
+ * speaker by alignment; the few that remain are genuinely unplaced, and the honest presentation is
+ * text without a name: quiet, indented, unaccented, so the eye reads past it to the next real turn
+ * instead of stopping at a header for nobody. The words are still there -- hiding them would make
+ * the transcript claim less was said than was heard.
+ */
+@Composable
+private fun UnattributedRow(turn: DialogTurn) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 15.dp, end = 12.dp, top = 2.dp, bottom = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            formatClock(turn.startSample * 1000L / AudioRecorder.SAMPLE_RATE),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline,
+        )
+        Text(
+            turn.text,
+            style = MaterialTheme.typography.bodySmall,
+            fontStyle = FontStyle.Italic,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }

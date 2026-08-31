@@ -527,7 +527,31 @@ class SpeakerRepository(
                 ),
             )
         }
-        return Folded(applyClusterRemap(turns, remap), voiceprints)
+        val bySize = applyClusterRemap(turns, remap)
+
+        // Second pass, by resemblance: a cluster too big to be a fragment but too small to be a
+        // participant, that sounds like a participant. See [lookalikeClusterRemap].
+        val survivors = clusterSizes(bySize)
+        val lookalike = if (voiceprints.isEmpty()) {
+            emptyMap()
+        } else {
+            lookalikeClusterRemap(survivors, voiceprints, LOOKALIKE_MAX_SHARE, LOOKALIKE_MIN_SIMILARITY)
+        }
+        lookalike.forEach { (from, to) ->
+            val total = survivors.values.sumOf { it.toLong() }.coerceAtLeast(1L)
+            Log.i(
+                TAG,
+                "cluster %d (%.1fs, %.1f%% of the speech) folded into cluster %d (%.1fs) -- sounds like it (%.3f)".format(
+                    from,
+                    survivors.getValue(from) / AudioRecorder.SAMPLE_RATE.toFloat(),
+                    survivors.getValue(from) * 100f / total,
+                    to,
+                    survivors.getValue(to) / AudioRecorder.SAMPLE_RATE.toFloat(),
+                    cosineSimilarity(voiceprints.getValue(from), voiceprints.getValue(to)),
+                ),
+            )
+        }
+        return Folded(applyClusterRemap(bySize, lookalike), voiceprints)
     }
 
     /**
@@ -678,6 +702,21 @@ class SpeakerRepository(
          * offers -- tell the pipeline how many speakers to expect.
          */
         const val MIN_CLUSTER_SECONDS = 6f
+
+        /**
+         * The second fold, by resemblance. A cluster holding under this share of the diarised speech
+         * is a candidate for folding into a major cluster it sounds like -- a phantom made of scraps
+         * of two voices, not a person. Ten per cent: a real participant in a conversation holds far
+         * more; the German benchmark's phantom held 4.5%.
+         */
+        const val LOOKALIKE_MAX_SHARE = 0.10f
+
+        /**
+         * How alike a minor cluster must be to the major one it would join: the same bar as an
+         * enrolled match, so "sounds like that person as much as their own enrolment would" is the
+         * standard. Deliberately not lower -- two same-gender voices sit at ~0.73 on the benchmark.
+         */
+        const val LOOKALIKE_MIN_SIMILARITY = 0.6f
 
         const val MATCH_THRESHOLD = 0.6f
 
