@@ -35,12 +35,17 @@ class ModelFitEvaluatorTest {
         blurb = "",
     )
 
-    private val llamaCpp = EngineDescriptor(
-        id = EngineId.LLAMA_CPP,
-        displayName = "llama.cpp",
-        vendor = "ggml",
-        supportedFormats = setOf(ModelFormat.GGUF),
-        supportedAccelerators = setOf(Accelerator.CPU),
+    /**
+     * A descriptor that can load nothing, which is the shape the catalogue and the Hub build when
+     * no registered engine can read a format. Was a real second engine (llama.cpp) until that
+     * engine was removed; the case it covers still occurs.
+     */
+    private val noEngine = EngineDescriptor(
+        id = EngineId.LITE_RT_LM,
+        displayName = "No engine",
+        vendor = "",
+        supportedFormats = emptySet(),
+        supportedAccelerators = emptySet(),
         supportsVision = false,
         blurb = "",
     )
@@ -165,9 +170,9 @@ class ModelFitEvaluatorTest {
     @Test
     fun `an engine that cannot read the format reports unsupported`() {
         val fit = ModelFitEvaluator.evaluate(
-            // A GGUF handed to LiteRT-LM.
-            model = model(params = 1.0, minRamGb = 4, format = ModelFormat.GGUF),
-            engine = liteRtLm,
+            // A model handed to the "no engine" stand-in, which supports no format at all.
+            model = model(params = 1.0, minRamGb = 4),
+            engine = noEngine,
             accelerator = Accelerator.CPU,
             device = device(totalGb = 7.4, advertisedGb = 8),
         )
@@ -177,26 +182,30 @@ class ModelFitEvaluatorTest {
     }
 
     @Test
-    fun `switching engine can change the verdict for the same model`() {
-        // The same 3B model, same phone. llama.cpp keeps every weight resident on the CPU;
-        // LiteRT-LM pushes them to the GPU. That difference is exactly what the engine picker is
-        // for, and the fit badge has to move with it or the picker is a lie.
+    fun `switching accelerator can change the verdict for the same model`() {
+        // The same 3B model, same phone, same engine. On the GPU the weights live in GPU memory;
+        // on the CPU a much larger share stays resident in RAM. That difference is exactly what the
+        // accelerator picker is for, and the fit badge has to move with it or the picker is a lie.
+        //
+        // This used to compare two engines -- LiteRT-LM on the GPU against llama.cpp on the CPU.
+        // With one engine registered the comparison moved to the accelerator, which is the axis
+        // that still varies and the one ParamBudget.weightResidency is now keyed on alone.
         val device = device(totalGb = 5.5, advertisedGb = 6)
 
-        val onLiteRtGpu = ModelFitEvaluator.evaluate(
+        val onGpu = ModelFitEvaluator.evaluate(
             model = model(params = 3.0, minRamGb = 6),
             engine = liteRtLm,
             accelerator = Accelerator.GPU,
             device = device,
         )
-        val onLlamaCpu = ModelFitEvaluator.evaluate(
-            model = model(params = 3.0, minRamGb = 6, format = ModelFormat.GGUF),
-            engine = llamaCpp,
+        val onCpu = ModelFitEvaluator.evaluate(
+            model = model(params = 3.0, minRamGb = 6),
+            engine = liteRtLm,
             accelerator = Accelerator.CPU,
             device = device,
         )
 
-        assertTrue(onLiteRtGpu.estimatedPeakRamBytes < onLlamaCpu.estimatedPeakRamBytes)
+        assertTrue(onGpu.estimatedPeakRamBytes < onCpu.estimatedPeakRamBytes)
     }
 
     @Test

@@ -184,7 +184,15 @@ class SpeakerAlignmentTest {
 
         val blocks = SpeakerAlignment.blocks(words, turns, rate)
 
-        assertEquals(0, blocks.single().cluster)
+        // The nested one-second turn is a backchannel nobody transcribed, and now stands in the
+        // transcript as a marker -- so this asks about the spoken word rather than counting blocks.
+        // What it protects is unchanged: the word after the gap belongs to the speaker either side
+        // of it, not to the voice that interjected inside the earlier turn.
+        assertEquals(0, blocks.single { it.text == "bridged" }.cluster)
+        assertEquals(
+            SpeakerAlignment.BACKCHANNEL_MARKER,
+            blocks.single { it.cluster == 1 }.text,
+        )
     }
 
     @Test

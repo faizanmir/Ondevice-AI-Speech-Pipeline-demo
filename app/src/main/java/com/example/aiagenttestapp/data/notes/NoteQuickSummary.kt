@@ -2,7 +2,7 @@ package com.example.aiagenttestapp.data.notes
 
 import com.example.aiagenttestapp.data.audit.AuditResultType
 import com.example.aiagenttestapp.data.audit.QuickRead
-import com.example.aiagenttestapp.functions.MarkerKind
+import com.example.aiagenttestapp.stt.MarkerKind
 
 /**
  * Renders a [QuickRead.Result] as a note.

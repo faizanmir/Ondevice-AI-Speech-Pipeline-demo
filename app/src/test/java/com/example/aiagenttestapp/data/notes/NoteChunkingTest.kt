@@ -1,6 +1,7 @@
 package com.example.aiagenttestapp.data.notes
 
 import com.example.aiagenttestapp.prompts.NotePromptBudget
+import com.example.aiagenttestapp.stt.MarkerKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -98,7 +99,7 @@ class NoteChunkingTest {
         val withTags = NotePromptBudget.fixedPromptTokens(
             tagged = listOf(
                 TaggedItem(
-                    kind = com.example.aiagenttestapp.functions.MarkerKind.NonConformity,
+                    kind = com.example.aiagenttestapp.stt.MarkerKind.NonConformity,
                     text = "The door seal on chamber four is split along its lower edge.",
                 ),
             ),

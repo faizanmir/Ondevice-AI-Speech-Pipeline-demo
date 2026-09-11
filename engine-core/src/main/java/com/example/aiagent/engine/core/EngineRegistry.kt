@@ -48,8 +48,12 @@ class EngineRegistry(private val engines: List<InferenceEngine>) {
 
     /**
      * The engine the app should use for [model] absent an explicit user choice: the first
-     * registered engine that can load the format. Null when the format has no usable engine --
-     * which happens when llama.cpp was excluded from the build and the model is GGUF.
+     * registered engine that can load the format *and reports itself usable on this device*.
+     *
+     * Null when there is no such engine. That used to mean a GGUF model in a build with llama.cpp
+     * excluded; with one engine and one format left it means the device itself cannot run it --
+     * [availability] returned something other than [EngineAvailability.Available]. Still a real
+     * outcome, and still one the caller has to render.
      */
     fun defaultFor(model: ModelSpec): InferenceEngine? = availableFor(model.format).firstOrNull()
 }

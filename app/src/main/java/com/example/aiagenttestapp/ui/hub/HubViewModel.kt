@@ -10,13 +10,13 @@ import com.example.aiagent.engine.core.ModelFit
 import com.example.aiagent.engine.core.ModelFitEvaluator
 import com.example.aiagent.engine.core.ModelFormat
 import com.example.aiagent.engine.core.ModelSpec
-import com.example.aiagenttestapp.data.HfModelFile
-import com.example.aiagenttestapp.data.HfPagingSource
-import com.example.aiagenttestapp.data.HfRef
-import com.example.aiagenttestapp.data.HfRepo
-import com.example.aiagenttestapp.data.HfRepoDetail
-import com.example.aiagenttestapp.data.parseHuggingFaceRef
-import com.example.aiagenttestapp.data.toModelSpec
+import com.example.aiagent.llm.HfModelFile
+import com.example.aiagent.llm.HfPagingSource
+import com.example.aiagent.llm.HfRef
+import com.example.aiagent.llm.HfRepo
+import com.example.aiagent.llm.HfRepoDetail
+import com.example.aiagent.llm.parseHuggingFaceRef
+import com.example.aiagent.llm.toModelSpec
 import com.example.aiagenttestapp.ui.mvi.MviViewModel
 import com.example.aiagenttestapp.ui.mvi.UiIntent
 import com.example.aiagenttestapp.ui.mvi.UiState
@@ -32,9 +32,9 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import com.example.aiagent.engine.core.DeviceMemoryProfile
 import com.example.aiagent.engine.core.EngineRegistry
-import com.example.aiagenttestapp.data.CustomModelStore
-import com.example.aiagenttestapp.data.HuggingFaceAuth
-import com.example.aiagenttestapp.data.HuggingFaceClient
+import com.example.aiagent.llm.CustomModelStore
+import com.example.aiagent.llm.HuggingFaceAuth
+import com.example.aiagent.llm.HuggingFaceClient
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 
@@ -48,7 +48,6 @@ data class HubFile(
 
 data class HubUiState(
     val query: String = "",
-    val format: ModelFormat = ModelFormat.GGUF,
     val error: String? = null,
 
     /** The repo whose files are expanded, if any. */
@@ -65,7 +64,6 @@ data class HubUiState(
 
 sealed interface HubIntent : UiIntent {
     data class QueryChanged(val query: String) : HubIntent
-    data class FormatChanged(val format: ModelFormat) : HubIntent
     /** Opens the repo a pasted HuggingFace link or `owner/repo` id names, bypassing search. */
     data object OpenPastedRef : HubIntent
     /** Expands a repo, or collapses it when it is already the open one. */
@@ -84,13 +82,16 @@ class HubViewModel @Inject constructor(
 ) : MviViewModel<HubUiState, HubIntent, Nothing>(HubUiState()) {
 
     private val queryFlow = MutableStateFlow("")
-    private val formatFlow = MutableStateFlow(ModelFormat.GGUF)
 
     /**
-     * The paged repo list for the current query and format. `flatMapLatest` swaps in a fresh pager
-     * when either changes; each pager follows the Hub's `Link` cursor page by page, so the whole
-     * matching set is reachable by scrolling rather than the fixed first-30 the old search returned.
-     * A pasted link or id yields an empty page, since it is opened directly instead of searched.
+     * The paged repo list for the current query. `flatMapLatest` swaps in a fresh pager when it
+     * changes; each pager follows the Hub's `Link` cursor page by page, so the whole matching set is
+     * reachable by scrolling rather than the fixed first-30 the old search returned. A pasted link
+     * or id yields an empty page, since it is opened directly instead of searched.
+     *
+     * There used to be a format alongside the query, and a pair of filter chips to pick it. GGUF was
+     * one of them; with llama.cpp gone [ModelFormat.LITERTLM] is the only value left, so the chips
+     * and the flow they drove are gone and the format is stated here.
      *
      * The one thing on this screen that is NOT part of [HubUiState], deliberately. `PagingData` is a
      * stream of page loads that Paging itself owns -- `collectAsLazyPagingItems` keeps the load
@@ -100,14 +101,14 @@ class HubViewModel @Inject constructor(
      */
     @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
     val repos: Flow<PagingData<HfRepo>> =
-        combine(queryFlow.debounce(SEARCH_DEBOUNCE_MS), formatFlow) { q, f -> q to f }
+        queryFlow.debounce(SEARCH_DEBOUNCE_MS)
             .distinctUntilChanged()
-            .flatMapLatest { (query, format) ->
+            .flatMapLatest { query ->
                 if (parseHuggingFaceRef(query) != null) {
                     flowOf(PagingData.empty())
                 } else {
                     Pager(PagingConfig(pageSize = PAGE_SIZE, enablePlaceholders = false)) {
-                        HfPagingSource(huggingFace, query, format)
+                        HfPagingSource(huggingFace, query, ModelFormat.LITERTLM)
                     }.flow
                 }
             }
@@ -119,7 +120,6 @@ class HubViewModel @Inject constructor(
 
     override fun reduce(intent: HubIntent) = when (intent) {
         is HubIntent.QueryChanged -> onQueryChange(intent.query)
-        is HubIntent.FormatChanged -> onFormatChange(intent.format)
         HubIntent.OpenPastedRef -> openPastedRef()
         is HubIntent.OpenRepo -> openRepo(intent.repo)
         is HubIntent.AddFile -> add(intent.file)
@@ -132,11 +132,6 @@ class HubViewModel @Inject constructor(
         setState {
             copy(query = query, pastedRef = parseHuggingFaceRef(query), pastedRepo = null)
         }
-    }
-
-    private fun onFormatChange(format: ModelFormat) {
-        formatFlow.value = format
-        setState { copy(format = format, openRepo = null, openRepoFiles = emptyList()) }
     }
 
     /**
@@ -212,7 +207,7 @@ class HubViewModel @Inject constructor(
      *
      * The engine is chosen by file format, and the fit falls through to the computed RAM formula
      * because a community model carries no curated tier. This is the payoff of that design: an
-     * arbitrary GGUF off the Hub gets the same green/amber/red verdict as a curated one, with no
+     * arbitrary bundle off the Hub gets the same green/amber/red verdict as a curated one, with no
      * special-casing.
      */
     private fun HfRepoDetail.toHubFile(file: HfModelFile): HubFile {
@@ -267,9 +262,13 @@ class HubViewModel @Inject constructor(
         /** Results per page. Bigger than the old fixed 30, and more pages load as the user scrolls. */
         const val PAGE_SIZE = 50
 
-        /** Stands in when no compiled-in engine can read the format, so the verdict is UNSUPPORTED. */
+        /**
+         * Stands in when no registered engine can read the format, so the verdict is UNSUPPORTED.
+         * The id is inert here -- the empty `supportedFormats` decides the verdict before anything
+         * reads it.
+         */
         val NO_ENGINE = EngineDescriptor(
-            id = com.example.aiagent.engine.core.EngineId.LLAMA_CPP,
+            id = com.example.aiagent.engine.core.EngineId.LITE_RT_LM,
             displayName = "No engine",
             vendor = "",
             supportedFormats = emptySet(),

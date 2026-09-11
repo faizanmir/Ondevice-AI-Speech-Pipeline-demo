@@ -94,7 +94,7 @@ fun SpeakerReportScreen(
         },
     ) { padding ->
         when {
-            !state.loaded -> Centred(padding) { ScoringInProgress("Opening…") }
+            !state.loaded -> Centred(padding) { WorkingPulse("Opening…") }
 
             recording == null -> Centred(padding) {
                 Text("This recording has been deleted.", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -109,7 +109,7 @@ fun SpeakerReportScreen(
             }
 
             comparison == null -> Centred(padding) {
-                ScoringInProgress("Scoring against the reference…")
+                WorkingPulse("Scoring against the reference…")
             }
 
             else -> Column(
@@ -137,7 +137,7 @@ fun SpeakerReportScreen(
  * reading a transcript back and scoring it word by word -- so it can look like that.
  */
 @Composable
-private fun ScoringInProgress(label: String) {
+internal fun WorkingPulse(label: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
         val transition = rememberInfiniteTransition(label = "scoring")
         // Uneven resting heights so the row reads as a waveform even mid-pulse.

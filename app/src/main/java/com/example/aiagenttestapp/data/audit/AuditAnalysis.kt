@@ -380,13 +380,14 @@ data class AuditAnalysis(
 /**
  * How much prompt an engine can afford, which is decided by whether it reuses a shared prefix.
  *
- * [RICH] is for engines that diff an incoming prompt against what they last decoded (llama.cpp does
- * this in nativeIngestPrompt): the preamble is decoded once and reused across chunks, so paying for
- * worked examples costs little *time* and buys recall.
+ * [RICH] was for engines that diff an incoming prompt against what they last decoded -- llama.cpp
+ * did this, so its preamble was decoded once and reused across chunks, and paying for worked
+ * examples cost little *time* and bought recall. No engine here works that way any more, so nothing
+ * selects it; see [forEngine] for why it is nonetheless still here.
  *
  * [LEAN] is for engines with no such reuse (LiteRT-LM 0.14 has no session fork, and rebuilds the
  * conversation on reset). There the preamble is re-prefilled on every chunk, so it is the most
- * expensive text in the pipeline and carries one worked example instead of three.
+ * expensive text in the pipeline and carries one worked example instead of three. Every run uses it.
  *
  * What prefix reuse does NOT buy either profile is *space*: [AuditQueue] reserves the preamble out
  * of the context window for every chunk whether or not it will be re-decoded, so every token here
@@ -402,8 +403,18 @@ enum class AuditPromptProfile {
     val label: String get() = name.lowercase()
 
     companion object {
-        fun forEngine(engineId: EngineId): AuditPromptProfile =
-            if (engineId == EngineId.LLAMA_CPP) RICH else LEAN
+        /**
+         * Always [LEAN] now. [RICH] was chosen for exactly one engine -- llama.cpp, which diffed an
+         * incoming prompt against what it last decoded -- and that engine is gone.
+         *
+         * [RICH] itself is deliberately kept. It is no longer a profile any run uses, but it is
+         * still the size the chunk budget reserves against: [AuditQueue] pins chunk sizes at enqueue
+         * time, before the engine is known, and measures them against the larger preamble on
+         * purpose. Deleting it would shrink that reservation, which would change chunk sizes -- and
+         * chunk boundaries are what every per-chunk checkpoint in `audit.db` is keyed to.
+         */
+        @Suppress("UNUSED_PARAMETER")
+        fun forEngine(engineId: EngineId): AuditPromptProfile = LEAN
     }
 }
 

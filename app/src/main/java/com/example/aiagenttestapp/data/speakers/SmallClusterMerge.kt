@@ -49,10 +49,22 @@ import com.example.aiagenttestapp.stt.cosineSimilarity
  * folded, and able to receive fragments that sound like them -- because a recognised voice is a
  * stronger fact about a cluster than its length.
  *
+ * ## A fragment that fits nobody stays nobody's
+ * pyannote's step -- and the first version of this one -- folds every fragment into the *nearest*
+ * large cluster however far away that is. Traced on the bbg audit recording, that forced merges at
+ * cosine 0.23, 0.26, 0.28, 0.41 and 0.43: half-second blips -- a breath, a chair, an "Hm" -- that
+ * sound like no one, given to whoever happened to be least unlike them, and so printed under a
+ * person's name. Now a fragment is folded only when it sounds like a speaker at least as much as
+ * naming would require ([minSimilarity]); otherwise it is mapped to [unattributed], a cluster no
+ * one is named for, and its words reach the reader as grey, nameless text in the transcript and as
+ * bare words in the exported file. That is the honest presentation: the words were heard, and
+ * nobody can say by whom. Same for a fragment the embedder could not describe at all -- it used to
+ * survive as its own cluster and be minted a placeholder speaker mid-sentence.
  * @param sizes total speech, in samples, held by each cluster.
- * @param centroids one voiceprint per cluster. A cluster the embedder could not describe is absent,
- *   and is left alone rather than guessed at.
+ * @param centroids one voiceprint per cluster; a cluster the embedder could not describe is absent.
  * @param protectedClusters clusters that are speakers however short, because their voice is known.
+ * @param minSimilarity how alike a fragment and a speaker must sound before the fragment is folded in.
+ * @param unattributed the cluster id fragments that fit nobody are sent to ([SpeakerAlignment.UNATTRIBUTED]).
  * @return the clusters to rewrite, as old id to new id. Empty when nothing should move.
  */
 internal fun smallClusterRemap(
@@ -60,21 +72,24 @@ internal fun smallClusterRemap(
     centroids: Map<Int, FloatArray>,
     minClusterSamples: Int,
     protectedClusters: Set<Int> = emptySet(),
+    minSimilarity: Float,
+    unattributed: Int,
 ): Map<Int, Int> {
-    val small = sizes.filter { it.value < minClusterSamples && it.key !in protectedClusters }.keys
-    val large = sizes.keys - small
+    val small = sizes.filter { it.value < minClusterSamples && it.key !in protectedClusters && it.key != unattributed }.keys
+    val large = sizes.keys - small - unattributed
     // Nothing to move, or nothing to move it into. A recording that is *all* fragments is one the
     // diariser failed on outright, and inventing a winner among them would not make it right.
     if (small.isEmpty() || large.isEmpty()) return emptyMap()
 
-    return small.mapNotNull { from ->
-        val source = centroids[from] ?: return@mapNotNull null
-        val nearest = large
+    return small.associateWith { from ->
+        val source = centroids[from] ?: return@associateWith unattributed
+        val best = large
             .filter { centroids[it] != null }
-            .maxByOrNull { cosineSimilarity(source, centroids.getValue(it)) }
-            ?: return@mapNotNull null
-        from to nearest
-    }.toMap()
+            .map { it to cosineSimilarity(source, centroids.getValue(it)) }
+            .maxByOrNull { it.second }
+            ?: return@associateWith unattributed
+        if (best.second >= minSimilarity) best.first else unattributed
+    }
 }
 
 /**

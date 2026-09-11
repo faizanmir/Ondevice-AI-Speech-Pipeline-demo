@@ -15,9 +15,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import javax.inject.Inject
 import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagent.engine.core.EngineRegistry
-import com.example.aiagenttestapp.data.HuggingFaceAuth
-import com.example.aiagenttestapp.data.ModelDirectory
-import com.example.aiagenttestapp.data.ModelRepository
+import com.example.aiagent.llm.HuggingFaceAuth
+import com.example.aiagent.llm.ModelDirectory
+import com.example.aiagent.llm.ModelRepository
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
 import com.example.aiagenttestapp.stt.SpeechModelRepository
 import dagger.hilt.android.AndroidEntryPoint
@@ -39,6 +39,9 @@ import com.example.aiagenttestapp.ui.speakers.DiarizeViewModel
 import com.example.aiagenttestapp.ui.speakers.SpeakerReportIntent
 import com.example.aiagenttestapp.ui.speakers.SpeakerReportScreen
 import com.example.aiagenttestapp.ui.speakers.SpeakerReportViewModel
+import com.example.aiagenttestapp.ui.speakers.TranscriptTextIntent
+import com.example.aiagenttestapp.ui.speakers.TranscriptTextScreen
+import com.example.aiagenttestapp.ui.speakers.TranscriptTextViewModel
 import com.example.aiagenttestapp.ui.speakers.SpeakersScreen
 import com.example.aiagenttestapp.ui.speakers.SpeakersViewModel
 import com.example.aiagenttestapp.ui.audit.AuditViewModel
@@ -182,6 +185,11 @@ private object Routes {
     const val SPEAKER_REPORT = "speakerReport?recordingId={recordingId}"
 
     fun speakerReport(recordingId: Long) = "speakerReport?recordingId=$recordingId"
+
+    /** The exported transcript file as text, viewable and shareable from the app. */
+    const val TRANSCRIPT_FILE = "transcriptFile?recordingId={recordingId}"
+
+    fun transcriptFile(recordingId: Long) = "transcriptFile?recordingId=$recordingId"
 
     const val HISTORY = "history"
 }
@@ -398,6 +406,7 @@ private fun AppNavHost(
                 onOpenSpeakers = { navController.navigate(Routes.SPEAKERS) },
                 onOpenModels = { navController.navigate(Routes.CATALOG) },
                 onOpenReport = { recordingId -> navController.navigate(Routes.speakerReport(recordingId)) },
+                onOpenTranscriptFile = { recordingId -> navController.navigate(Routes.transcriptFile(recordingId)) },
                 onBack = { navController.popBackStack() },
             )
         }
@@ -411,6 +420,19 @@ private fun AppNavHost(
             LaunchedEffect(recordingId) { reportViewModel.onIntent(SpeakerReportIntent.Load(recordingId)) }
             SpeakerReportScreen(
                 viewModel = reportViewModel,
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(
+            route = Routes.TRANSCRIPT_FILE,
+            arguments = listOf(navArgument("recordingId") { type = NavType.LongType }),
+        ) { backStackEntry ->
+            val recordingId = backStackEntry.arguments?.getLong("recordingId") ?: -1L
+            val textViewModel: TranscriptTextViewModel = hiltViewModel()
+            LaunchedEffect(recordingId) { textViewModel.onIntent(TranscriptTextIntent.Load(recordingId)) }
+            TranscriptTextScreen(
+                viewModel = textViewModel,
                 onBack = { navController.popBackStack() },
             )
         }

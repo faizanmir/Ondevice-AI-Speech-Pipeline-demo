@@ -112,9 +112,9 @@ object ModelCatalog {
         // accepting the licence on huggingface.co is instant -- no waiting for a human to approve.
 
         /**
-         * Google's own FunctionGemma, as opposed to the community GGUF rebuild further down.
+         * Google's own FunctionGemma.
          *
-         * Same lineage, but this is the LiteRT-LM build Google ships to phones, and it is the
+         * This is the LiteRT-LM build Google ships to phones, and it is the
          * `mobile-actions` fine-tune -- trained on exactly this kind of task, driving a phone UI.
          * It is the better of the two if the user is willing to sign in.
          */
@@ -156,118 +156,6 @@ object ModelCatalog {
                 "everyday chat model that will run on a mid-range phone.",
             requiresAuth = true,
         ),
-
-        // ---- GGUF (llama.cpp) -- CPU only, but the widest catalogue anywhere ------------------
-
-        /**
-         * The exception to the tool-calling size floor, and the reason app functions are
-         * usable on a cheap phone at all.
-         *
-         * FunctionGemma is a separate model, not a mode of Gemma: a 270M checkpoint Google
-         * fine-tuned specifically to emit function calls. It is a poor conversationalist -- do not
-         * ask it to write an essay -- but at 278 MB it will run on anything, and it does the one
-         * thing it was built for far better than models ten times its size.
-         *
-         * Google's own repositories for it are HuggingFace-gated; this is an ungated community
-         * rebuild of the same weights, which is the only reason it can be in a no-sign-in catalogue.
-         *
-         * Q8 rather than Q4 on purpose. Quantisation error is proportionally far more damaging to a
-         * 270M model, and the whole value here is emitting *exactly* the right JSON -- the 100 MB
-         * saved by going to 4-bit is not worth trading that away.
-         */
-        ModelSpec(
-            id = "functiongemma-270m-gguf",
-            name = "FunctionGemma 270M",
-            vendor = "Google (community build)",
-            paramsBillions = 0.268,
-            quantization = Quantization.Q8,
-            format = ModelFormat.GGUF,
-            downloadUrl = "$HF/unsloth/functiongemma-270m-it-GGUF/resolve/main/functiongemma-270m-it-Q8_0.gguf?download=true",
-            fileName = "functiongemma-270m-it-Q8_0.gguf",
-            sizeBytes = 291_558_624L,
-            contextTokens = 4096,
-            minDeviceMemoryGb = 3,
-            accelerators = setOf(Accelerator.CPU),
-            license = "Gemma Terms of Use",
-            description = "Built for one job: controlling apps. Tiny, runs on any phone, and the " +
-                "most reliable model here at app functions -- but it is not a chat model, so " +
-                "expect little from ordinary conversation.",
-            supportsToolCalling = true,
-        ),
-
-        ModelSpec(
-            id = "qwen2.5-0.5b-instruct-gguf",
-            name = "Qwen 2.5 0.5B",
-            vendor = "Alibaba",
-            paramsBillions = 0.5,
-            quantization = Quantization.Q4,
-            format = ModelFormat.GGUF,
-            downloadUrl = "$HF/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf?download=true",
-            fileName = "qwen2.5-0.5b-instruct-q4_k_m.gguf",
-            sizeBytes = 491_400_032L,
-            contextTokens = 4096,
-            minDeviceMemoryGb = 4,
-            accelerators = setOf(Accelerator.CPU),
-            license = "Apache-2.0",
-            description = "Tiny and quick. Good for summarising and rewriting; it will struggle " +
-                "with anything that needs real reasoning.",
-        ),
-
-        ModelSpec(
-            id = "smollm2-360m-instruct-gguf",
-            name = "SmolLM2 360M",
-            vendor = "HuggingFace",
-            paramsBillions = 0.36,
-            quantization = Quantization.Q8,
-            format = ModelFormat.GGUF,
-            downloadUrl = "$HF/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf?download=true",
-            fileName = "smollm2-360m-instruct-q8_0.gguf",
-            sizeBytes = 386_404_992L,
-            contextTokens = 2048,
-            minDeviceMemoryGb = 3,
-            accelerators = setOf(Accelerator.CPU),
-            license = "Apache-2.0",
-            description = "About as small as a useful chat model gets. Runs on almost anything, " +
-                "including phones that cannot load anything else here.",
-        ),
-
-        ModelSpec(
-            id = "llama-3.2-1b-instruct-gguf",
-            name = "Llama 3.2 1B",
-            vendor = "Meta (community build)",
-            paramsBillions = 1.24,
-            quantization = Quantization.Q4,
-            format = ModelFormat.GGUF,
-            // Meta's own repo is gated; this community requant of the same weights is not.
-            downloadUrl = "$HF/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf?download=true",
-            fileName = "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
-            sizeBytes = 807_694_464L,
-            contextTokens = 4096,
-            minDeviceMemoryGb = 4,
-            accelerators = setOf(Accelerator.CPU),
-            license = "Llama 3.2 Community License",
-            description = "Meta's small Llama. Conversational and well-behaved. Reached here " +
-                "through a community rebuild, because Meta's own repository requires sign-in.",
-        ),
-
-        ModelSpec(
-            id = "qwen2.5-3b-instruct-gguf",
-            name = "Qwen 2.5 3B",
-            vendor = "Alibaba",
-            paramsBillions = 3.09,
-            quantization = Quantization.Q4,
-            format = ModelFormat.GGUF,
-            downloadUrl = "$HF/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf?download=true",
-            fileName = "qwen2.5-3b-instruct-q4_k_m.gguf",
-            sizeBytes = 2_104_932_768L,
-            contextTokens = 4096,
-            minDeviceMemoryGb = 8,
-            accelerators = setOf(Accelerator.CPU),
-            license = "Qwen Research License",
-            description = "The largest model here that still runs at a readable speed on the CPU. " +
-                "Clearly sharper than the 1.5B models.",
-        ),
-
     )
 
     fun byId(id: String): ModelSpec? = builtIn.firstOrNull { it.id == id }

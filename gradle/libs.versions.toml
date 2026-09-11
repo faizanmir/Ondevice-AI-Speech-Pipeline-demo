@@ -52,6 +52,13 @@ startup = "1.2.0"
 markdownRenderer = "0.35.0"
 # Speech-to-text. Resolved from GitHub releases via the ivy repo in settings.gradle.kts.
 sherpaOnnx = "1.13.6"
+# The ONNX Runtime Java API, used by exactly one thing: PyannoteSegmenter, which runs the
+# segmentation model itself instead of through sherpa. sherpa's bindings expose only the sealed
+# OfflineSpeakerDiarization, which computes pyannote's per-frame posteriors and discards them --
+# and those posteriors are what overlap detection and frame-mass word attribution are built on.
+# This is a second ORT in the process (sherpa's static-link build has its own inside its .so);
+# they are separate runtimes with separate .so names, so nothing collides.
+onnxruntime = "1.27.0"
 # bzip2 + tar, for one job: sherpa-onnx publishes its keyword-spotting models only as .tar.bz2 on
 # GitHub releases, with no per-file mirror, and the Android runtime has neither codec.
 commonsCompress = "1.27.1"
@@ -102,6 +109,7 @@ markdown-renderer-m3 = { group = "com.mikepenz", name = "multiplatform-markdown-
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
 commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "commonsCompress" }
 
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }

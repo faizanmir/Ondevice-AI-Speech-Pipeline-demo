@@ -17,6 +17,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.example.aiagenttestapp.data.audiomodels.AudioModelCatalog
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
+import com.example.aiagenttestapp.stt.DiarizationEngine
 import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.notes.WavFile
 import com.example.aiagenttestapp.data.speakers.live.LiveSessionRosters
@@ -25,6 +26,8 @@ import com.example.aiagenttestapp.stt.CompactedAudio
 import com.example.aiagenttestapp.stt.SpeechActivityDetector
 import com.example.aiagenttestapp.stt.SpeechRegions
 import com.example.aiagenttestapp.stt.DiarizedSegment
+import com.example.aiagenttestapp.stt.FrameConfidence
+import com.example.aiagenttestapp.stt.OverlapDetector
 import com.example.aiagenttestapp.stt.SpeakerDiarizer
 import com.example.aiagenttestapp.stt.SpeechEngineKind
 import com.example.aiagenttestapp.stt.SpeechModelRepository
@@ -263,11 +266,18 @@ class DiarizeWorker @AssistedInject constructor(
                     var foldMillis = 0L
                     val turns = mutableListOf<DiarizedSegment>()
                     val names = mutableMapOf<Int, String>()
+                    // Built as chunks arrive, read once at the end -- declared out here with the
+                    // other accumulators because the coroutineScope below closes before Diarised.
+                    var confidence: FrameConfidence.Builder? = null
+                    val overlaps = mutableListOf<IntRange>()
+                    // Every surviving cluster's voiceprint, namespaced like the turns, for the
+                    // boundary pass that runs once the words are known.
+                    val voiceprints = mutableMapOf<Int, FloatArray>()
 
                     val diariseStarted = System.currentTimeMillis()
                     coroutineScope {
                         val diarisedChunks =
-                            Channel<Pair<Int, List<DiarizedSegment>>>(Channel.UNLIMITED)
+                            Channel<Pair<Int, DiarizedChunk>>(Channel.UNLIMITED)
                         launch {
                             try {
                                 diarizeChunks(
@@ -281,6 +291,8 @@ class DiarizeWorker @AssistedInject constructor(
                                     diariseThreads = threads.diarise,
                                     provider = provider,
                                     lanes = lanes,
+                                    engine = settings.settings.value.diarizationEngine,
+                                    embeddingModelId = bundle.embeddingModelId,
                                 ) { index, chunkTurns -> diarisedChunks.send(index to chunkTurns) }
                             } finally {
                                 // In the finally so a lane failure still closes the channel: the
@@ -291,11 +303,43 @@ class DiarizeWorker @AssistedInject constructor(
                             }
                         }
 
-                        val inOrder = InOrderChunks<List<DiarizedSegment>>()
+                        val inOrder = InOrderChunks<DiarizedChunk>()
                         for ((index, arrived) in diarisedChunks) {
-                            for (inCompacted in inOrder.offer(index, arrived)) {
+                            for (diarizedChunk in inOrder.offer(index, arrived)) {
                                 ensureActive()
+                                val inCompacted = diarizedChunk.turns
                                 rawTurnCount += inCompacted.size
+
+                                // Scatter this chunk's frame weights into recording time before its
+                                // turns are folded and renumbered. The weights carry no cluster ids,
+                                // so none of what follows can invalidate them -- only the timeline
+                                // matters, and the timeline is settled here.
+                                if (diarizedChunk.samplesPerFrame > 0) {
+                                    if (confidence == null) {
+                                        confidence = FrameConfidence.Builder(
+                                            totalSamples = samples.size,
+                                            samplesPerFrame = diarizedChunk.samplesPerFrame,
+                                        )
+                                    }
+                                    val perFrame = diarizedChunk.samplesPerFrame
+                                    val chunkStart = diarizedChunk.chunk.startSample
+                                    diarizedChunk.frameWeights.forEachIndexed { frame, weight ->
+                                        val inCompactedSample = chunkStart + frame * perFrame
+                                        confidence?.put(compacted.toOriginal(inCompactedSample), weight)
+                                    }
+                                }
+
+                                // Overlap regions take the same route, and for the same reason: they
+                                // are spans of time with no cluster attached, so nothing downstream
+                                // can invalidate them once the timeline is right.
+                                val rate = AudioRecorder.SAMPLE_RATE
+                                diarizedChunk.overlaps.forEach { region ->
+                                    val from = diarizedChunk.chunk.startSample +
+                                        (region.startSec * rate).toInt()
+                                    val to = diarizedChunk.chunk.startSample +
+                                        (region.endSec * rate).toInt()
+                                    overlaps += compacted.toOriginal(from)..compacted.toOriginal(to)
+                                }
 
                                 // Fold fragments and name the survivors in one pass over one set of
                                 // voiceprints -- naming no longer re-embeds what folding already
@@ -309,6 +353,18 @@ class DiarizeWorker @AssistedInject constructor(
                                     inCompacted,
                                     placeholder,
                                     extraVoices = liveVoices + carried,
+                                    // The frame engine already folded on this rule, on better
+                                    // evidence -- see the parameter's note.
+                                    resemblanceFold =
+                                        settings.settings.value.diarizationEngine != DiarizationEngine.FRAME,
+                                    // The fold works in compacted time; the trace is read against a
+                                    // transcript in recording time, so map its spans back.
+                                    describe = { range ->
+                                        "%s-%s".format(
+                                            clockOf(compacted.toOriginal(range.first)),
+                                            clockOf(compacted.toOriginal(range.last)),
+                                        )
+                                    },
                                 )
                                 foldMillis += System.currentTimeMillis() - foldStarted
                                 placeholder = attribution.nextPlaceholder
@@ -328,6 +384,9 @@ class DiarizeWorker @AssistedInject constructor(
                                     DiarizationChunks.namespaced(attribution.turns, base)
                                 attribution.names.forEach { (cluster, name) ->
                                     names[cluster + base] = name
+                                }
+                                attribution.voiceprints.forEach { (cluster, print) ->
+                                    voiceprints[cluster + base] = print
                                 }
                                 nextCluster = next
                                 turns += namespaced
@@ -355,9 +414,12 @@ class DiarizeWorker @AssistedInject constructor(
                     Diarised(
                         expandToRecording(compacted, turns),
                         names,
+                        voiceprints,
                         diariseMillis,
                         attributeMillis,
                         foldMillis,
+                        confidence?.build() ?: FrameConfidence.NONE,
+                        overlaps.toList(),
                     )
                 }
 
@@ -408,15 +470,72 @@ class DiarizeWorker @AssistedInject constructor(
                 diarisation.await() to transcription.await()
             }
 
-            val turns = diarised.turns
             val names = diarised.names
             val words = transcribed.words
+
+            // With the words known, pull late hand-over boundaries back to the voice change. After
+            // both branches because it needs word starts to cut at, and before alignment because
+            // alignment is what turns a boundary into whose words these are. See [BoundaryRefinement].
+            val refineStarted = System.currentTimeMillis()
+            val refined = speakers.refineBoundaries(
+                samples = samples,
+                turns = diarised.turns,
+                words = words,
+                identity = { cluster -> names[cluster] ?: "c$cluster" },
+                centroids = diarised.voiceprints,
+            )
+            refined.moves.forEach { m ->
+                Log.i(
+                    TAG,
+                    "boundary %s -> %s at %s pulled back to %s (%.1fs, weakest margin %.3f)".format(
+                        names[m.fromCluster] ?: "c${m.fromCluster}", names[m.toCluster] ?: "c${m.toCluster}",
+                        clockOf(m.oldBoundary), clockOf(m.newBoundary),
+                        (m.oldBoundary - m.newBoundary) / AudioRecorder.SAMPLE_RATE.toFloat(), m.weakestMargin,
+                    ),
+                )
+            }
+            Log.i(
+                TAG,
+                "boundary refinement: %d hand-overs, %d moved, %d embeddings, %d ms".format(
+                    refined.handOvers, refined.moves.size, refined.embeddings,
+                    System.currentTimeMillis() - refineStarted,
+                ),
+            )
+            val turns = refined.turns
             val diariseMillis = diarised.diariseMillis
             val attributeMillis = diarised.attributeMillis
             val foldMillis = diarised.foldMillis
             val transcribeMillis = transcribed.millis
 
-            val blocks = SpeakerAlignment.blocks(words, turns, AudioRecorder.SAMPLE_RATE)
+            // The raw turns and, per block, which rule placed its words -- see [SpeakerAlignment.Trace].
+            // Under its own tag so a run's alignment story comes out of logcat on its own.
+            turns.sortedBy { it.startSample }.forEach { turn ->
+                Log.i(
+                    ALIGN_TAG,
+                    "turn c%d %s %s-%s".format(
+                        turn.cluster, names[turn.cluster] ?: "?", clockOf(turn.startSample), clockOf(turn.endSample),
+                    ),
+                )
+            }
+            val blocks = SpeakerAlignment.blocks(
+                words,
+                turns,
+                AudioRecorder.SAMPLE_RATE,
+                diarised.confidence,
+                diarised.overlaps,
+            ) { t ->
+                Log.i(
+                    ALIGN_TAG,
+                    "block c%d %s %s-%s words=%d byMass=%d single=%d overlapKept=%d overlapNone=%d gapAgreed=%d gapNearest=%d gapNone=%d «%s»".format(
+                        t.block.cluster, names[t.block.cluster] ?: "?", clockOf(t.block.startSample), clockOf(t.block.endSample),
+                        t.single + t.overlapKept + t.overlapNone + t.gapAgreed + t.gapNearest +
+                            t.gapNone + t.byMass,
+                        t.byMass, t.single, t.overlapKept, t.overlapNone, t.gapAgreed, t.gapNearest,
+                        t.gapNone,
+                        t.block.text.take(40),
+                    ),
+                )
+            }
 
             // Timed per phase because the two halves of this pipeline are data-independent -- nothing
             // flows between diarisation and recognition until SpeakerAlignment joins them -- so
@@ -450,7 +569,7 @@ class DiarizeWorker @AssistedInject constructor(
             // block cut at every hop between them splits their sentence across duplicate labels.
             // See [nameBlocks].
             val named = smoothShortBlocks(
-                nameBlocks(blocks, names, "${SpeakerRepository.UNKNOWN_SPEAKER_PREFIX} ?"),
+                nameBlocks(blocks, names, SpeakerRepository.UNATTRIBUTED_NAME),
                 unknownPrefix = SpeakerRepository.UNKNOWN_SPEAKER_PREFIX,
                 minSamples = SHORT_BLOCK_SECONDS * AudioRecorder.SAMPLE_RATE,
             )
@@ -483,6 +602,13 @@ class DiarizeWorker @AssistedInject constructor(
                 // it. That read is minutes of the user's wait on a long recording, and a number
                 // that quietly leaves out a phase is worse than none.
                 runMillis = System.currentTimeMillis() - runStarted,
+                // Set only when a live session handed this pass its recording: the stamp is the
+                // moment that session's audio ran out, so this measures everything the user waited
+                // through after the recording appeared to finish -- the live session's own tail,
+                // WorkManager's scheduling, and this pass. Null for an imported file, where it
+                // would only restate runMillis.
+                postCaptureMillis = current.captureEndedAtMillis
+                    ?.let { System.currentTimeMillis() - it },
                 // The whole "who spoke" branch, not just sherpa's part: folding and naming are as
                 // much a cost of answering that question as the clustering is, and splitting them
                 // on a list row would say less than one honest number does.
@@ -491,6 +617,8 @@ class DiarizeWorker @AssistedInject constructor(
                 coveragePercent = score?.coveragePercent,
                 werPercent = score?.werPercent,
                 speakerAccuracyPercent = score?.speakerAccuracyPercent,
+                speechModelId = model.id,
+                speakerBundleId = bundle.id,
             )
 
             // No transcript is a result, not a crash: an empty recording or one the models heard
@@ -598,6 +726,39 @@ class DiarizeWorker @AssistedInject constructor(
      * a channel send is safe, mutable accumulation is not. Lanes are assigned round-robin so they
      * finish close together when chunk sizes vary.
      */
+    /**
+     * One chunk's diarisation: its turns in compacted coordinates, and the per-frame confidence the
+     * frame engine produced for it, still in the chunk's own coordinates.
+     *
+     * The weights travel with the turns because the diarizer that made them is handed straight back
+     * to the warm pool and reset by the next chunk -- long before there are any words to weigh
+     * against. Empty on the sherpa engine, which produces none.
+     */
+    private data class DiarizedChunk(
+        val chunk: DiarizationChunk,
+        val turns: List<DiarizedSegment>,
+        val frameWeights: FloatArray,
+        val samplesPerFrame: Int,
+        /** Overlap regions in the chunk's own seconds, straight off the diarizer. */
+        val overlaps: List<OverlapDetector.Region>,
+    )
+
+    /** Diarises one chunk and takes its frame weights before the instance can be reused. */
+    private fun diarizedChunk(
+        diarizer: SpeakerDiarizer,
+        chunk: DiarizationChunk,
+        slice: FloatArray,
+    ): DiarizedChunk {
+        val turns = diarizer.diarize(slice)
+        return DiarizedChunk(
+            chunk = chunk,
+            turns = DiarizationChunks.toCompacted(turns, chunk),
+            frameWeights = diarizer.frameWeights,
+            samplesPerFrame = diarizer.samplesPerFrame,
+            overlaps = diarizer.overlapRegions,
+        )
+    }
+
     private suspend fun diarizeChunks(
         chunks: List<DiarizationChunk>,
         compacted: CompactedAudio,
@@ -607,7 +768,9 @@ class DiarizeWorker @AssistedInject constructor(
         diariseThreads: Int,
         provider: String,
         lanes: Int,
-        emit: suspend (index: Int, turns: List<DiarizedSegment>) -> Unit,
+        engine: DiarizationEngine,
+        embeddingModelId: String?,
+        emit: suspend (index: Int, chunk: DiarizedChunk) -> Unit,
     ) {
         fun sliceFor(chunk: DiarizationChunk): FloatArray =
             // One chunk is the whole recording, and copying it to say so would double peak memory on
@@ -627,6 +790,11 @@ class DiarizeWorker @AssistedInject constructor(
             expectedSpeakers,
             threads,
             provider,
+            // Both of these change what gets built, so both belong in the key: switching engines
+            // must evict the other one's warm instances rather than hand one back, and the embedding
+            // model id sets the frame engine's clustering threshold.
+            engine,
+            embeddingModelId.orEmpty(),
         )
 
         fun acquireDiarizer(threads: Int): SpeakerDiarizer {
@@ -641,6 +809,8 @@ class DiarizeWorker @AssistedInject constructor(
                     expectedSpeakers = expectedSpeakers,
                     threadCount = threads,
                     provider = provider,
+                    engine = engine,
+                    embeddingModelId = embeddingModelId,
                 )
             }
         }
@@ -653,7 +823,7 @@ class DiarizeWorker @AssistedInject constructor(
             try {
                 chunks.forEachIndexed { index, chunk ->
                     currentCoroutineContext().ensureActive()
-                    emit(index, DiarizationChunks.toCompacted(diarizer.diarize(sliceFor(chunk)), chunk))
+                    emit(index, diarizedChunk(diarizer, chunk, sliceFor(chunk)))
                 }
             } finally {
                 // Warm for the next run rather than released -- cancellation included, since the
@@ -674,10 +844,7 @@ class DiarizeWorker @AssistedInject constructor(
                     try {
                         laneChunks.forEach { (index, chunk) ->
                             currentCoroutineContext().ensureActive()
-                            emit(
-                                index,
-                                DiarizationChunks.toCompacted(diarizer.diarize(sliceFor(chunk)), chunk),
-                            )
+                            emit(index, diarizedChunk(diarizer, chunk, sliceFor(chunk)))
                         }
                     } finally {
                         diarizerPool.stash(keyFor(laneThreads[lane]), diarizer)
@@ -695,6 +862,11 @@ class DiarizeWorker @AssistedInject constructor(
      * it. Split, the removed silence is covered by no turn -- which is the state
      * [SpeakerAlignment] already handles, filling a gap only when the turns either side agree.
      */
+    private fun clockOf(sample: Int): String {
+        val total = sample / AudioRecorder.SAMPLE_RATE
+        return "%d:%02d".format(total / 60, total % 60)
+    }
+
     private fun expandToRecording(
         compacted: CompactedAudio,
         turns: List<DiarizedSegment>,
@@ -777,6 +949,8 @@ class DiarizeWorker @AssistedInject constructor(
         private const val MAX_DIARIZE_LANES = 4
 
         private const val TAG = "DiarizeWorker"
+
+        private const val ALIGN_TAG = "AlignTrace"
         private const val CHANNEL_ID = "speaker_diarization"
 
         /** Distinct from the other workers' bases (4200, 5300, 6400, 7500, 8600). */
@@ -865,6 +1039,8 @@ class DiarizeWorker @AssistedInject constructor(
 private data class Diarised(
     val turns: List<DiarizedSegment>,
     val names: Map<Int, String>,
+    /** Voiceprint per surviving cluster, keyed like [turns]' clusters. */
+    val voiceprints: Map<Int, FloatArray>,
     val diariseMillis: Long,
     /**
      * The fold-and-name tail that ran after the last chunk was diarised -- the only part of
@@ -874,6 +1050,14 @@ private data class Diarised(
     val attributeMillis: Long,
     /** All the fold-and-name work wherever it ran; the log reports how much of it was hidden. */
     val foldMillis: Long,
+    /**
+     * Per-frame confidence over the whole recording, or [FrameConfidence.NONE] on the sherpa engine.
+     * Read by [SpeakerAlignment.blocks] to settle a word by its own audio rather than by the turn
+     * covering one instant inside it.
+     */
+    val confidence: FrameConfidence,
+    /** Stretches two voices were active in, in recording samples. Empty on the sherpa engine. */
+    val overlaps: List<IntRange>,
 )
 
 /** What the recognition branch produced. */

@@ -61,12 +61,6 @@ object ParamBudget {
             Accelerator.NPU -> 0.45
             Accelerator.CPU -> 0.70
         }
-        // llama.cpp mmaps the GGUF, but CPU inference touches every weight each forward pass, so
-        // the pages stay resident and it bills at close to full file size.
-        EngineId.LLAMA_CPP -> when (accelerator) {
-            Accelerator.GPU -> 0.60
-            else -> 1.00
-        }
     }
 
     /**

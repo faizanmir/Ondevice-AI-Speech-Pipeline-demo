@@ -53,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.aiagenttestapp.data.audiomodels.AudioModelBundle
 import com.example.aiagenttestapp.data.speakers.SpeakerRecord
 import com.example.aiagenttestapp.data.speakers.SpeakerRepository
 import com.example.aiagenttestapp.data.speakers.TakeAnalysis
@@ -110,29 +111,6 @@ fun SpeakersScreen(
             }
         },
     ) { padding ->
-        if (!state.available) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(32.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    Text(
-                        "Speaker identification needs its models downloaded first.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Button(onClick = onOpenModels) { Text("Manage models") }
-                }
-            }
-            return@Scaffold
-        }
-
         LazyColumn(
             Modifier
                 .fillMaxSize()
@@ -141,6 +119,14 @@ fun SpeakersScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            item {
+                VoiceModelCard(
+                    state = state,
+                    onPick = { viewModel.onIntent(SpeakersIntent.SetSpeakerBundle(it)) },
+                    onPickSpeech = { viewModel.onIntent(SpeakersIntent.SetSpeechModel(it)) },
+                    onOpenModels = onOpenModels,
+                )
+            }
             if (state.isEnrolling) {
                 item {
                     EnrollCard(
@@ -183,6 +169,7 @@ fun SpeakersScreen(
                 SpeakerRow(
                     speaker = speaker,
                     isStale = state.stale.any { it.id == speaker.id },
+                        embedderLabel = embedderLabelFor(speaker, state.speakerChoices, state.speakerBundleId),
                     onDelete = { viewModel.onIntent(SpeakersIntent.Delete(speaker.id)) },
                 )
             }
@@ -436,8 +423,78 @@ private fun StaleWarning(stale: List<SpeakerRecord>) {
     }
 }
 
+/**
+ * Which embedding model new voiceprints are made with -- and therefore which existing ones the
+ * transcript screen can use.
+ *
+ * On this screen because the choice is consequential *here*: a print carries the id of the model
+ * that made it and matches nobody under any other, so someone enrolling has to know which model
+ * they are enrolling for, and someone switching has to see their existing prints go stale. The
+ * chips are the same as the transcript screen's, download-on-tap included; the two screens write
+ * the same Settings value and can never disagree.
+ */
 @Composable
-private fun SpeakerRow(speaker: SpeakerRecord, isStale: Boolean, onDelete: () -> Unit) {
+private fun VoiceModelCard(
+    state: SpeakersUiState,
+    onPick: (String) -> Unit,
+    onPickSpeech: (String) -> Unit,
+    onOpenModels: () -> Unit,
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Models", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Speakers is the model new voiceprints are made with -- they match only under it. Words is " +
+                    "the recogniser the next transcript is written with. Tap a model that is not on the " +
+                    "device to download it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            ModelChipRow(
+                caption = "Words",
+                chips = state.speechChoices.map { model ->
+                    ModelChip(
+                        id = model.id,
+                        label = model.label,
+                        selected = model.id == state.speechModelId,
+                        note = downloadNote(state.speechStates[model.id]),
+                    )
+                },
+                onPick = onPickSpeech,
+            )
+            ModelChipRow(
+                caption = "Speakers",
+                chips = state.speakerChoices.map { bundle ->
+                    ModelChip(
+                        id = bundle.id,
+                        label = bundleChipName(bundle),
+                        selected = bundle.id == state.speakerBundleId,
+                        note = downloadNote(state.bundleStates[bundle.id]),
+                    )
+                },
+                onPick = onPick,
+            )
+            if (!state.available) {
+                Text(
+                    "The selected model is not on the device yet; enrolment opens when its download lands.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                TextButton(onClick = onOpenModels, contentPadding = PaddingValues(0.dp)) { Text("Manage models") }
+            }
+        }
+    }
+}
+
+/** The embedder a stored voiceprint was made with, by the chip name the bundles use; the raw id if no bundle claims it. */
+private fun embedderLabelFor(speaker: SpeakerRecord, bundles: List<AudioModelBundle>, selectedBundleId: String): String {
+    val owners = bundles.filter { it.embeddingModelId == speaker.embeddingModelId }
+    val bundle = owners.firstOrNull { it.id == selectedBundleId } ?: owners.firstOrNull()
+    return bundle?.embeddingLabel ?: speaker.embeddingModelId
+}
+
+@Composable
+private fun SpeakerRow(speaker: SpeakerRecord, isStale: Boolean, embedderLabel: String, onDelete: () -> Unit) {
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -456,7 +513,7 @@ private fun SpeakerRow(speaker: SpeakerRecord, isStale: Boolean, onDelete: () ->
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    if (isStale) "Enrolled with an older model" else "Voiceprint stored",
+                    if (isStale) "Enrolled with $embedderLabel — matches nobody under the selected model" else "Voiceprint · $embedderLabel",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (isStale) {
                         MaterialTheme.colorScheme.error

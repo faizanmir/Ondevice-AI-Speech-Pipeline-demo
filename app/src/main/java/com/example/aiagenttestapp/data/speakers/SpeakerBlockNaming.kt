@@ -127,6 +127,11 @@ internal fun smoothShortBlocks(
 
         current.forEachIndexed { index, block ->
             if (block.endSample - block.startSample >= minSamples) return@forEachIndexed
+            // Unattributed words stay unattributed. The fold has already judged that they sound like
+            // no one, and the alignment that they lie in no turn; adopting a neighbour's name here
+            // would undo both on the strength of adjacency alone, which is the weakest evidence in
+            // the pipeline. They are shown grey and nameless instead -- see [SpeakerAlignment.UNATTRIBUTED].
+            if (block.cluster == SpeakerAlignment.UNATTRIBUTED) return@forEachIndexed
             val before = resolved.getOrNull(index - 1)
             val after = resolved.getOrNull(index + 1)
 

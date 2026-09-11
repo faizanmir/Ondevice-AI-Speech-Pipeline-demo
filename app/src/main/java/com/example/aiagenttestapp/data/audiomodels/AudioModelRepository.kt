@@ -9,8 +9,8 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
-import com.example.aiagenttestapp.data.ArchiveExtractor
-import com.example.aiagenttestapp.data.downloadToFile
+import com.example.aiagenttestapp.stt.ArchiveExtractor
+import com.example.aiagenttestapp.stt.downloadToFile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -91,6 +91,9 @@ class AudioModelRepository(
             return AudioModelCatalog.speakerBundles.firstOrNull { it.id == chosen }
                 ?: AudioModelCatalog.SPEAKER
         }
+    /** The bundles [speaker] may resolve to, for screens that offer the choice. */
+    val speakerBundles: List<AudioModelBundle> get() = AudioModelCatalog.speakerBundles
+
     val keywords: AudioModelBundle get() = AudioModelCatalog.KEYWORDS
     val punctuation: AudioModelBundle get() = AudioModelCatalog.PUNCTUATION
 

@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.aiagent.engine.core.EngineId
 import com.example.aiagent.engine.core.ModelSpec
-import com.example.aiagenttestapp.data.DownloadState
+import com.example.aiagent.llm.DownloadState
 import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
 import com.example.aiagenttestapp.stt.SpeechModelRepository
@@ -308,8 +308,8 @@ private fun SortMenu(
 }
 
 /**
- * Engine filter as a dropdown. Unavailable engines stay visible but disabled -- a llama.cpp build
- * that was compiled out should say so by being greyed, not by silently narrowing the list.
+ * Engine filter as a dropdown. Unavailable engines stay visible but disabled -- an engine this
+ * device cannot run should say so by being greyed, not by silently narrowing the list.
  */
 @Composable
 private fun EngineFilterMenu(

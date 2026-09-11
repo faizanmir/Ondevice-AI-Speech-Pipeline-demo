@@ -5,8 +5,8 @@ import com.example.aiagent.engine.core.EngineRegistry
 import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagenttestapp.data.AppSettings
-import com.example.aiagenttestapp.data.ModelDirectory
-import com.example.aiagenttestapp.data.ModelRepository
+import com.example.aiagent.llm.ModelDirectory
+import com.example.aiagent.llm.ModelRepository
 import com.example.aiagenttestapp.data.NetworkMonitor
 import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.WebSearchClient

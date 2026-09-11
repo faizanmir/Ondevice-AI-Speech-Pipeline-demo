@@ -86,12 +86,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.aiagenttestapp.data.audiomodels.AudioModelState
 import com.example.aiagenttestapp.data.notes.NoteSummaryMode
-import com.example.aiagenttestapp.data.notes.SttBackend
-import com.example.aiagenttestapp.functions.MarkerKind
+import com.example.aiagenttestapp.stt.SttBackend
+import com.example.aiagenttestapp.stt.MarkerKind
 import com.example.aiagenttestapp.stt.PlatformSpeech
 import com.example.aiagenttestapp.stt.SpeechModel
 import com.example.aiagenttestapp.stt.SpeechModelState
-import com.example.aiagenttestapp.stt.SttModelPlan
+import com.example.aiagenttestapp.bridge.SttModelPlan
 import com.example.aiagenttestapp.ui.components.formatBytes
 import java.util.Locale
 

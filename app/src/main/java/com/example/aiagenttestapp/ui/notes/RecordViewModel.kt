@@ -30,7 +30,7 @@ import com.example.aiagenttestapp.data.notes.ParsedFinding
 import com.example.aiagenttestapp.data.notes.PipelinePlanner
 import com.example.aiagenttestapp.data.notes.SpokenMarker
 import com.example.aiagenttestapp.data.notes.SpokenMarkers
-import com.example.aiagenttestapp.data.notes.SttBackend
+import com.example.aiagenttestapp.stt.SttBackend
 import android.os.Build
 import com.example.aiagenttestapp.stt.PlatformSpeech
 import com.example.aiagenttestapp.stt.Transcriber
@@ -43,10 +43,10 @@ import com.example.aiagenttestapp.data.notes.TranscriptMarkup
 import com.example.aiagenttestapp.data.notes.TranscriptionCheckpoint
 import com.example.aiagenttestapp.data.notes.WavFile
 import com.example.aiagenttestapp.functions.AppNavigation
-import com.example.aiagenttestapp.functions.KeywordAction
-import com.example.aiagenttestapp.functions.MarkerEdge
-import com.example.aiagenttestapp.functions.MarkerKind
-import com.example.aiagenttestapp.functions.SpokenKeywords
+import com.example.aiagenttestapp.stt.KeywordAction
+import com.example.aiagenttestapp.stt.MarkerEdge
+import com.example.aiagenttestapp.stt.MarkerKind
+import com.example.aiagenttestapp.stt.SpokenKeywords
 import com.example.aiagenttestapp.functions.VoiceCommandAction
 import com.example.aiagenttestapp.functions.VoiceCommands
 import com.example.aiagenttestapp.prompts.NotePromptBudget
@@ -62,8 +62,8 @@ import com.example.aiagenttestapp.stt.SpeechRegions
 import com.example.aiagenttestapp.stt.SpeechModel
 import com.example.aiagenttestapp.stt.SpeechModelState
 import com.example.aiagenttestapp.stt.SpottedKeyword
-import com.example.aiagenttestapp.stt.SttLoadPlanner
-import com.example.aiagenttestapp.stt.SttModelPlan
+import com.example.aiagenttestapp.bridge.SttLoadPlanner
+import com.example.aiagenttestapp.bridge.SttModelPlan
 import com.example.aiagenttestapp.ui.mvi.MviViewModel
 import com.example.aiagenttestapp.ui.mvi.UiEffect
 import com.example.aiagenttestapp.ui.mvi.UiIntent
@@ -81,9 +81,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.example.aiagent.engine.core.DeviceMemoryProfile
 import com.example.aiagent.engine.core.EngineRegistry
-import com.example.aiagenttestapp.data.ModelDirectory
-import com.example.aiagenttestapp.data.ModelRepository
-import com.example.aiagenttestapp.data.ModelResidency
+import com.example.aiagent.llm.ModelDirectory
+import com.example.aiagent.llm.ModelRepository
+import com.example.aiagent.llm.ModelResidency
 import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.notes.NoteDao
 import com.example.aiagenttestapp.di.CacheDirPath

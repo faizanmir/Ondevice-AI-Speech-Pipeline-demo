@@ -41,4 +41,5 @@ rootProject.name = "AI Agent Test App"
 include(":app")
 include(":engine-core")
 include(":engine-litertlm")
-include(":engine-llamacpp")
+include(":llm")
+include(":stt")

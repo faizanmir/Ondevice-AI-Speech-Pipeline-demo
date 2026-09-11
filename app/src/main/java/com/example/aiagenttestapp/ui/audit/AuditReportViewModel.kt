@@ -7,7 +7,7 @@ import com.example.aiagenttestapp.ui.mvi.UiIntent
 import com.example.aiagenttestapp.ui.mvi.UiState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import com.example.aiagenttestapp.data.ModelDirectory
+import com.example.aiagent.llm.ModelDirectory
 import com.example.aiagenttestapp.data.audit.AuditQueue
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject

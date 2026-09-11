@@ -1,7 +1,7 @@
 package com.example.aiagenttestapp.data.notes
 
-import com.example.aiagenttestapp.functions.MarkerEdge
-import com.example.aiagenttestapp.functions.MarkerKind
+import com.example.aiagenttestapp.stt.MarkerEdge
+import com.example.aiagenttestapp.stt.MarkerKind
 
 /**
  * A marker the user spoke, located in the recording's own sample timeline.

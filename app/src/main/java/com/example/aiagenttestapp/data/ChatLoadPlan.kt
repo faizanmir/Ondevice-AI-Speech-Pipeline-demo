@@ -1,6 +1,8 @@
 package com.example.aiagenttestapp.data
 
 import com.example.aiagent.engine.core.LoadRequest
+import com.example.aiagent.llm.ModelLoadPlan
+import com.example.aiagent.llm.ModelLoadPlanner
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagent.engine.core.ToolDefinition
 import com.example.aiagenttestapp.functions.AppFunctionRegistry
@@ -25,7 +27,7 @@ sealed interface ChatLoadPlan {
     /** No model in the catalogue -- built-in or user-added -- has this id. */
     data object UnknownModel : ChatLoadPlan
 
-    /** The format has no usable engine in this build (a GGUF model with llama.cpp excluded). */
+    /** No registered engine can load this format on this device. See [ModelLoadPlan.NoEngine]. */
     data class NoEngine(val model: ModelSpec) : ChatLoadPlan
 
     data class Ready(

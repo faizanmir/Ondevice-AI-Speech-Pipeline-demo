@@ -3,11 +3,11 @@ package com.example.aiagenttestapp.data.notes
 import android.content.Context
 import android.os.Build
 import android.util.Log
-import com.example.aiagenttestapp.data.ModelResidency
 import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.audiomodels.AudioModelCatalog
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
 import com.example.aiagenttestapp.stt.AudioRecorder
+import com.example.aiagenttestapp.stt.SttBackend
 import com.example.aiagenttestapp.stt.AudioSegmenter
 import com.example.aiagenttestapp.stt.KeywordDetector
 import com.example.aiagenttestapp.stt.OnnxTranscriber
@@ -21,8 +21,7 @@ import com.example.aiagenttestapp.stt.SpeechRecognizer
 import com.example.aiagenttestapp.stt.SpeechRegions
 import com.example.aiagenttestapp.stt.StreamingRecognizer
 import com.example.aiagenttestapp.stt.StreamingTranscriber
-import com.example.aiagenttestapp.stt.SttLoadPlanner
-import com.example.aiagenttestapp.stt.SttModelPlan
+import com.example.aiagenttestapp.stt.LlmTranscriberFactory
 import com.example.aiagenttestapp.stt.Transcriber
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -56,8 +55,12 @@ class TranscriptionRun @Inject constructor(
     private val streamingRecognizer: StreamingRecognizer,
     private val keywordDetector: KeywordDetector,
     private val punctuator: Punctuator,
-    private val sttLoadPlanner: SttLoadPlanner,
-    private val modelResidency: ModelResidency,
+    /**
+     * The LLM-backed transcriber, when the host has one. Injected as an interface rather than
+     * reached for: this file is the whole voice-note pipeline and used to import the model
+     * catalogue, the load planner and residency through here for the sake of one backend.
+     */
+    private val llmTranscribers: LlmTranscriberFactory,
     private val audioModels: AudioModelRepository,
     private val settings: SettingsStore,
 ) {
@@ -192,13 +195,13 @@ class TranscriptionRun @Inject constructor(
                 }
             }
 
-            SttBackend.GEMMA -> when (val plan = sttLoadPlanner.plan(preferredModelId)) {
-                is SttModelPlan.Unavailable -> error(plan.reason)
-                is SttModelPlan.Ready -> {
-                    Log.i(TAG, "transcribing with ${plan.modelName}")
-                    sttLoadPlanner.open(plan)
-                }
-            }
+            // The factory throws with a user-facing reason when the host has an LLM backend it
+            // cannot open here -- nothing downloaded, or nothing that fits. Null means the host has
+            // no such backend at all, which for a run that explicitly asked for it is still an
+            // error rather than a licence to substitute a different transcriber: the two produce
+            // visibly different transcripts.
+            SttBackend.GEMMA -> llmTranscribers.open(preferredModelId)
+                ?: error("No language model is available to transcribe with.")
 
             // Re-checked here rather than trusted from the record screen: the system recogniser and
             // its language packs can be disabled or removed between the tap that started the
@@ -500,7 +503,7 @@ class TranscriptionRun @Inject constructor(
         streamingRecognizer.release()
         keywordDetector.release()
         punctuator.release()
-        modelResidency.releaseIfIdle()
+        llmTranscribers.releaseIfIdle()
     }
 
     private companion object {

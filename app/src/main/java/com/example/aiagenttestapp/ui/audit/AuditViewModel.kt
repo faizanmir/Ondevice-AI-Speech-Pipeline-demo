@@ -4,7 +4,7 @@ import android.net.Uri
 import androidx.lifecycle.viewModelScope
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagenttestapp.data.FileTextExtractor
-import com.example.aiagenttestapp.data.ModelDirectory
+import com.example.aiagent.llm.ModelDirectory
 import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.audit.AuditDocument
 import com.example.aiagenttestapp.data.audit.AuditMode
@@ -15,7 +15,7 @@ import com.example.aiagenttestapp.ui.mvi.UiIntent
 import com.example.aiagenttestapp.ui.mvi.UiState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import com.example.aiagenttestapp.data.ModelResidency
+import com.example.aiagent.llm.ModelResidency
 import com.example.aiagenttestapp.data.audit.AuditChunker
 import com.example.aiagenttestapp.data.audit.AuditLoadPlanner
 import com.example.aiagenttestapp.data.audit.AuditQueue

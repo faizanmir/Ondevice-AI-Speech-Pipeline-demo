@@ -25,13 +25,12 @@ import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import com.example.aiagent.engine.core.Accelerator
-import com.example.aiagent.engine.core.EngineId
 import com.example.aiagent.engine.core.GenerationEvent
 import com.example.aiagent.engine.core.GenerationStats
 import com.example.aiagent.engine.core.InferenceEngine
 import androidx.hilt.work.HiltWorker
 import com.example.aiagenttestapp.MainActivity
-import com.example.aiagenttestapp.data.ModelResidency
+import com.example.aiagent.llm.ModelResidency
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import com.example.aiagenttestapp.util.Reasoning
@@ -149,13 +148,12 @@ class AuditDrainWorker @AssistedInject constructor(
             // there, and a section died at exactly 300 seconds having spent every one of them
             // reasoning, never reaching the records at all. The work was not runaway, it was slow.
             //
-            // A reasoning model gets the same allowance even on faster hardware, because a think
-            // block is paid before the answer starts and is not visible in any budget that counts
-            // prompt or section tokens. Detected from the reply rather than declared: no model spec
-            // carries the fact, and the ceiling is not part of the prompt, so raising it mid-document
-            // costs nothing -- unlike the draft decision, which has to stay fixed for prefix reuse.
-            val slowEngine = plan.resolved.engineId == EngineId.LLAMA_CPP && !draft
-            var turnMaxMillis = if (slowEngine) SLOW_TURN_MAX_MILLIS else TURN_MAX_MILLIS
+            // The raised ceiling above was reached two ways, and both were llama.cpp's: a
+            // non-drafting run on that engine, and a reply carrying a `<think>` block, which the
+            // catalogue's reasoning models (Qwen3, DeepSeek-R1) were all GGUF. Both went with the
+            // engine. If a LiteRT-LM model ever reasons before answering, this is where the
+            // allowance goes back -- but on measured evidence, not on an engine's name.
+            var turnMaxMillis = TURN_MAX_MILLIS
             Log.i(
                 TAG,
                 "'${doc.name}' on ${engine.activeAccelerator?.label ?: "unknown"}: " +
@@ -291,16 +289,6 @@ class AuditDrainWorker @AssistedInject constructor(
                     }
                 }
                 val raw = turn.text
-                // A think block means this model spends part of every turn reasoning before it
-                // answers, which no token budget here accounts for. Raise the ceiling for the rest
-                // of the document rather than cutting the next section off in the same place.
-                if (turnMaxMillis == TURN_MAX_MILLIS &&
-                    plan.resolved.engineId == EngineId.LLAMA_CPP &&
-                    ("<think>" in raw || "</think>" in raw)
-                ) {
-                    turnMaxMillis = SLOW_TURN_MAX_MILLIS
-                    Log.i(TAG, "model reasons before answering; turn ceiling raised to ${SLOW_TURN_MAX_MILLIS / 60_000} minutes")
-                }
 
                 // Did the reply end because the model finished, or because the window did? The
                 // runtime cannot tell us: llama.cpp's decode loop returns "no more tokens" for a
@@ -1218,17 +1206,13 @@ class AuditDrainWorker @AssistedInject constructor(
          */
         const val TURN_MAX_MILLIS = 5 * 60 * 1000L
 
-        /**
-         * The ceiling for a turn that is expected to be slow: llama.cpp off an accelerator, or a
-         * model that reasons before answering.
-         *
-         * Ten minutes sits *at* the platform's job limit rather than under it, which is only safe
-         * while the foreground service holds. If promotion fails -- and safeSetForeground is written
-         * to carry on when it does -- the job is stopped before a ten-minute turn can checkpoint,
-         * and that section is retried from the start every time. safeSetForeground now says which
-         * state it is in, so that shows up in the log instead of as a document that never finishes.
-         */
-        const val SLOW_TURN_MAX_MILLIS = 10 * 60 * 1000L
+        // A SLOW_TURN_MAX_MILLIS of ten minutes stood here, for a turn expected to be slow:
+        // llama.cpp off an accelerator, or a model that reasons before answering. Both conditions
+        // were llama.cpp's and went with it. Worth knowing if it ever comes back: ten minutes sits
+        // *at* the platform's job limit rather than under it, which is only safe while the
+        // foreground service holds -- if promotion fails, the job is stopped before a ten-minute
+        // turn can checkpoint, and that section is retried from the start every time.
+
         const val CHANNEL_ID = "audit_analysis"
         const val NOTIF_ID = 4300
         const val COMPLETE_CHANNEL_ID = "audit_complete"

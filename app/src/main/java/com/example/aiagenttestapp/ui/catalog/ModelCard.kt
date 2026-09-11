@@ -42,7 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.aiagent.engine.core.FitVerdict
-import com.example.aiagenttestapp.data.DownloadState
+import com.example.aiagent.llm.DownloadState
 import com.example.aiagenttestapp.ui.components.FitBadge
 import com.example.aiagenttestapp.ui.components.MemoryMeter
 import com.example.aiagenttestapp.ui.components.formatBytes

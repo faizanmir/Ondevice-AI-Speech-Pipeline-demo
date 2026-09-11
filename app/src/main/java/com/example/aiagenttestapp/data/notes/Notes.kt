@@ -13,7 +13,7 @@ import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
-import com.example.aiagenttestapp.functions.MarkerKind
+import com.example.aiagenttestapp.stt.MarkerKind
 import kotlinx.coroutines.flow.Flow
 
 /**

@@ -6,7 +6,7 @@ import com.example.aiagenttestapp.data.audit.AuditProtocolElement
 import com.example.aiagenttestapp.data.audit.AuditResultType
 import com.example.aiagenttestapp.data.audit.QuickAudit
 import com.example.aiagenttestapp.data.audit.QuickRead
-import com.example.aiagenttestapp.functions.MarkerKind
+import com.example.aiagenttestapp.stt.MarkerKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue

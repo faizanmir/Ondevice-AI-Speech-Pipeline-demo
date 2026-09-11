@@ -6,6 +6,7 @@ import com.example.aiagenttestapp.data.audiomodels.AudioModelCatalog
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
 import com.example.aiagenttestapp.stt.AudioRecorder
 import com.example.aiagenttestapp.stt.DiarizedSegment
+import com.example.aiagenttestapp.stt.TimedWord
 import com.example.aiagenttestapp.stt.SpeakerMatchDecision
 import com.example.aiagenttestapp.stt.matchSpeaker
 import com.example.aiagenttestapp.stt.SpeakerDiarizer
@@ -411,13 +412,39 @@ class SpeakerRepository(
         startingPlaceholder: Int,
         minClusterSeconds: Float = MIN_CLUSTER_SECONDS,
         extraVoices: Map<String, List<FloatArray>> = emptyMap(),
+        /**
+         * Whether to run the resemblance pass.
+         *
+         * False on the frame engine, whose clustering already folded on exactly this rule with
+         * exactly these constants -- `foldPhantoms` is a 10%-share, 0.60-similarity test, the same
+         * one [lookalikeClusterRemap] applies here -- and did it on per-segment voiceprints rather
+         * than on a centroid averaged over the cluster it is deciding the fate of. Running it twice
+         * cannot find anything the first pass left and can only fold on the weaker evidence.
+         *
+         * The size pass above it is *not* redundant and runs on both engines: it protects a short
+         * cluster whose voice is recognised, and it can leave a fragment unattributed instead of
+         * giving it to the nearest speaker. The frame engine's absorption does neither.
+         */
+        resemblanceFold: Boolean = true,
+        describe: (IntRange) -> String = ::compactedSpan,
     ): ClusterAttribution = lock.withLock {
         withContext(Dispatchers.Default) {
             if (turns.isEmpty()) {
                 return@withContext ClusterAttribution(turns, emptyMap(), startingPlaceholder)
             }
+            // Load the index *before* reading the enrolled voices out of it. This used to read them
+            // first and rely on the fold to load them a moment later, and the enrolled map is a field
+            // that [prepareLocked] fills: on the first run after the embedder was released -- which
+            // is every run started straight after leaving the enrolment screen, since that screen
+            // hands back its ~29 MB on `onCleared` -- `known` came back empty and the entire
+            // recording was named "Unknown Speaker 1..6" with two people enrolled and matching. It
+            // cost a 22-minute German run 48.6% speaker accuracy against the 97.4% the identical
+            // re-run scored a minute later, and left no trace beyond a missing `known:` section in
+            // the fold log. prepareLocked is idempotent and costs nothing when the index is warm.
+            prepareLocked()
             val known = knownVoices(extraVoices)
-            val folded = foldClustersLocked(samples, turns, minClusterSeconds, known)
+            val folded =
+                foldClustersLocked(samples, turns, minClusterSeconds, known, resemblanceFold, describe)
 
             val naming = nameClustersByVoiceprint(
                 turns = folded.turns,
@@ -454,16 +481,56 @@ class SpeakerRepository(
      * the tracker, which knows which of them are the same person across chunks. Numbering them here
      * would restart at one in every chunk.
      */
+    /**
+     * Runs [BoundaryRefinement] with this repository's embedder, under the same lock and warm-up
+     * as folding and naming, so the pass compares voices with the very model that made the
+     * voiceprints it compares against. Returns the turns unchanged when the embedder is not ready.
+     */
+    internal suspend fun refineBoundaries(
+        samples: FloatArray,
+        turns: List<DiarizedSegment>,
+        words: List<TimedWord>,
+        identity: (Int) -> String,
+        centroids: Map<Int, FloatArray>,
+    ): BoundaryRefinement.Result = lock.withLock {
+        withContext(Dispatchers.Default) {
+            if (!prepareLocked()) return@withContext BoundaryRefinement.Result(turns, emptyList(), 0, 0)
+            BoundaryRefinement.refine(
+                turns = turns,
+                words = words,
+                sampleRate = AudioRecorder.SAMPLE_RATE,
+                identity = identity,
+                centroid = { centroids[it] },
+                embed = { range ->
+                    val from = range.first.coerceIn(0, samples.size)
+                    val until = (range.last + 1).coerceIn(from, samples.size)
+                    if (until - from <= 0) null else embedder.embed(samples.copyOfRange(from, until))
+                },
+            )
+        }
+    }
+
     internal suspend fun profileClusters(
         samples: FloatArray,
         turns: List<DiarizedSegment>,
         minClusterSeconds: Float = MIN_CLUSTER_SECONDS,
         /** Voices the live session already knows, by label: a short cluster matching one is a speaker, not a fragment. */
         knownVoices: Map<String, List<FloatArray>> = emptyMap(),
+        describe: (IntRange) -> String = ::compactedSpan,
     ): ClusterProfiles = lock.withLock {
         withContext(Dispatchers.Default) {
             if (turns.isEmpty()) return@withContext ClusterProfiles(turns, emptyList())
-            val folded = foldClustersLocked(samples, turns, minClusterSeconds, knownVoices(knownVoices))
+            // Before reading the enrolled voices, for the reason spelled out in [foldAndName]: the
+            // map is empty until [prepareLocked] has run, and the live path hits that state whenever
+            // a chunk is profiled after a memory-pressure release.
+            prepareLocked()
+            val folded = foldClustersLocked(
+                samples, turns, minClusterSeconds, knownVoices(knownVoices),
+                // The profiling path reports what folding does; it must keep every pass so the
+                // profile describes the pipeline rather than a variant of it.
+                resemblanceFold = true,
+                describe,
+            )
 
             val profiles = clusterSizes(folded.turns).map { (cluster, size) ->
                 val voiceprint = folded.voiceprints[cluster]
@@ -504,6 +571,10 @@ class SpeakerRepository(
         turns: List<DiarizedSegment>,
         minClusterSeconds: Float,
         known: Map<String, List<FloatArray>>,
+        /** See [foldAndName]'s parameter of the same name. */
+        resemblanceFold: Boolean,
+        /** Formats a span of the audio handed in for the trace log -- recording time when the caller can map it. */
+        describe: (IntRange) -> String,
     ): Folded {
         val ready = prepareLocked()
 
@@ -518,6 +589,21 @@ class SpeakerRepository(
         }
 
         val minSamples = (minClusterSeconds * AudioRecorder.SAMPLE_RATE).toInt()
+        val trace = FoldTrace(turns, sizes, voiceprints, known, describe)
+
+        // Every cluster the two folds below may act on, with everything the decision could rest on:
+        // where it sits in the recording, who speaks immediately before and after it, and how much
+        // it resembles each big cluster and each known voice. Added to find out *why* the opening
+        // words of a turn ended up on the previous speaker in named runs -- 92 of the 137 wrong
+        // words on the bbg audit recording were leading stretches of 5-17 words -- since the three
+        // rules below all judge a boundary fragment by a voiceprint taken from mixed audio, and the
+        // outcome alone does not say which rule fired or how close the call was.
+        val total = sizes.values.sumOf { it.toLong() }.coerceAtLeast(1L)
+        sizes.keys.sorted().forEach { cluster ->
+            if (sizes.getValue(cluster) < minSamples || sizes.getValue(cluster) < total * LOOKALIKE_MAX_SHARE) {
+                trace.candidate(cluster)
+            }
+        }
 
         // Recognised fragments are people. A cluster too short to be a speaker by size is kept when
         // its voice matches someone known -- an enrolled person, or a voice the live session has
@@ -540,6 +626,7 @@ class SpeakerRepository(
                             decision.bestScore,
                         ),
                     )
+                    trace.protectedBy(cluster, name, decision)
                 } != null
             }.toSet()
         }
@@ -547,25 +634,40 @@ class SpeakerRepository(
         val remap = if (voiceprints.isEmpty()) {
             emptyMap()
         } else {
-            smallClusterRemap(sizes, voiceprints, minSamples, protected)
+            smallClusterRemap(
+                sizes, voiceprints, minSamples, protected,
+                minSimilarity = FRAGMENT_FIT_SIMILARITY,
+                unattributed = SpeakerAlignment.UNATTRIBUTED,
+            )
         }
         remap.forEach { (from, to) ->
-            Log.i(
-                TAG,
-                "cluster %d (%.1fs) folded into cluster %d (%.1fs) -- too small to be a speaker".format(
-                    from,
-                    sizes.getValue(from) / AudioRecorder.SAMPLE_RATE.toFloat(),
-                    to,
-                    sizes.getValue(to) / AudioRecorder.SAMPLE_RATE.toFloat(),
-                ),
-            )
+            if (to == SpeakerAlignment.UNATTRIBUTED) {
+                Log.i(
+                    TAG,
+                    "cluster %d (%.1fs) left unattributed -- too small to be a speaker and fits nobody".format(
+                        from, sizes.getValue(from) / AudioRecorder.SAMPLE_RATE.toFloat(),
+                    ),
+                )
+            } else {
+                Log.i(
+                    TAG,
+                    "cluster %d (%.1fs) folded into cluster %d (%.1fs) -- too small to be a speaker".format(
+                        from,
+                        sizes.getValue(from) / AudioRecorder.SAMPLE_RATE.toFloat(),
+                        to,
+                        sizes.getValue(to) / AudioRecorder.SAMPLE_RATE.toFloat(),
+                    ),
+                )
+            }
+            trace.remapped("small", from, to)
         }
         val bySize = applyClusterRemap(turns, remap)
 
         // Second pass, by resemblance: a cluster too big to be a fragment but too small to be a
-        // participant, that sounds like a participant. See [lookalikeClusterRemap].
-        val survivors = clusterSizes(bySize)
-        val lookalike = if (voiceprints.isEmpty()) {
+        // participant, that sounds like a participant. See [lookalikeClusterRemap]. The unattributed
+        // words are nobody's share of the speech and take no part in it.
+        val survivors = clusterSizes(bySize) - SpeakerAlignment.UNATTRIBUTED
+        val lookalike = if (voiceprints.isEmpty() || !resemblanceFold) {
             emptyMap()
         } else {
             lookalikeClusterRemap(survivors, voiceprints, LOOKALIKE_MAX_SHARE, LOOKALIKE_MIN_SIMILARITY, protected)
@@ -583,8 +685,79 @@ class SpeakerRepository(
                     cosineSimilarity(voiceprints.getValue(from), voiceprints.getValue(to)),
                 ),
             )
+            trace.remapped("lookalike", from, to)
         }
         return Folded(applyClusterRemap(bySize, lookalike), voiceprints)
+    }
+
+    /**
+     * The trace behind each fold decision, one line per fact, under its own tag so a run's fold
+     * story can be pulled out of logcat on its own (`adb logcat -s FoldTrace`).
+     */
+    private class FoldTrace(
+        private val turns: List<DiarizedSegment>,
+        private val sizes: Map<Int, Int>,
+        private val voiceprints: Map<Int, FloatArray>,
+        private val known: Map<String, List<FloatArray>>,
+        private val describe: (IntRange) -> String,
+    ) {
+        private val ordered = turns.sortedBy { it.startSample }
+
+        private fun span(cluster: Int): IntRange {
+            val own = turns.filter { it.cluster == cluster }
+            return own.minOf { it.startSample }..own.maxOf { it.endSample }
+        }
+
+        /** The clusters speaking just before this one's first turn and just after its last. */
+        private fun neighbours(cluster: Int): Pair<Int?, Int?> {
+            val s = span(cluster)
+            val before = ordered.lastOrNull { it.cluster != cluster && it.endSample <= s.first + 1 }?.cluster
+            val after = ordered.firstOrNull { it.cluster != cluster && it.startSample >= s.last - 1 }?.cluster
+            return before to after
+        }
+
+        private fun seconds(samples: Int) = samples / AudioRecorder.SAMPLE_RATE.toFloat()
+
+        fun candidate(cluster: Int) {
+            val print = voiceprints[cluster]
+            val (before, after) = neighbours(cluster)
+            val toClusters = if (print == null) "no voiceprint" else sizes.keys.filter { it != cluster && voiceprints[it] != null }
+                .sortedByDescending { sizes.getValue(it) }
+                .joinToString(" ") { other -> "c%d=%.3f".format(other, cosineSimilarity(print, voiceprints.getValue(other))) }
+            val toKnown = if (print == null || known.isEmpty()) "" else " known: " + known.entries.joinToString(" ") { (name, prints) ->
+                "%s=%.3f".format(name, prints.maxOf { cosineSimilarity(print, it) })
+            }
+            Log.i(
+                TRACE_TAG,
+                "fragment c%d %s %.1fs/%d turn(s) before=%s after=%s sim: %s%s".format(
+                    cluster, describe(span(cluster)), seconds(sizes.getValue(cluster)),
+                    turns.count { it.cluster == cluster },
+                    before?.let { "c$it" } ?: "-", after?.let { "c$it" } ?: "-",
+                    toClusters, toKnown,
+                ),
+            )
+        }
+
+        fun protectedBy(cluster: Int, name: String, decision: SpeakerMatchDecision) {
+            Log.i(
+                TRACE_TAG,
+                "protected c%d %s as %s (%.3f, runner-up %s)".format(
+                    cluster, describe(span(cluster)), name, decision.bestScore,
+                    decision.runnerUpScore?.let { "%.3f".format(it) } ?: "none",
+                ),
+            )
+        }
+
+        fun remapped(rule: String, from: Int, to: Int) {
+            val (before, after) = neighbours(from)
+            val direction = when (to) {
+                SpeakerAlignment.UNATTRIBUTED -> "NOBODY (left unattributed)"
+                before -> "its PREDECESSOR"
+                after -> "its SUCCESSOR"
+                else -> "neither neighbour"
+            }
+            Log.i(TRACE_TAG, "%s fold c%d %s -> c%d = %s".format(rule, from, describe(span(from)), to, direction))
+        }
     }
 
     /**
@@ -592,6 +765,7 @@ class SpeakerRepository(
      * alignment bug in a log, and the memory note says to keep it.
      */
     private fun logDecision(cluster: Int, decision: SpeakerMatchDecision) {
+
         Log.i(
             TAG,
             "cluster %d match: best=%s %.3f, runner-up=%s %s, accepted=%s".format(
@@ -682,6 +856,7 @@ class SpeakerRepository(
 
     companion object {
         private const val TAG = "SpeakerRepository"
+        private const val TRACE_TAG = "FoldTrace"
 
         /**
          * Prefix for a speaker diarisation found but could not put a name to.
@@ -753,6 +928,17 @@ class SpeakerRepository(
 
         const val MATCH_THRESHOLD = 0.6f
 
+        /**
+         * How alike a fragment and a speaker must sound before the fold gives the fragment to them.
+         * The same bar as naming a cluster after an enrolled person, on purpose: "this half-second
+         * is Sp1's" is the same kind of claim as "this cluster is Sp1", and it should need the same
+         * evidence. Below it the fragment is left unattributed -- see [smallClusterRemap].
+         */
+        const val FRAGMENT_FIT_SIMILARITY = MATCH_THRESHOLD
+
+        /** The name blocks carry when no speaker could be attributed; the screen renders them grey. */
+        const val UNATTRIBUTED_NAME = "$UNKNOWN_SPEAKER_PREFIX ?"
+
         /** Required lead over the second-best enrolled voice before a name is safe to print. */
         const val MATCH_MARGIN = 0.05f
 
@@ -760,3 +946,10 @@ class SpeakerRepository(
         private const val LABEL_SAMPLE_SECONDS = 30
     }
 }
+
+/** The default span text: compacted seconds, when the caller has no way back to recording time. */
+private fun compactedSpan(range: IntRange): String =
+    "[%.1f-%.1fs compacted]".format(
+        range.first / AudioRecorder.SAMPLE_RATE.toFloat(),
+        range.last / AudioRecorder.SAMPLE_RATE.toFloat(),
+    )

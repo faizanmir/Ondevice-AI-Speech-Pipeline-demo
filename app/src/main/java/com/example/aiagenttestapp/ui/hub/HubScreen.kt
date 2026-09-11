@@ -124,23 +124,9 @@ fun HubContent(
                 shape = RoundedCornerShape(24.dp),
             )
 
-            // Format, not engine: the file format is what decides which engine can load the result,
-            // so this is the honest way to frame the choice.
-            Row(
-                Modifier.padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                FilterChip(
-                    selected = state.format == ModelFormat.GGUF,
-                    onClick = { viewModel.onIntent(HubIntent.FormatChanged(ModelFormat.GGUF)) },
-                    label = { Text("GGUF · llama.cpp") },
-                )
-                FilterChip(
-                    selected = state.format == ModelFormat.LITERTLM,
-                    onClick = { viewModel.onIntent(HubIntent.FormatChanged(ModelFormat.LITERTLM)) },
-                    label = { Text("LiteRT-LM") },
-                )
-            }
+            // A pair of format chips stood here -- GGUF and LiteRT-LM -- because the file format is
+            // what decides which engine can load a result. With llama.cpp gone there is one format
+            // left, and a filter offering a single choice is furniture rather than a control.
 
             val ref = state.pastedRef
             if (ref != null) {
@@ -194,9 +180,9 @@ fun HubContent(
  */
 @Composable
 private fun PagedRepoGrid(
-    repos: LazyPagingItems<com.example.aiagenttestapp.data.HfRepo>,
+    repos: LazyPagingItems<com.example.aiagent.llm.HfRepo>,
     state: HubUiState,
-    onOpen: (com.example.aiagenttestapp.data.HfRepo) -> Unit,
+    onOpen: (com.example.aiagent.llm.HfRepo) -> Unit,
     onAdd: (HubFile) -> Unit,
     onRemove: (HubFile) -> Unit,
     onSignIn: () -> Unit,
@@ -216,7 +202,7 @@ private fun PagedRepoGrid(
                 )
             }
 
-        repos.itemCount == 0 -> EmptyResults(state.format)
+        repos.itemCount == 0 -> EmptyResults()
 
         else -> LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = GridCardMinWidth),
@@ -345,7 +331,7 @@ private fun PastedRefCard(
 
 @Composable
 private fun RepoCard(
-    repo: com.example.aiagenttestapp.data.HfRepo,
+    repo: com.example.aiagent.llm.HfRepo,
     isOpen: Boolean,
     isLoading: Boolean,
     files: List<HubFile>,
@@ -493,7 +479,7 @@ private fun FileRow(
 }
 
 @Composable
-private fun EmptyResults(format: ModelFormat) {
+private fun EmptyResults() {
     Box(
         Modifier
             .fillMaxSize()
@@ -501,13 +487,9 @@ private fun EmptyResults(format: ModelFormat) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = when (format) {
-                ModelFormat.GGUF -> "No GGUF models matched. Try a family name like \"qwen\", " +
-                    "\"phi\" or \"smol\"."
-
-                ModelFormat.LITERTLM -> "No LiteRT-LM models matched. Google publishes these under " +
-                    "the litert-community organisation, so the selection is much smaller than GGUF."
-            },
+            text = "No models matched. Google publishes LiteRT-LM models under the " +
+                "litert-community organisation, so the selection is small -- try a family name " +
+                "like \"gemma\" or clear the search to browse all of them.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

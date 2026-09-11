@@ -25,7 +25,7 @@ class EngineRegistryTest {
             id = id,
             displayName = "Test ${id.slug}",
             vendor = "test",
-            supportedFormats = setOf(ModelFormat.GGUF),
+            supportedFormats = setOf(ModelFormat.LITERTLM),
             supportedAccelerators = setOf(Accelerator.CPU),
             supportsVision = false,
             supportsNativeTools = nativeTools,
@@ -66,8 +66,10 @@ class EngineRegistryTest {
 
     @Test
     fun `an engine without native tools needs no runner`() {
-        // llama.cpp: tool calling is arranged in the prompt, so there is nothing to hand it.
-        val registry = EngineRegistry(listOf(TestEngine(nativeTools = false, id = EngineId.LLAMA_CPP)))
+        // No registered engine declares this today -- llama.cpp was the one that arranged tool
+        // calling in the prompt instead. The registry must still accept one rather than insist
+        // every engine implement NativeToolEngine, which is what makes a fourth backend cheap.
+        val registry = EngineRegistry(listOf(TestEngine(nativeTools = false)))
 
         assertEquals(1, registry.all.size)
     }

@@ -26,8 +26,6 @@ import com.example.aiagenttestapp.ui.chat.ChatMessages.replacing
 import com.example.aiagenttestapp.ui.chat.ChatMessages.without
 import com.example.aiagenttestapp.functions.AppFunctionRunner
 import com.example.aiagenttestapp.functions.AppFunctionRegistry
-import com.example.aiagenttestapp.functions.PromptToolCalling
-import com.example.aiagenttestapp.functions.ToolCallingStrategy
 import com.example.aiagenttestapp.functions.AppNavigation
 import com.example.aiagenttestapp.prompts.ChatPrompts
 import com.example.aiagenttestapp.stt.SpeechModelState
@@ -39,7 +37,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
-import com.example.aiagenttestapp.data.ModelResidency
+import com.example.aiagent.llm.ModelResidency
 import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.chat.ChatDao
 import com.example.aiagent.engine.core.ToolRunner
@@ -245,18 +243,6 @@ class ChatViewModel @Inject constructor(
     /** The file staged for the next message. Its text is kept off UI state -- it can be large. */
     private val attachment = ChatAttachment(fileTextExtractor)
 
-    /** Whether app functions were switched on when this chat's model was loaded. */
-
-    /**
-     * How this model's session.engine is offered the app's functions.
-     *
-     * Held rather than re-derived because it is fixed for the life of the loaded model, like the
-     * tools themselves. A [ToolCallingStrategy.PromptDriven] session.engine needs the hop loop below -- each
-     * call arrives as JSON in the model's *output* and its result has to be fed back as a new turn.
-     * A runtime-driven one needs none of it: the runtime does all of that inside one generate and
-     * hands back only the final answer.
-     */
-
     /**
      * The bubble a turn is streaming into right now, so a natively-executed tool can slot its chip
      * in above the answer as it happens. [pendingReplyId] cannot serve: it is only set once a turn
@@ -293,7 +279,7 @@ class ChatViewModel @Inject constructor(
      * Loads [modelId] into an session.engine and gets the chat ready.
      *
      * How the session.engine, accelerator and system prompt are chosen lives in [planChatLoad], shared with
-     * the startup [com.example.aiagenttestapp.data.ModelResidency] so the two agree exactly -- that
+     * the startup [com.example.aiagent.llm.ModelResidency] so the two agree exactly -- that
      * agreement is what lets a fresh chat reuse the resident model with a reset instead of a load.
      */
     private fun openChat(modelId: String, resumeConversationId: Long?) =
@@ -304,7 +290,7 @@ class ChatViewModel @Inject constructor(
             is ChatLoadPlan.NoEngine -> copy(
                 model = plan.model,
                 loadState = ModelLoadState.Failed(
-                    "No session.engine in this build can load ${plan.model.format.label} files",
+                    "No engine on this device can load ${plan.model.format.label} files",
                 ),
             )
 
@@ -503,22 +489,11 @@ class ChatViewModel @Inject constructor(
                     response = runTurn(activeEngine, CONTINUE_PROMPT, into = pendingReplyId)
                 }
 
-                // Let the model chain a few tool calls per turn -- search, read a result, search
-                // again -- and then answer, instead of stopping after one. Kept bounded and guarded:
-                // the hop cap stops runaway chaining, an identical repeated call (a small model
-                // spinning on the same search) breaks early, and a navigation tool ends the turn
-                // since the user has been moved.
-                // Only a prompt-driven engine has a loop to drive: its calls arrive as text
-                // the app has to read. A runtime-driven one has already run them all.
-                val prompted = session.toolStrategy as? ToolCallingStrategy.PromptDriven
-                if (session.toolsEnabled && prompted != null) {
-                    response = ChatToolLoop(
-                        functions = appFunctions,
-                        deps = appFunctionDeps,
-                        strategy = prompted,
-                        host = ChatToolHost(activeEngine),
-                    ).drive(response, settingsStore.settings.value.maxToolHops)
-                }
+                // No tool loop runs here any more. Chaining calls across turns -- search, read a
+                // result, search again -- was the app's job only while an engine's calls arrived as
+                // text it had to parse. The one engine that worked that way was llama.cpp, and the
+                // loop, its hop cap and the `maxToolHops` setting went with it. LiteRT-LM runs every
+                // call inside one generate and hands back only the final answer.
 
                 // Attach the web sources gathered this turn to the final answer, as citations.
                 if (pendingSources.isNotEmpty()) {
@@ -630,58 +605,6 @@ class ChatViewModel @Inject constructor(
         setState { copy(messages = messages.insertingBefore(streaming, chip)) }
 
         result.navigation?.let { emitEffect(ChatEffect.Navigate(it)) }
-    }
-
-    /**
-     * Runs a function the model asked for, then feeds the result back and streams whatever it does
-     * next -- which may be another tool call or the final answer. Returns that next output and
-     * whether the tool moved the user (a navigation function ends the turn).
-     *
-     * The raw `{"tool": ...}` JSON is deleted from the transcript rather than shown: it is protocol,
-     * not conversation, and leaving it on screen makes the app look broken. What replaces it is a
-     * function chip -- so the user can still see exactly what the model did to their app.
-     */
-    /**
-     * The screen, as [ChatToolLoop] sees it.
-     *
-     * An inner class so it can reach the streaming and message-list machinery, but a named type
-     * rather than an anonymous one: it is bound to a single session.engine for the length of a turn, and
-     * that is worth saying in its constructor.
-     */
-    private inner class ChatToolHost(
-        private val activeEngine: InferenceEngine,
-    ) : ChatToolLoop.Host {
-
-        override suspend fun runTurn(prompt: String): String = runTurn(activeEngine, prompt)
-
-        override fun onToolExecuted(call: ToolCall, result: AppFunctionResult) {
-            collectSources(result)
-
-            // Replace the JSON bubble with the function chip: the call was the model's visible
-            // output here, so the chip takes its place rather than being inserted beside it.
-            pendingReplyId?.let { id ->
-                updateMessage(id) {
-                    it.copy(text = "", functionCall = result.asChip(call.name))
-                }
-            }
-
-            result.navigation?.let { emitEffect(ChatEffect.Navigate(it)) }
-        }
-
-        override fun onToolLimitReached() {
-            pendingReplyId?.let { id ->
-                updateMessage(id) {
-                    it.copy(
-                        text = "",
-                        functionCall = FunctionCallDisplay(
-                            name = "tool_limit",
-                            summary = "Reached the tool-call limit for this turn",
-                            succeeded = false,
-                        ),
-                    )
-                }
-            }
-        }
     }
 
     /** Web pages a call drew on, de-duplicated across the turn. */

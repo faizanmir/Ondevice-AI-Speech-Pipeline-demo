@@ -10,8 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import com.example.aiagenttestapp.data.ModelDirectory
-import com.example.aiagenttestapp.data.ModelRepository
+import com.example.aiagent.llm.ModelDirectory
+import com.example.aiagent.llm.ModelRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 

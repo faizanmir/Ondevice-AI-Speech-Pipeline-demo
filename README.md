@@ -20,19 +20,19 @@ search tool you have to supply a key for.
 
 ## Highlights
 
-- **Two inference engines behind one interface.** The chat layer never learns which runtime it is
-  talking to; capability differences are declared on the engine descriptor rather than discovered by
-  type checks. Adding a backend means implementing one interface and registering it.
+- **Inference engines behind one interface.** The chat layer never learns which runtime it is talking
+  to; capability differences are declared on the engine descriptor rather than discovered by type
+  checks. Adding a backend means implementing one interface and registering it -- and removing one,
+  which has happened three times, means deleting a line from the registry.
 - **A curated catalogue plus open search.** Built-in models from Google, Alibaba, Meta, DeepSeek and
   HuggingFace, or add any compatible model from the HuggingFace Hub. Downloads are resumable and
   survive the app being killed.
 - **Memory-fit verdicts.** Every model is judged against the device's RAM budget before download —
   *comfortable*, *tight* or *unsupported* — from measured file sizes and per-engine weight-residency
   modelling, not guesses.
-- **Tool calling with two mechanisms and one catalogue.** LiteRT-LM declares tools as schemas and
-  calls them itself; llama.cpp is told about them in the system prompt and the app drives the
-  call/result loop. Both read the same registry, and the calls render as function chips in the
-  transcript either way.
+- **Tool calling against one catalogue.** LiteRT-LM declares tools as schemas and calls them itself,
+  reading the same registry the system assistant does, and the calls render as function chips in the
+  transcript.
 - **Three speech-to-text backends.** A downloaded sherpa-onnx recogniser, the resident multimodal LLM
   listening to the audio directly, or Android's own on-device recogniser. The choice is pinned onto
   each recording, so a job resumed after a restart finishes on the backend it started on.
@@ -49,11 +49,14 @@ search tool you have to supply a key for.
 | Engine | Formats | Compute | Native tools | Audio in | Source |
 |---|---|---|---|---|---|
 | **LiteRT-LM** | `.litertlm` | CPU / GPU / NPU | yes | yes | Google Maven AAR |
-| **llama.cpp** | `.gguf` | CPU | no (prompt protocol) | no | built from source with the NDK |
 
-LiteRT-LM is the primary engine: it is Google's supported successor to the deprecated MediaPipe LLM
-Inference API, runs on GPU and NPU, and is the only one of the two with a native tool-calling API and
-audio input. llama.cpp is kept for the breadth of the GGUF catalogue.
+LiteRT-LM is the only engine: Google's supported successor to the deprecated MediaPipe LLM Inference
+API, running on GPU and NPU, with a native tool-calling API and audio input.
+
+Three others have come and gone — MNN, AICore (Gemini Nano) and llama.cpp. Each was removed by
+deleting one line from the engine registry and the code that only served it, which is what the
+`engine-core` abstraction is for. GGUF went with llama.cpp: a format no runtime can open is a model
+the user can download and never run.
 
 One model stays resident for the whole session, so opening a chat is instant. Background consumers —
 note transcription, the audit drainer — borrow it rather than loading their own.
@@ -133,33 +136,27 @@ app/                 UI (Compose, MVI), catalogue, downloads, chat, voice notes,
 engine-core/         Engine-agnostic contracts: InferenceEngine, ModelSpec, fit evaluation,
                      context-window budgeting, output guard, tool-calling protocol
 engine-litertlm/     LiteRT-LM backend
-engine-llamacpp/     llama.cpp backend (native build)
+llm/                 Model hosting: catalogue plumbing, downloads, load planning, residency
+stt/                 Speech: recognition, VAD, slicing, diarisation, speaker identification
 docs/                Transcription benchmark, WER scorer, research write-ups
-tools/               fetch script for llama.cpp's upstream source
 ```
+
+`llm/` and `stt/` are built to be handed over as AARs and consumed outside this app: no Hilt, no
+settings store, no assumed storage root. `docs/integration.md` is what a consumer needs — including
+the one genuine trap, that sherpa-onnx resolves from a GitHub ivy repository rather than Maven.
+
+`stt/` does not depend on `llm/`. Voice notes can transcribe with the resident multimodal model, and
+that single crossing is behind one interface a host may simply not bind.
 
 ## Building
 
-Requirements: Android Studio with the NDK and CMake, and a JDK 11+ toolchain (resolved automatically
-via Gradle toolchains).
+Requirements: Android Studio and a JDK 11+ toolchain (resolved automatically via Gradle toolchains).
+No NDK or CMake — nothing is compiled from source since llama.cpp was removed, and every dependency
+is a prebuilt AAR.
 
-1. Fetch llama.cpp's source (not vendored in this repository):
-
-   ```sh
-   tools/fetch_llama_cpp.sh
-   ```
-
-2. Build:
-
-   ```sh
-   ./gradlew :app:assembleDebug
-   ```
-
-The first build compiles llama.cpp from source and takes several minutes; every build after that is
-incremental. It can be excluded with `enableLlamaCpp=false` in `gradle.properties`, or
-`-PenableLlamaCpp=false` for one build — the app still builds and reports the engine as unavailable
-at runtime. `-PenableLlamaCppVulkan=true` opts into the Vulkan backend, which needs SPIRV-Headers on
-the host.
+```sh
+./gradlew :app:assembleDebug
+```
 
 Tests run on the JVM without a device:
 
@@ -171,8 +168,7 @@ Tests run on the JVM without a device:
 - **minSdk 31**, arm64-v8a only. Below API 31 there is no reliable way to identify the chipset, the
   accelerated backends are not dependable, and no such device has the RAM to run anything in the
   catalogue anyway.
-- Emulator use: add `x86_64` to `llamaCppAbiFilters` in `gradle.properties` (roughly doubles the
-  native build time).
+- Emulator use: add `x86_64` to `abiFilters` in `app/build.gradle.kts`.
 
 ## Models
 

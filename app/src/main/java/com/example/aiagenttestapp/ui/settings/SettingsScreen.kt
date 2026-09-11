@@ -40,10 +40,11 @@ import com.example.aiagent.engine.core.EngineAvailability
 import com.example.aiagent.engine.core.EngineRegistry
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagent.engine.core.SamplingParams
-import com.example.aiagenttestapp.data.HuggingFaceAuth
-import com.example.aiagenttestapp.data.OnnxProvider
-import com.example.aiagenttestapp.data.PlatformFeedChunk
-import com.example.aiagenttestapp.data.PlatformFeedPace
+import com.example.aiagent.llm.HuggingFaceAuth
+import com.example.aiagenttestapp.stt.DiarizationEngine
+import com.example.aiagenttestapp.stt.OnnxProvider
+import com.example.aiagenttestapp.stt.PlatformFeedChunk
+import com.example.aiagenttestapp.stt.PlatformFeedPace
 import com.example.aiagenttestapp.data.SettingsStore
 import com.example.aiagenttestapp.data.audiomodels.AudioModelCatalog
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
@@ -311,6 +312,13 @@ private fun SettingsDetail(
                     },
                 )
 
+                DiarizationEngineRow(
+                    selected = settings.diarizationEngine,
+                    onSelect = { engine ->
+                        settingsStore.update { it.copy(diarizationEngine = engine) }
+                    },
+                )
+
                 OnnxProviderRow(
                     selected = settings.onnxProvider,
                     onSelect = { provider ->
@@ -405,19 +413,6 @@ private fun SettingsDetail(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (settings.appFunctionsEnabled) {
-                    SliderRow(
-                        label = "Max tool calls per turn",
-                        value = settings.maxToolHops.toFloat(),
-                        range = 1f..8f,
-                        hint = "How many tools the model may chain -- search, read, search " +
-                            "again -- before it must answer.",
-                        format = { it.toInt().toString() },
-                        onChange = { value ->
-                            settingsStore.update { it.copy(maxToolHops = value.toInt()) }
-                        },
-                    )
-                }
             }
         }
 
@@ -565,7 +560,7 @@ private fun SettingsDetail(
                     label = "CPU threads",
                     value = settings.threadCount.toFloat(),
                     range = 0f..8f,
-                    hint = "Decode threads for the CPU engine (llama.cpp). " +
+                    hint = "Threads for CPU decoding and for the speech models. " +
                         "\"Automatic\" leaves the little cores free. No effect on GPU or NPU.",
                     format = { if (it < 1f) "Automatic" else it.toInt().toString() },
                     onChange = { value ->
@@ -622,6 +617,48 @@ private fun SettingsDetail(
  * Takes effect on the next transcription rather than immediately -- the recognisers read this when
  * they build a session, and a run already under way keeps the provider it started on.
  */
+/**
+ * Which implementation answers "who spoke when".
+ *
+ * Offered rather than decided because the two are not comparable from here -- see
+ * [DiarizationEngine]. Takes effect on the next recording diarised: a run already under way keeps
+ * the engine it started on, and the warm pool evicts the other engine's instances on the switch
+ * rather than handing one back.
+ */
+@Composable
+private fun DiarizationEngineRow(
+    selected: DiarizationEngine,
+    onSelect: (DiarizationEngine) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            "Speaker splitting",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+        )
+        Text(
+            "How a recording is divided between speakers. Both use the same two models and differ " +
+                "in what happens between them. Applies to the next recording you diarise.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            DiarizationEngine.entries.forEach { engine ->
+                FilterChip(
+                    selected = engine == selected,
+                    onClick = { onSelect(engine) },
+                    label = { Text(engine.label) },
+                )
+            }
+        }
+        Text(
+            selected.hint,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 @Composable
 private fun OnnxProviderRow(
     selected: OnnxProvider,

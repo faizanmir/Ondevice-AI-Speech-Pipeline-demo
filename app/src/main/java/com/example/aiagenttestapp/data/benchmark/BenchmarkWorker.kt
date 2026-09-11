@@ -15,7 +15,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
-import com.example.aiagenttestapp.data.notes.SttBackend
+import com.example.aiagenttestapp.stt.SttBackend
 import com.example.aiagenttestapp.data.notes.TranscriptionCheckpoint
 import com.example.aiagenttestapp.data.notes.TranscriptionRun
 import dagger.assisted.Assisted

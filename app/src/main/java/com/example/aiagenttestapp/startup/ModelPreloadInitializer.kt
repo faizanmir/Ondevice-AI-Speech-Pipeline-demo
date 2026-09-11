@@ -2,7 +2,7 @@ package com.example.aiagenttestapp.startup
 
 import android.content.Context
 import androidx.startup.Initializer
-import com.example.aiagenttestapp.data.ModelResidency
+import com.example.aiagent.llm.ModelResidency
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -28,13 +28,16 @@ class ModelPreloadInitializer : Initializer<Unit> {
     @InstallIn(SingletonComponent::class)
     interface PreloadEntryPoint {
         fun modelResidency(): ModelResidency
+        fun activeModelWarmUp(): ActiveModelWarmUp
     }
 
     override fun create(context: Context) {
-        EntryPointAccessors
+        val graph = EntryPointAccessors
             .fromApplication(context.applicationContext, PreloadEntryPoint::class.java)
-            .modelResidency()
-            .preloadActiveModel()
+
+        // What to warm is this app's policy ([ActiveModelWarmUp]); holding it loaded is residency's
+        // job. Keeping the two apart is what stopped model hosting depending on the chat screen.
+        graph.modelResidency().preload(graph.activeModelWarmUp().plan())
     }
 
     /** No other initializer has to run first: the graph is already built by the time we run. */

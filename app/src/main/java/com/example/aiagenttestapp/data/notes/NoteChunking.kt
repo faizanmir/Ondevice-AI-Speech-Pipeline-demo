@@ -9,7 +9,7 @@ import com.example.aiagenttestapp.data.audit.AuditChunker
  * This exists because the summariser used to be handed the whole transcript in one prompt, and that
  * is only safe while notes are short. A 22-minute inspection note transcribes to ~17,800 characters
  * -- about 5,100 tokens -- against the 4,096-token window every LiteRT-LM bundle gets
- * ([com.example.aiagenttestapp.data.ModelContextDefaults.DEFAULT_TOKENS], because the format carries
+ * ([com.example.aiagent.llm.ModelContextDefaults.DEFAULT_TOKENS], because the format carries
  * no declared length). The prompt did not fail; it overflowed, and the engine evicts from the *start*
  * of the prompt to make room. So the opening of the note -- the scope, the site, who was present --
  * was silently dropped, and the model summarised a transcript whose beginning it had never seen,

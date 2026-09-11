@@ -37,7 +37,7 @@ class ParamBudgetTest {
             budgetBytes = budget,
             quantization = Quantization.Q4,
             contextTokens = 4096,
-            engine = EngineId.LLAMA_CPP,
+            engine = EngineId.LITE_RT_LM,
             accelerator = Accelerator.CPU,
         )
 
@@ -45,7 +45,7 @@ class ParamBudgetTest {
             weightsBytes = ParamBudget.estimateWeightsBytes(maxParams, Quantization.Q4),
             paramsBillions = maxParams,
             contextTokens = 4096,
-            engine = EngineId.LLAMA_CPP,
+            engine = EngineId.LITE_RT_LM,
             accelerator = Accelerator.CPU,
         )
 
@@ -60,7 +60,7 @@ class ParamBudgetTest {
             budgetBytes = budget,
             quantization = Quantization.Q4,
             contextTokens = 4096,
-            engine = EngineId.LLAMA_CPP,
+            engine = EngineId.LITE_RT_LM,
             accelerator = Accelerator.CPU,
         )
 
@@ -68,7 +68,7 @@ class ParamBudgetTest {
             weightsBytes = ParamBudget.estimateWeightsBytes(maxParams * 1.1, Quantization.Q4),
             paramsBillions = maxParams * 1.1,
             contextTokens = 4096,
-            engine = EngineId.LLAMA_CPP,
+            engine = EngineId.LITE_RT_LM,
             accelerator = Accelerator.CPU,
         )
 
@@ -83,7 +83,7 @@ class ParamBudgetTest {
             budgetBytes = budget,
             quantization = q,
             contextTokens = 4096,
-            engine = EngineId.LLAMA_CPP,
+            engine = EngineId.LITE_RT_LM,
             accelerator = Accelerator.CPU,
         )
 
@@ -140,7 +140,7 @@ class ParamBudgetTest {
             budgetBytes = budget,
             quantization = Quantization.Q4,
             contextTokens = ctx,
-            engine = EngineId.LLAMA_CPP,
+            engine = EngineId.LITE_RT_LM,
             accelerator = Accelerator.CPU,
         )
 
@@ -186,7 +186,7 @@ class ParamBudgetTest {
             budgetBytes = gb(0.1),
             quantization = Quantization.Q4,
             contextTokens = 4096,
-            engine = EngineId.LLAMA_CPP,
+            engine = EngineId.LITE_RT_LM,
             accelerator = Accelerator.CPU,
         )
         // The runtime overhead alone exceeds the budget. Must clamp, not go negative and render as
@@ -207,7 +207,7 @@ class ParamBudgetTest {
             budgetBytes = budget,
             weightsBytes = weights,
             paramsBillions = params,
-            engine = EngineId.LLAMA_CPP,
+            engine = EngineId.LITE_RT_LM,
             accelerator = Accelerator.CPU,
         )
 
@@ -215,7 +215,7 @@ class ParamBudgetTest {
             weightsBytes = weights,
             paramsBillions = params,
             contextTokens = maxCtx,
-            engine = EngineId.LLAMA_CPP,
+            engine = EngineId.LITE_RT_LM,
             accelerator = Accelerator.CPU,
         )
 
@@ -232,7 +232,7 @@ class ParamBudgetTest {
             budgetBytes = dev.modelRamBudgetBytes,
             weightsBytes = weights,
             paramsBillions = params,
-            engine = EngineId.LLAMA_CPP,
+            engine = EngineId.LITE_RT_LM,
             accelerator = Accelerator.CPU,
         )
 
@@ -246,7 +246,7 @@ class ParamBudgetTest {
             budgetBytes = gb(0.5),
             weightsBytes = gb(4.0), // the weights alone exceed the budget
             paramsBillions = 7.0,
-            engine = EngineId.LLAMA_CPP,
+            engine = EngineId.LITE_RT_LM,
             accelerator = Accelerator.CPU,
         )
         assertEquals(0, ctx)

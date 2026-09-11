@@ -112,7 +112,10 @@ internal fun nameClustersByVoiceprint(
 ): ClusterNaming {
     // Numbered by first appearance, so "Speaker 2" is the second person heard rather than whatever
     // index the clustering happened to assign.
+    // The unattributed cluster is nobody's and gets no name -- not even a placeholder: a placeholder
+    // would present words the fold judged to fit no one as a person who spoke.
     val order = turns.sortedBy { it.startSample }.map { it.cluster }.distinct()
+        .filter { it != SpeakerAlignment.UNATTRIBUTED }
 
     val names = mutableMapOf<Int, String>()
     val decisions = mutableMapOf<Int, SpeakerMatchDecision>()

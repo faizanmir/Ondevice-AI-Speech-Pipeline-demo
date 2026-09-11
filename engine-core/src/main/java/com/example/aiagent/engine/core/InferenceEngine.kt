@@ -5,7 +5,6 @@ import kotlinx.coroutines.flow.Flow
 /** Stable identifier for a pluggable inference backend. */
 enum class EngineId(val slug: String) {
     LITE_RT_LM("litertlm"),
-    LLAMA_CPP("llamacpp"),
 }
 
 /** Static description of what an engine can do. Safe to read without the engine being loaded. */
@@ -39,9 +38,14 @@ data class EngineDescriptor(
 }
 
 /**
- * Whether an engine can actually run on *this* device+build right now. An engine can be compiled
- * in but unavailable -- llama.cpp reports [Unavailable] when its native library was excluded from
- * the build (see the `enableLlamaCpp` Gradle property).
+ * Whether an engine can actually run on *this* device right now. Being registered is not the same
+ * as being usable: LiteRT-LM reports [Unavailable] when its native library will not load or the
+ * chipset is unsupported, and that is what makes [ModelLoadPlan.NoEngine] reachable with a single
+ * engine registered.
+ *
+ * This used to also cover a build-time exclusion -- llama.cpp's native build could be switched off
+ * with an `enableLlamaCpp` Gradle property, leaving the engine compiled in but inert. Nothing is
+ * built from source any more, so unavailability is now purely a property of the device.
  */
 sealed interface EngineAvailability {
     data object Available : EngineAvailability

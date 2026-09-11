@@ -32,8 +32,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.aiagenttestapp.data.HfAccount
-import com.example.aiagenttestapp.data.HuggingFaceAuth
+import com.example.aiagent.llm.HfAccount
+import com.example.aiagent.llm.HuggingFaceAuth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 

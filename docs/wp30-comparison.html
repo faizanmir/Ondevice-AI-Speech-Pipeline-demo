@@ -1,0 +1,746 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>wp30 vs AIAgentTestApp</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+  :root {
+    --bg: #e9edf1;
+    --surface: #ffffff;
+    --surface-2: #f3f6f8;
+    --ink: #111820;
+    --ink-2: #4a5763;
+    --ink-3: #74828e;
+    --line: #d4dce2;
+    --line-strong: #bcc7cf;
+
+    --accent: #c9761f;
+
+    /* the two subjects — derived from the sibling docs' lane colours, darkened
+       for text contrast on the light ground */
+    --wp30: #0a6f66;
+    --wp30-fill: #e4f2f0;
+    --aiat: #a2610f;
+    --aiat-fill: #f7ecdd;
+
+    --warn: #a33333;
+    --warn-fill: #f6e6e6;
+
+    --box-fill: var(--surface-2);
+    --box-line: var(--line-strong);
+
+    --font-display: 'Archivo', system-ui, -apple-system, sans-serif;
+    --font-body: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+    --maxw: 1080px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0c1116;
+      --surface: #131b22;
+      --surface-2: #18222b;
+      --ink: #e8eef3;
+      --ink-2: #98a8b5;
+      --ink-3: #6d7d8a;
+      --line: #26313b;
+      --line-strong: #33404b;
+
+      --accent: #eba24e;
+
+      --wp30: #2bb8a8;
+      --wp30-fill: #0f2f2c;
+      --aiat: #eba24e;
+      --aiat-fill: #2c2010;
+
+      --warn: #e08585;
+      --warn-fill: #2b1616;
+
+      --box-fill: #18222b;
+      --box-line: #33404b;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0c1116;
+    --surface: #131b22;
+    --surface-2: #18222b;
+    --ink: #e8eef3;
+    --ink-2: #98a8b5;
+    --ink-3: #6d7d8a;
+    --line: #26313b;
+    --line-strong: #33404b;
+
+    --accent: #eba24e;
+
+    --wp30: #2bb8a8;
+    --wp30-fill: #0f2f2c;
+    --aiat: #eba24e;
+    --aiat-fill: #2c2010;
+
+    --warn: #e08585;
+    --warn-fill: #2b1616;
+
+    --box-fill: #18222b;
+    --box-line: #33404b;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .wrap {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: clamp(28px, 5vw, 64px) clamp(18px, 4vw, 40px) 72px;
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 14px;
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: clamp(30px, 5.4vw, 50px);
+    line-height: 1.04;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+    margin: 0 0 16px;
+  }
+
+  .lede {
+    font-size: clamp(16px, 2vw, 19px);
+    color: var(--ink-2);
+    max-width: 62ch;
+    margin: 0;
+  }
+  .lede em { color: var(--ink); font-style: italic; }
+
+  .runmeta {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-3);
+    margin: 20px 0 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 20px;
+  }
+
+  section { margin-top: 56px; }
+
+  h2 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(19px, 2.6vw, 24px);
+    letter-spacing: -0.01em;
+    margin: 0 0 6px;
+  }
+
+  h3 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 16.5px;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+
+  .sub {
+    color: var(--ink-2);
+    font-size: 15px;
+    margin: 0 0 22px;
+    max-width: 66ch;
+  }
+
+  p { margin: 0 0 14px; max-width: 70ch; color: var(--ink-2); }
+  p:last-child { margin-bottom: 0; }
+  p strong { color: var(--ink); font-weight: 600; }
+  p em { color: var(--ink); font-style: italic; }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.87em;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0.08em 0.34em;
+    color: var(--ink);
+  }
+
+  /* ---------- subject cards ---------- */
+
+  .subjects {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 18px;
+    margin-top: 30px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--chan, var(--line-strong));
+    border-radius: 14px;
+    padding: 20px 22px 22px;
+    display: grid;
+    gap: 14px;
+    align-content: start;
+  }
+  .card.wp30 { --chan: var(--wp30); }
+  .card.aiat { --chan: var(--aiat); }
+
+  .card-name {
+    font-family: var(--font-mono);
+    font-size: 14.5px;
+    font-weight: 600;
+    color: var(--chan);
+    letter-spacing: -0.01em;
+  }
+  .card-name .here {
+    font-family: var(--font-body);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-left: 8px;
+  }
+
+  .card-role { font-size: 14.5px; line-height: 1.55; color: var(--ink-2); }
+
+  dl.vitals {
+    margin: 0;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  dl.vitals dt { color: var(--ink-3); padding: 6px 0; border-top: 1px solid var(--line); }
+  dl.vitals dd { margin: 0; padding: 6px 0; text-align: right; color: var(--ink); border-top: 1px solid var(--line); }
+
+  /* ---------- figures ---------- */
+
+  figure { margin: 0; }
+
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: clamp(14px, 2.4vw, 26px);
+  }
+
+  .svg-scroll { overflow-x: auto; }
+  .diagram svg { display: block; width: 100%; min-width: 880px; height: auto; }
+
+  figcaption {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--ink-3);
+    max-width: 82ch;
+    margin-top: 16px;
+  }
+  figcaption b { color: var(--ink-2); font-weight: 600; }
+
+  /* svg paint — declared here so the theme tokens reach the drawing */
+  .s-box   { fill: var(--box-fill); stroke: var(--box-line); stroke-width: 1; }
+  .s-wp30  { stroke: var(--wp30); }
+  .s-aiat  { stroke: var(--aiat); }
+  .s-warn  { stroke: var(--warn); }
+  .f-wp30  { fill: var(--wp30); }
+  .f-aiat  { fill: var(--aiat); }
+  .f-ink   { fill: var(--ink); }
+  .f-mute  { fill: var(--ink-3); }
+  .f-warn  { fill: var(--warn); }
+  .fill-wp30 { fill: var(--wp30-fill); }
+  .fill-aiat { fill: var(--aiat-fill); }
+  .fill-warn { fill: var(--warn-fill); }
+  .t-name { font-family: var(--font-mono); font-size: 12.5px; font-weight: 600; }
+  .t-sub  { font-family: var(--font-body); font-size: 11px; }
+  .t-tag  { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; }
+  .t-lane { font-family: var(--font-mono); font-size: 12px; font-weight: 600; letter-spacing: 0.12em; }
+  .stroke-only { fill: none; }
+  #ar-wp30 > path { fill: var(--wp30); }
+  #ar-aiat > path, #ar-aiat2 > path { fill: var(--aiat); }
+
+  /* ---------- paths block ---------- */
+
+  .paths {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 18px;
+    margin-top: 22px;
+  }
+  .paths .col {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 18px 20px;
+  }
+  .paths h3 { font-size: 14px; margin-bottom: 12px; color: var(--chan); }
+  .paths .col.wp30 { --chan: var(--wp30); }
+  .paths .col.aiat { --chan: var(--aiat); }
+  .paths ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; }
+  .paths li { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); line-height: 1.45; word-break: break-all; }
+  .paths li b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- table ---------- */
+
+  .table-scroll {
+    overflow-x: auto;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+  }
+
+  table { border-collapse: collapse; width: 100%; min-width: 800px; }
+
+  caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+  thead th {
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    padding: 15px 18px;
+    border-bottom: 1px solid var(--line-strong);
+    white-space: nowrap;
+  }
+  thead th.h-stage { color: var(--ink-3); text-transform: uppercase; width: 20%; }
+  thead th.h-wp30 { color: var(--wp30); width: 40%; }
+  thead th.h-aiat { color: var(--aiat); width: 40%; }
+
+  tbody th.group {
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    background: var(--surface-2);
+    padding: 9px 18px;
+    border-block: 1px solid var(--line);
+  }
+
+  tbody td, tbody th.row {
+    padding: 13px 18px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    font-size: 13.6px;
+    line-height: 1.5;
+    color: var(--ink-2);
+  }
+  tbody th.row { text-align: left; font-weight: 600; color: var(--ink); font-size: 13.4px; }
+  tbody td.wp30 { border-left: 2px solid var(--wp30-fill); }
+  tbody td.aiat { border-left: 2px solid var(--aiat-fill); }
+  tbody tr:hover td, tbody tr:hover th.row { background: var(--surface-2); }
+  td .lead { color: var(--ink); font-weight: 600; }
+  td code { white-space: nowrap; }
+
+  /* ---------- pull quote ---------- */
+
+  .pull {
+    border-left: 3px solid var(--line-strong);
+    padding: 2px 0 2px 24px;
+    margin: 0 0 20px;
+  }
+  .pull p { font-size: 18px; line-height: 1.55; color: var(--ink); max-width: 64ch; margin: 0; }
+
+  /* ---------- scores ---------- */
+
+  .scores {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 18px;
+  }
+
+  .score-rows { display: grid; }
+  .score-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px;
+    align-items: baseline;
+    padding: 9px 0;
+    border-top: 1px solid var(--line);
+  }
+  .score-label { font-size: 13px; color: var(--ink-3); }
+  .score-value {
+    font-family: var(--font-mono);
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--chan);
+    font-variant-numeric: tabular-nums;
+  }
+  .score-note { font-size: 13.5px; line-height: 1.55; color: var(--ink-3); margin: 0; max-width: none; }
+
+  .caveat {
+    border: 1px solid var(--warn);
+    background: var(--warn-fill);
+    border-radius: 14px;
+    padding: 18px 22px;
+    margin-top: 18px;
+  }
+  .caveat .eyebrow { color: var(--warn); margin-bottom: 8px; }
+  .caveat p { font-size: 15px; color: var(--ink-2); margin: 0; max-width: 76ch; }
+
+  /* ---------- verdict ---------- */
+
+  .verdicts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 18px;
+  }
+  .verdicts ul { margin: 0; padding-left: 1.1em; display: grid; gap: 8px; }
+  .verdicts li { font-size: 14.5px; line-height: 1.5; color: var(--ink-2); }
+  .verdicts li::marker { color: var(--chan); }
+  .verdicts li em { color: var(--ink); font-style: italic; }
+
+  .move {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--ink);
+    border-radius: 14px;
+    padding: 20px 24px;
+    margin-top: 18px;
+    display: grid;
+    gap: 10px;
+  }
+  .move p { max-width: 76ch; margin: 0; }
+
+  footer {
+    margin-top: 56px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+  }
+  footer p {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.7;
+    color: var(--ink-3);
+    max-width: 80ch;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <p class="eyebrow">On-device speech pipelines &middot; side by side</p>
+  <h1>wp30 vs AIAgentTestApp</h1>
+  <p class="lede">
+    Two Android codebases solving the same problem &mdash; offline audit transcription with speaker
+    attribution &mdash; that share no git history. The diarisation gap between them has since been
+    closed by porting one into the other, so what separates them now is
+    <em>what each is trying to become</em>.
+  </p>
+  <p class="runmeta">
+    <span>revised 2026-09-03</span>
+    <span>this repo @ 282bc6d +working tree</span>
+    <span>wp30-ai-poc @ 1e9531d (~/wp30-ai-poc)</span>
+  </p>
+
+  <div class="subjects">
+    <div class="card wp30">
+      <div class="card-name">wp30-ai-poc</div>
+      <div class="card-role">
+        A transcription engine being shaped into something a host app embeds. Three modules, a
+        published contract, and one job done thoroughly.
+      </div>
+      <dl class="vitals">
+        <dt>Modules</dt><dd>3</dd>
+        <dt>Main Kotlin</dt><dd>~5,600 lines</dd>
+        <dt>Test methods</dt><dd>35</dd>
+        <dt>UI</dt><dd>programmatic Views</dd>
+        <dt>DI / persistence / jobs</dt><dd>none</dd>
+        <dt>minSdk</dt><dd>26</dd>
+      </dl>
+    </div>
+    <div class="card aiat">
+      <div class="card-name">AIAgentTestApp<span class="here">this repo</span></div>
+      <div class="card-role">
+        A product where transcription is one feature of five, being modularised after the fact.
+        Chat with tools, voice notes, speakers, document audit, benchmark.
+      </div>
+      <dl class="vitals">
+        <dt>Modules</dt><dd>5</dd>
+        <dt>Main Kotlin</dt><dd>~55,000 lines</dd>
+        <dt>Test methods</dt><dd>760</dd>
+        <dt>UI</dt><dd>Compose, MVI</dd>
+        <dt>DI / persistence / jobs</dt><dd>Hilt &middot; Room &middot; WorkManager</dd>
+        <dt>minSdk</dt><dd>31, arm64 only</dd>
+      </dl>
+    </div>
+  </div>
+
+  <section>
+    <h2>The pipeline gap is closed</h2>
+    <p class="sub">What this page used to be about, and why it now compares something else.</p>
+    <p>
+      An earlier revision of this document argued that the two diverged on one decision: wp30 ran
+      pyannote itself and kept the per-frame posteriors, while this app handed the audio to sherpa's
+      sealed diariser and got only segments back. Everything downstream followed from that.
+    </p>
+    <p>
+      That machinery has since been ported here and finished. This app now carries both engines
+      behind one seam, with the frame engine as the default: its own segmentation keeping posteriors,
+      its own clustering with automatic speaker count and four repair passes, overlap detection, and
+      confidence-weighted word attribution. <strong>The algorithms are substantially the same on
+      both sides.</strong> What is left to compare is the engineering around them.
+    </p>
+  </section>
+
+  <section>
+    <h2>Architecture: two different ambitions</h2>
+    <p class="sub">The clearest difference, and the one that explains most of the rest.</p>
+
+    <div class="paths">
+      <div class="col wp30">
+        <h3>wp30 &mdash; contract-first</h3>
+        <ul>
+          <li><b>:ai:contract</b> &mdash; 328 lines, 7 files</li>
+          <li>TranscriptionSession &middot; SessionState</li>
+          <li>AiDependencies &middot; ConsentGate</li>
+          <li>ModelProvisioning &middot; VoiceEnrollment</li>
+          <li><b>:ai:core</b> &mdash; engines, controllers, provisioning</li>
+          <li><b>:app</b> &mdash; 1,709 lines: a demo harness</li>
+        </ul>
+      </div>
+      <div class="col aiat">
+        <h3>AIAgentTestApp &mdash; product-first</h3>
+        <ul>
+          <li><b>:app</b> &mdash; 42,899 lines (78% of the code)</li>
+          <li><b>:stt</b> &mdash; 7,835 lines, extracted</li>
+          <li><b>:llm</b> &mdash; 1,706 lines, extracted</li>
+          <li><b>:engine-core</b> &middot; <b>:engine-litertlm</b></li>
+          <li>engine-llamacpp: dropped</li>
+          <li>Hilt &middot; Room &middot; WorkManager throughout</li>
+        </ul>
+      </div>
+    </div>
+
+    <p style="margin-top:22px">
+      wp30 has a <em>published API</em>: a host app is handed a <code>TranscriptionSession</code> with
+      ten methods and a <code>SessionState</code> to observe, and everything else is behind the
+      module boundary. The app module is a harness for it, not the point. That shape only works
+      because the surface is small &mdash; one feature, done one way.
+    </p>
+    <p>
+      AIAgentTestApp is the opposite trajectory: a working product being pulled apart into modules as
+      the seams become obvious. <code>:stt</code> and <code>:llm</code> are recent extractions and the
+      app module still holds four fifths of the code, so the boundaries are real but incomplete. The
+      payoff is different too &mdash; not embeddability, but the ability to test 7,800 lines of speech
+      pipeline without an Android device.
+    </p>
+  </section>
+
+  <section>
+    <h2>Pros and cons</h2>
+    <p class="sub">Where each shape helps, and what it costs.</p>
+
+    <div class="verdicts">
+      <div class="card wp30">
+        <div class="card-name">wp30-ai-poc &mdash; pros</div>
+        <ul>
+          <li><em>Embeddable.</em> A ten-method contract means a host app takes the engine without taking the app.</li>
+          <li><em>Coherent.</em> One pipeline, one set of thresholds, calibrated together and connected end to end.</li>
+          <li><em>Small enough to hold in your head.</em> 5,600 lines total; the whole diarisation core is one 523-line file.</li>
+          <li><em>Measured on real audio</em> &mdash; a 23-minute customer recording against a human verbatim reference.</li>
+          <li><em>No framework debt.</em> No Hilt, Room or WorkManager to reason about or upgrade.</li>
+        </ul>
+      </div>
+      <div class="card wp30">
+        <div class="card-name">wp30-ai-poc &mdash; cons</div>
+        <ul>
+          <li><em>35 test methods.</em> The clustering core is private methods over shared mutable state and cannot be tested without models.</li>
+          <li><em>No durability.</em> No WorkManager, no checkpoints: a killed process loses the run.</li>
+          <li><em>Single-configuration.</em> One recording length, one embedder pair, no chunking &mdash; a longer recording clusters everything against everything.</li>
+          <li><em>Undocumented constants.</em> 0.70, 0.60, 0.10, 0.05, 0.08 are default parameters with no recorded derivation.</li>
+          <li><em>No concurrency story.</em> Fine single-threaded; unsafe otherwise.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="verdicts" style="margin-top:18px">
+      <div class="card aiat">
+        <div class="card-name">AIAgentTestApp &mdash; pros</div>
+        <ul>
+          <li><em>760 tests</em>, most over pure functions deliberately kept away from models.</li>
+          <li><em>Decisions are documented with their measurements</em> &mdash; including negative results, like the boundary pass built, measured and dropped as an overfit.</li>
+          <li><em>Survives reality.</em> Checkpointed by sample range, orphan reconciliation, decode pipelined into recording.</li>
+          <li><em>Scales.</em> Chunking, parallel lanes, warm pooling, two embedders on different similarity scales.</li>
+          <li><em>Swappable everywhere</em> &mdash; seven speech backends and two diarisation engines behind stable seams.</li>
+        </ul>
+      </div>
+      <div class="card aiat">
+        <div class="card-name">AIAgentTestApp &mdash; cons</div>
+        <ul>
+          <li><em>Ten times the code</em> for a superset of the job; far more surface for an interaction bug.</li>
+          <li><em>Modularisation is half-done.</em> The app module still holds 78% of the code.</li>
+          <li><em>Compaction taxes everything.</em> Every downstream coordinate is in compacted samples and must be mapped back.</li>
+          <li><em>Two ONNX Runtimes</em> in one process, and 26.8&nbsp;MB of native library, to reach posteriors sherpa hides.</li>
+          <li><em>The port is unmeasured.</em> The published benchmark still describes the old engine.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What still differs in the pipeline</h2>
+    <p class="sub">Small now, but not nothing.</p>
+
+    <div class="table-scroll">
+      <table>
+        <caption>Remaining pipeline differences</caption>
+        <thead>
+          <tr>
+            <th scope="col" class="h-stage">Stage</th>
+            <th scope="col" class="h-wp30">wp30-ai-poc</th>
+            <th scope="col" class="h-aiat">AIAgentTestApp</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row" class="row">Decode tuning</th>
+            <td class="wp30">Blank penalty 1.25 and 4&nbsp;s of context carried between windows &mdash; fights the transducer's deletion bias.</td>
+            <td class="aiat">sherpa defaults, no window overlap; boundary damage avoided by cutting at the quietest frame instead.</td>
+          </tr>
+          <tr>
+            <th scope="row" class="row">Timeline</th>
+            <td class="wp30">Real time throughout.</td>
+            <td class="aiat">Silence compacted out and mapped back; turns crossing a splice are split.</td>
+          </tr>
+          <tr>
+            <th scope="row" class="row">Clustering scope</th>
+            <td class="wp30">Whole recording at once &mdash; one person stays one voice.</td>
+            <td class="aiat">5-minute chunks stitched by naming &mdash; bounds the non-linear cost.</td>
+          </tr>
+          <tr>
+            <th scope="row" class="row">Boundary repair</th>
+            <td class="wp30"><span class="lead">Textual</span> &mdash; a mid-clause change snaps to clause-final punctuation.</td>
+            <td class="aiat"><span class="lead">Acoustic</span> &mdash; 3&nbsp;s tail probe, walking back in 1.2&nbsp;s pieces.</td>
+          </tr>
+          <tr>
+            <th scope="row" class="row">Backchannel markers</th>
+            <td class="wp30">Every wordless turn becomes <code>(mhm)</code> or <code>(overlap)</code>.</td>
+            <td class="aiat">Only turns under 2&nbsp;s that a different speaker's turn overlaps &mdash; deliberately conservative.</td>
+          </tr>
+          <tr>
+            <th scope="row" class="row">Enrolment</th>
+            <td class="wp30">One 25&nbsp;s guided take plus a 10&nbsp;s verification round.</td>
+            <td class="aiat">Three takes of 4&nbsp;s; two-voice takes rejected; short clusters protected by recognition.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin-top:22px">
+      Neither has both boundary refiners, and they attack different failures &mdash; punctuation fixes
+      a change placed mid-clause, the tail probe fixes a turn edge that arrives late. Running both is
+      untried on either side.
+    </p>
+  </section>
+
+  <section>
+    <h2>Measurements</h2>
+    <p class="sub">Each project's own published figures.</p>
+
+    <div class="scores">
+      <div class="card wp30">
+        <div class="card-name">wp30-ai-poc</div>
+        <div class="score-rows">
+          <div class="score-row"><span class="score-label">WER</span><span class="score-value">10.3%</span></div>
+          <div class="score-row"><span class="score-label">CER</span><span class="score-value">5.7%</span></div>
+          <div class="score-row"><span class="score-label">Speaker attribution</span><span class="score-value">~99.2%</span></div>
+        </div>
+        <p class="score-note">
+          Galaxy S25, 23-minute real German audit meeting, against the original human verbatim
+          transcript, scored with <code>score_kit_v3.1.py</code>.
+        </p>
+      </div>
+
+      <div class="card aiat">
+        <div class="card-name">AIAgentTestApp</div>
+        <div class="score-rows">
+          <div class="score-row"><span class="score-label">Best WER (normalised)</span><span class="score-value">7.8%</span></div>
+          <div class="score-row"><span class="score-label">Speaker (word level)</span><span class="score-value">98.3&ndash;98.6%</span></div>
+          <div class="score-row"><span class="score-label">Turn level</span><span class="score-value">26&ndash;29 / 36</span></div>
+        </div>
+        <p class="score-note">
+          From <code>stt-benchmark.html</code> and <code>diarization-benchmark.md</code>. Speaker
+          figures are from synthesised dialogues with enrolment audio inside the test set, and are
+          reported there as a ceiling.
+        </p>
+      </div>
+    </div>
+
+    <div class="caveat">
+      <p class="eyebrow">Both figures are now out of date here</p>
+      <p>
+        The speaker numbers above describe the <strong>sherpa engine</strong>, which is no longer the
+        default. Nothing has yet been measured on the frame engine, and the new backchannel markers
+        put words in the transcript that a reference does not contain &mdash; so a WER run that does
+        not exclude marker phrases is not comparable to any figure on this page. One
+        <code>diarscore.py</code> run per engine setting would settle both.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Verdict</h2>
+    <p class="sub">Neither is simply better; they are optimised for different futures.</p>
+    <p>
+      <strong>wp30 is the better thing to embed.</strong> A small contract, one job, no framework
+      debt, and a pipeline calibrated as a whole. If the goal is to drop offline transcription into
+      another product, its shape is right and this app's is not.
+    </p>
+    <p>
+      <strong>AIAgentTestApp is the better thing to keep changing.</strong> Its tests, its recorded
+      reasoning and its handling of long, interrupted, parallel, multi-model reality are what let a
+      pipeline survive a second recording and a third contributor. wp30 would need hand-retuning to
+      meet any of those.
+    </p>
+    <p>
+      The port has already moved the algorithms one way. The traffic worth considering in the other
+      direction is wp30's decode tuning &mdash; blank penalty and window overlap &mdash; and its
+      punctuation-based boundary refiner, none of which this app has tried.
+    </p>
+  </section>
+
+  <footer>
+    <p>
+      Revised 2026-09-03 by reading both working trees &mdash; AIAgentTestApp at 282bc6d plus an
+      uncommitted working tree mid-modularisation, wp30-ai-poc at 1e9531d. Line counts from
+      <code>wc -l</code> over each module's Kotlin sources; test counts from <code>@Test</code>
+      methods. Benchmark figures are each project's own published measurements, reproduced unchanged
+      and, as the caveat notes, no longer describing the default configuration here.
+    </p>
+  </footer>
+
+</div>
+</body>
+</html>

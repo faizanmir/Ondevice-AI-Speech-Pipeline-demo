@@ -53,7 +53,7 @@ import com.example.aiagenttestapp.data.notes.FindingSource
 import com.example.aiagenttestapp.data.notes.Note
 import com.example.aiagenttestapp.data.notes.NoteFinding
 import com.example.aiagenttestapp.data.notes.NoteStatus
-import com.example.aiagenttestapp.functions.MarkerKind
+import com.example.aiagenttestapp.stt.MarkerKind
 import com.example.aiagenttestapp.ui.components.EmptyState
 import com.example.aiagenttestapp.ui.components.FeatureHero
 import com.example.aiagenttestapp.ui.components.GridCardMinWidth

@@ -4,8 +4,8 @@ import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.LoadRequest
 import com.example.aiagenttestapp.data.ChatLoadPlan
 import com.example.aiagenttestapp.data.ChatLoadPlanner
-import com.example.aiagenttestapp.data.ModelLoadPlan
-import com.example.aiagenttestapp.data.ModelResidency
+import com.example.aiagent.llm.ModelLoadPlan
+import com.example.aiagent.llm.ModelResidency
 import com.example.aiagenttestapp.data.chat.ChatDao
 import com.example.aiagenttestapp.data.chat.Conversation
 import com.example.aiagenttestapp.data.chat.ConversationWithMessages

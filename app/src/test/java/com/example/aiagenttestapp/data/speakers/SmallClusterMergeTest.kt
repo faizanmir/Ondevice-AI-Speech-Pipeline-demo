@@ -23,12 +23,19 @@ class SmallClusterMergeTest {
 
     private val minSamples = 16_000 * 6 // six seconds
 
+    /** Fragments must sound at least this much like a speaker to be folded in; below it they are nobody's. */
+    private val fit = 0.6f
+    private val nobody = SpeakerAlignment.UNATTRIBUTED
+
+    private fun fold(sizes: Map<Int, Int>, centroids: Map<Int, FloatArray>, protected: Set<Int> = emptySet()) =
+        smallClusterRemap(sizes, centroids, minSamples, protected, minSimilarity = fit, unattributed = nobody)
+
     @Test
     fun `a fragment joins the large cluster it sounds like, not the nearest in time`() {
         val sizes = mapOf(0 to 16_000 * 40, 1 to 16_000 * 30, 2 to 16_000)
         val centroids = mapOf(0 to voiceA, 1 to voiceB, 2 to nearlyA)
 
-        val remap = smallClusterRemap(sizes, centroids, minSamples)
+        val remap = fold(sizes, centroids)
 
         assertEquals(mapOf(2 to 0), remap)
     }
@@ -38,7 +45,7 @@ class SmallClusterMergeTest {
         val sizes = mapOf(0 to 16_000 * 40, 1 to 16_000 * 30)
         val centroids = mapOf(0 to voiceA, 1 to voiceB)
 
-        assertTrue(smallClusterRemap(sizes, centroids, minSamples).isEmpty())
+        assertTrue(fold(sizes, centroids).isEmpty())
     }
 
     @Test
@@ -46,7 +53,7 @@ class SmallClusterMergeTest {
         val sizes = mapOf(0 to 16_000 * 40, 1 to 16_000 * 30, 2 to 16_000, 3 to 8_000)
         val centroids = mapOf(0 to voiceA, 1 to voiceB, 2 to nearlyA, 3 to voiceB)
 
-        val remap = smallClusterRemap(sizes, centroids, minSamples)
+        val remap = fold(sizes, centroids)
 
         assertEquals(mapOf(2 to 0, 3 to 1), remap)
     }
@@ -58,15 +65,36 @@ class SmallClusterMergeTest {
         val sizes = mapOf(0 to 16_000, 1 to 8_000)
         val centroids = mapOf(0 to voiceA, 1 to voiceB)
 
-        assertTrue(smallClusterRemap(sizes, centroids, minSamples).isEmpty())
+        assertTrue(fold(sizes, centroids).isEmpty())
     }
 
     @Test
-    fun `a fragment with no voiceprint is left where it is`() {
+    fun `a fragment with no voiceprint is nobody's, not a speaker of its own`() {
+        // It used to be left where it was -- and so survived as its own cluster, to be minted an
+        // "Unknown Speaker" in the middle of somebody's sentence.
         val sizes = mapOf(0 to 16_000 * 40, 1 to 16_000 * 30, 2 to 16_000)
         val centroids = mapOf(0 to voiceA, 1 to voiceB) // cluster 2 could not be embedded
 
-        assertTrue(smallClusterRemap(sizes, centroids, minSamples).isEmpty())
+        assertEquals(mapOf(2 to nobody), fold(sizes, centroids))
+    }
+
+    @Test
+    fun `a fragment that fits nobody is left unattributed rather than forced onto the nearest speaker`() {
+        // Equidistant from both voices and far from each (cosine 0.5): nearest-by-voice would still
+        // pick one. The trace on the bbg recording showed exactly such merges at 0.23-0.43.
+        val sizes = mapOf(0 to 16_000 * 40, 1 to 16_000 * 30, 2 to 8_000)
+        val nowhere = floatArrayOf(0.5f, 0.5f, 0.7071f)
+        val centroids = mapOf(0 to voiceA, 1 to voiceB, 2 to nowhere)
+
+        assertEquals(mapOf(2 to nobody), fold(sizes, centroids))
+    }
+
+    @Test
+    fun `an already unattributed cluster is neither a fragment nor a target`() {
+        val sizes = mapOf(0 to 16_000 * 40, nobody to 8_000, 2 to 16_000)
+        val centroids = mapOf(0 to voiceA, 2 to nearlyA)
+
+        assertEquals(mapOf(2 to 0), fold(sizes, centroids))
     }
 
     @Test
@@ -88,6 +116,8 @@ class SmallClusterMergeTest {
             centroids = mapOf(0 to voiceA, 1 to voiceB, 2 to nearA),
             minClusterSamples = 100,
             protectedClusters = setOf(1),
+            minSimilarity = fit,
+            unattributed = nobody,
         )
         assertEquals(mapOf(2 to 0), remap)
         assertTrue(1 !in remap.keys)

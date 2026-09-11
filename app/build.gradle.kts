@@ -104,10 +104,16 @@ android {
     }
 
     packaging {
-        // Both engines ship their own libc++_shared.so. Without this, merging them into one APK
-        // fails with a duplicate-file error.
+        // LiteRT-LM and sherpa-onnx each ship their own libc++_shared.so. Without this, merging
+        // them into one APK fails with a duplicate-file error.
         jniLibs {
             pickFirsts += "**/libc++_shared.so"
+            // sherpa's static-link AAR is static for every ABI except x86, where it ships a
+            // standalone libonnxruntime.so alongside the one onnxruntime-android provides. The
+            // native-lib merge runs across every ABI in the dependencies before abiFilters narrows
+            // them, so the clash has to be resolved even though this app packages arm64-v8a only --
+            // and on arm64 there is nothing to resolve, because sherpa contributes no copy there.
+            pickFirsts += "lib/x86/libonnxruntime.so"
         }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -125,7 +131,8 @@ dependencies {
 
     implementation(project(":engine-core"))
     implementation(project(":engine-litertlm"))
-    implementation(project(":engine-llamacpp"))
+    implementation(project(":llm"))
+    implementation(project(":stt"))
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
@@ -169,21 +176,8 @@ dependencies {
     implementation(libs.androidx.appfunctions.service)
     ksp(libs.androidx.appfunctions.compiler)
 
-    // Speech-to-text, running entirely on-device like everything else here.
-    //
-    // Declared inline rather than through the version catalogue because it needs the `@aar`
-    // suffix: the file on the GitHub release page carries no Gradle metadata, so the extension
-    // has to be stated or Gradle looks for a .jar and fails. The static-link build bundles
-    // onnxruntime into a single .so instead of shipping it alongside.
-    implementation(
-        "com.k2-fsa:sherpa-onnx-static-link-onnxruntime:" +
-            "${libs.versions.sherpaOnnx.get()}@aar",
-    )
 
-    // bzip2 + tar. Needed for exactly one thing: sherpa-onnx publishes its keyword-spotting models
-    // only as .tar.bz2 attachments on GitHub releases -- no per-file mirror exists -- and the Android
-    // runtime ships neither codec. Every other model this app downloads is a plain file.
-    implementation(libs.commons.compress)
+
 
     // Saved notes.
     implementation(libs.androidx.room.runtime)

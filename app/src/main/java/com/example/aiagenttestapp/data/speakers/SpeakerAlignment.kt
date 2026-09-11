@@ -1,6 +1,7 @@
 package com.example.aiagenttestapp.data.speakers
 
 import com.example.aiagenttestapp.stt.DiarizedSegment
+import com.example.aiagenttestapp.stt.FrameConfidence
 import com.example.aiagenttestapp.stt.TimedWord
 import com.example.aiagenttestapp.stt.TimedWords
 
@@ -59,10 +60,47 @@ object SpeakerAlignment {
      * before a hand-over belongs to whoever was already speaking -- and the reach keeps it a guess
      * about a boundary rather than a licence to carry a speaker across a long unsupported hole.
      */
+    /**
+     * How the words of one block got their speaker, for the trace log. Which rule placed a word is
+     * invisible in the output -- a block reads the same whether its words sat inside one turn or were
+     * kept by the established speaker through an overlap -- and that is exactly what has to be known
+     * to tell a late turn boundary (a diarisation fact) from an alignment rule carrying the previous
+     * speaker across a hand-over.
+     */
+    data class Trace(
+        val block: SpeakerBlock,
+        /** Words covered by exactly one turn. */
+        val single: Int,
+        /** Words inside overlapping turns, kept by the speaker already talking. */
+        val overlapKept: Int,
+        /** Words inside overlapping turns with no established speaker among them: unattributed. */
+        val overlapNone: Int,
+        /** Words in no turn, given the speaker both neighbouring turns agree on. */
+        val gapAgreed: Int,
+        /** Words in no turn, given the nearer edge's speaker because the neighbours disagree. */
+        val gapNearest: Int,
+        /** Words in no turn and out of reach of both edges. */
+        val gapNone: Int,
+        /** Words placed by confidence-weighted mass over the whole word rather than by one instant. */
+        val byMass: Int = 0,
+    )
+
     fun blocks(
         words: List<TimedWord>,
         turns: List<DiarizedSegment>,
         sampleRate: Int,
+        /**
+         * Per-frame confidence from the frame diariser, or [FrameConfidence.NONE] on an engine that
+         * has none. When present it decides a word before the timestamp rules get a look in -- see
+         * [massCluster].
+         */
+        confidence: FrameConfidence = FrameConfidence.NONE,
+        /**
+         * Stretches the model heard two voices in, in recording samples. Decides which marker a
+         * wordless turn gets; empty means every one of them reads as a backchannel.
+         */
+        overlaps: List<IntRange> = emptyList(),
+        onBlock: (Trace) -> Unit = {},
     ): List<SpeakerBlock> {
         if (words.isEmpty()) return emptyList()
 
@@ -121,18 +159,80 @@ object SpeakerAlignment {
             return nearest.first.takeIf { nearest.second <= reach }
         }
 
+        /**
+         * The speaker holding the most confidence-weighted audio across the whole word.
+         *
+         * **Why a span rather than an instant.** Everything below this asks which turn covers one
+         * point inside the word, which is a fair question only while the point is in the right turn.
+         * At a hand-over it often is not: the diariser places boundaries to the nearest segment, the
+         * recogniser places word starts to the nearest frame, and the two disagree by a hair on
+         * exactly the words a reader notices -- the first few of a turn. Summing the word's own
+         * frames instead lets the bulk of it decide, and weighting each frame by the model's
+         * top-versus-second margin lets the *confident* bulk decide.
+         *
+         * **Why it can decline.** A word split near evenly is a word the audio does not settle, and
+         * overruling the timestamp rules on a coin flip would trade a visible error for an invisible
+         * one. Below [MASS_MARGIN] this returns null and the rules below run unchanged.
+         *
+         * Returns null when there is no track, no turn overlaps the word, or nothing is confident
+         * enough -- so a caller on the sherpa engine never reaches a different answer than before.
+         */
+        fun massCluster(fromSample: Int, toSample: Int): Int? {
+            if (confidence.isEmpty || toSample <= fromSample) return null
+            var best: Int? = null
+            var bestMass = 0f
+            var runnerUp = 0f
+            for (turn in ordered) {
+                if (turn.endSample <= fromSample) continue
+                if (turn.startSample >= toSample) break
+                val mass = confidence.massBetween(
+                    maxOf(turn.startSample, fromSample),
+                    minOf(turn.endSample, toSample),
+                )
+                if (mass > bestMass) {
+                    runnerUp = bestMass
+                    bestMass = mass
+                    best = turn.cluster
+                } else if (mass > runnerUp) {
+                    runnerUp = mass
+                }
+            }
+            if (best == null || bestMass <= 0f) return null
+            val margin = (bestMass - runnerUp) / (bestMass + runnerUp)
+            return best.takeIf { margin >= MASS_MARGIN }
+        }
+
+        /**
+         * The word stream with markers folded in, in time order.
+         *
+         * Markers have to join the stream *before* blocks are built rather than being appended
+         * afterwards. A backchannel usually lands in the middle of a long stretch of one speaker,
+         * and a block is only cut where the speaker changes -- so a marker added to the finished
+         * list sits inside a block that already spans it, and the two silently overlap. Put in the
+         * stream, the marker's own cluster cuts the block in two around it, which is what a reader
+         * needs to see: the interruption between the words either side of it.
+         */
+        val stream = (words.map { it to null as Int? } + markerWords(words, ordered, overlaps, sampleRate))
+            .sortedBy { it.first.startSeconds }
+
+        // Per-block tallies of which rule placed each word; reset with the block.
+        val tally = IntArray(7)
+
         fun flush() {
             if (currentWords.isEmpty()) return
-            blocks += SpeakerBlock(
+            val block = SpeakerBlock(
                 cluster = currentCluster ?: UNATTRIBUTED,
                 startSample = currentStart,
                 endSample = (currentWords.last().endSeconds * sampleRate).toInt(),
                 text = currentWords.joinToString(" ") { it.text },
             )
+            blocks += block
+            onBlock(Trace(block, tally[0], tally[1], tally[2], tally[3], tally[4], tally[5], tally[6]))
+            tally.fill(0)
             currentWords = mutableListOf()
         }
 
-        for (word in words) {
+        for ((word, fixedCluster) in stream) {
             val reportedDuration = (word.endSeconds - word.startSeconds).coerceAtLeast(0f)
             val evidenceSeconds = word.startSeconds +
                 minOf(reportedDuration / 2f, MAX_WORD_EVIDENCE_OFFSET_SECONDS)
@@ -142,17 +242,37 @@ object SpeakerAlignment {
                 .map { it.cluster }
                 .distinct()
                 .toList()
+            val wordStart = (word.startSeconds * sampleRate).toInt()
+            val wordEnd = (word.endSeconds * sampleRate).toInt()
+            val byMass = massCluster(wordStart, wordEnd)
+
+            var rule = 0
             val cluster = when {
+                // A marker already knows whose turn it stands for; nothing may re-attribute it.
+                fixedCluster != null -> fixedCluster
+                // The word's own audio, when it is confident enough to have an opinion.
+                byMass != null -> { rule = 6; byMass }
                 candidates.size == 1 -> candidates.single()
-                currentCluster != null && currentCluster in candidates -> currentCluster
-                candidates.size > 1 -> null
+                currentCluster != null && currentCluster in candidates -> { rule = 1; currentCluster }
+                candidates.size > 1 -> { rule = 2; null }
                 // No turn covers it: only matching evidence on both sides can fill the gap.
-                else -> gapCluster(evidenceSample)
+                else -> {
+                    val before = edgeBefore(evidenceSample)
+                    val after = edgeAfter(evidenceSample)
+                    val filled = gapCluster(evidenceSample)
+                    rule = when {
+                        filled == null -> 5
+                        before != null && after != null && before.cluster == after.cluster -> 3
+                        else -> 4
+                    }
+                    filled
+                }
             }
 
             if (currentWords.isNotEmpty() && cluster != currentCluster) {
                 flush()
             }
+            tally[rule]++
             if (currentWords.isEmpty()) {
                 currentStart = (word.startSeconds * sampleRate).toInt()
                 currentCluster = cluster
@@ -162,6 +282,66 @@ object SpeakerAlignment {
         flush()
 
         return blocks
+    }
+
+    /**
+     * Turns that no word landed in, as marker pseudo-words carrying the turn's own speaker.
+     *
+     * **What is being recovered.** Diarisation regularly finds a second voice holding the floor for
+     * a second while somebody else is talking -- "mhm", "yeah", "okay", or two people starting at
+     * once. The recogniser, decoding a slice that is mostly the other speaker, returns no words for
+     * it. The turn then has nothing to attach to and disappears, and the transcript reads as though
+     * the interruption never happened. On a conversation full of backchannels that is most of the
+     * turns lost while word accuracy stays high, which is the exact shape of this app's own
+     * benchmark: 98.5% of words right, 26-29 of 36 turns.
+     *
+     * **Which marker.** [OVERLAP_MARKER] when the segmentation model reported two speakers active
+     * there, [BACKCHANNEL_MARKER] otherwise. The distinction is the model's rather than a guess: one
+     * is somebody talking over the speaker, the other is somebody agreeing in a gap.
+     *
+     * **What this costs.** These are words in the transcript that nobody said, so a word error rate
+     * measured against a reference without them counts every one as an insertion. `wer.py` already
+     * knows how to exclude marker phrases; a run scored with them left in is not comparable to the
+     * published figures.
+     */
+    private fun markerWords(
+        words: List<TimedWord>,
+        turns: List<DiarizedSegment>,
+        overlaps: List<IntRange>,
+        sampleRate: Int,
+    ): List<Pair<TimedWord, Int?>> = turns.mapNotNull { turn ->
+        if (turn.cluster == UNATTRIBUTED) return@mapNotNull null
+        // Only a short turn may be stood in for. A backchannel is a word long; a wordless turn of
+        // several seconds is the recogniser having failed on speech that was really there, and
+        // writing "(mhm)" over it would put a word in someone's mouth to cover a gap. Those stay
+        // dropped, exactly as before.
+        if (turn.endSample - turn.startSample > MAX_MARKER_SECONDS * sampleRate) return@mapNotNull null
+        // A backchannel is by definition a *second* voice: somebody making a noise while another
+        // person holds the floor. Requiring a competing turn is what separates that from the two
+        // cases which look identical once the words are missing -- the speaker's own turn that the
+        // recogniser found nothing in, and a trailing turn after the last word, both of which would
+        // otherwise have "(mhm)" written into them.
+        //
+        // The cost is that a backchannel landing in a clean gap, with no competing turn over it, is
+        // not marked. Telling that apart from a recognition gap needs evidence this stage does not
+        // have, and inventing a word is the worse error of the two.
+        val contested = turns.any {
+            it !== turn && it.cluster != turn.cluster &&
+                it.startSample < turn.endSample && it.endSample > turn.startSample
+        }
+        if (!contested) return@mapNotNull null
+        val spoken = words.any { word ->
+            (word.endSeconds * sampleRate).toInt() > turn.startSample &&
+                (word.startSeconds * sampleRate).toInt() < turn.endSample
+        }
+        if (spoken) return@mapNotNull null
+
+        val overlapped = overlaps.any { it.first < turn.endSample && it.last > turn.startSample }
+        TimedWord(
+            text = if (overlapped) OVERLAP_MARKER else BACKCHANNEL_MARKER,
+            startSeconds = turn.startSample / sampleRate.toFloat(),
+            endSeconds = turn.endSample / sampleRate.toFloat(),
+        ) to turn.cluster
     }
 
     /**
@@ -184,4 +364,29 @@ object SpeakerAlignment {
      * hole -- a stretch neither neighbour plausibly owns -- unattributed as before.
      */
     const val MAX_GAP_REACH_SECONDS = 1.5f
+
+    /**
+     * How decisively one speaker must hold a word's audio before mass overrules the timestamp rules.
+     *
+     * The value is a normalised top-versus-second margin, so 0.2 means the leader holds 1.5x the
+     * runner-up. Low enough that an ordinary word sitting inside one turn is decided here -- there
+     * is no runner-up at all, so the margin is 1.0 -- and high enough that a word genuinely split
+     * across a hand-over falls through to the rules that were measured.
+     */
+    private const val MASS_MARGIN = 0.2f
+
+    /**
+     * Longest wordless turn that may be replaced by a marker.
+     *
+     * Two seconds is the same line [DiarizeWorker]'s short-block smoothing draws, and the same one
+     * this codebase's boundary work kept running into from the other side: under it a turn is an
+     * interjection nobody transcribed, over it there is real speech the recogniser missed.
+     */
+    const val MAX_MARKER_SECONDS = 2f
+
+    /** A turn the recogniser found no words in, where two voices were active at once. */
+    const val OVERLAP_MARKER = "(overlap)"
+
+    /** A turn the recogniser found no words in, with no second voice: an agreement noise. */
+    const val BACKCHANNEL_MARKER = "(mhm)"
 }

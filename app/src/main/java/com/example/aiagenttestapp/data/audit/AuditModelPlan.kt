@@ -6,9 +6,9 @@ import com.example.aiagenttestapp.prompts.audit.AuditPromptBudget
 import com.example.aiagenttestapp.prompts.audit.AuditSystemPrompts
 import com.example.aiagent.engine.core.InferenceEngine
 import com.example.aiagent.engine.core.LoadRequest
-import com.example.aiagenttestapp.data.ModelLoadPlan
-import com.example.aiagenttestapp.data.ModelLoadPlanner
-import com.example.aiagenttestapp.data.ModelResidency
+import com.example.aiagent.llm.ModelLoadPlan
+import com.example.aiagent.llm.ModelLoadPlanner
+import com.example.aiagent.llm.ModelResidency
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -36,7 +36,7 @@ sealed interface AuditModelPlan {
         /** Rich or lean prompt, decided by whether this engine reuses a shared prompt prefix. */
         val profile: AuditPromptProfile,
         /**
-         * The shared plan, needed only to hand back to [com.example.aiagenttestapp.data.ModelResidency].
+         * The shared plan, needed only to hand back to [com.example.aiagent.llm.ModelResidency].
          * Deliberately the one place audit still touches it, rather than every call site.
          */
         val resolved: ModelLoadPlan.Resolved,
@@ -110,7 +110,7 @@ class AuditLoadPlanner @Inject constructor(
                 AuditModelPlan.Unavailable("No model with this id is installed.")
 
             is ModelLoadPlan.NoEngine ->
-                AuditModelPlan.Unavailable("No engine in this build can load ${plan.model.name}.")
+                AuditModelPlan.Unavailable("No engine on this device can load ${plan.model.name}.")
 
             is ModelLoadPlan.Resolved -> when {
                 !plan.downloaded -> AuditModelPlan.Unavailable("${plan.model.name} is not downloaded.")

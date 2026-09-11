@@ -149,10 +149,28 @@ class LiveDiarizeWorker @AssistedInject constructor(
             // hand each other warm instances instead of evicting them.
             val segmentation = audioModels.fileFor(bundle, AudioModelCatalog.SEGMENTATION)
             val embedding = audioModels.fileFor(bundle, AudioModelCatalog.EMBEDDING)
-            diarizerKey = listOf(segmentation.absolutePath, embedding.absolutePath, recording.expectedSpeakers, threads.diarise, provider)
+            val engine = settings.settings.value.diarizationEngine
+            diarizerKey = listOf(
+                segmentation.absolutePath,
+                embedding.absolutePath,
+                recording.expectedSpeakers,
+                threads.diarise,
+                provider,
+                engine,
+                // orEmpty so the key stays List<Any>, and so it matches the batch worker's.
+                bundle.embeddingModelId.orEmpty(),
+            )
             diarizer = diarizerPool.acquire(diarizerKey)?.also { Log.i(TAG, "diarizer reused warm") }
                 ?: SpeakerDiarizer().apply {
-                    load(segmentation, embedding, recording.expectedSpeakers, threads.diarise, provider)
+                    load(
+                        segmentationModel = segmentation,
+                        embeddingModel = embedding,
+                        expectedSpeakers = recording.expectedSpeakers,
+                        threadCount = threads.diarise,
+                        provider = provider,
+                        engine = engine,
+                        embeddingModelId = bundle.embeddingModelId,
+                    )
                 }
             if (recognizer.loadedModelId != model.id || recognizer.loadedThreadCount != threads.transcribe) {
                 recognizer.load(speechModels.selectedPaths(), threadCount = threads.transcribe)
@@ -166,6 +184,7 @@ class LiveDiarizeWorker @AssistedInject constructor(
             val started = System.currentTimeMillis()
             var chunksDone = 0
             var lagTotal = 0L
+            var captureEndedAt = 0L
 
             coroutineScope {
                 val queue = Channel<ChunkAudio>(Channel.UNLIMITED)
@@ -228,6 +247,15 @@ class LiveDiarizeWorker @AssistedInject constructor(
                     totalKnown?.let { total -> dao.updateProgress(id, consumed.toFloat() / total) }
                 }
 
+                // The moment the audio ran out, taken here rather than after the drain below.
+                //
+                // Everything from this line on is the user waiting: the tail chunk, whatever is
+                // still queued behind it, and then the whole-recording pass. From where they are
+                // sitting the recording has already finished -- the playback stopped, or they
+                // tapped stop -- so this is where their clock starts. `runMillis` starts minutes
+                // later, when the batch worker does, and cannot see any of it.
+                captureEndedAt = System.currentTimeMillis()
+
                 vad.endStream()
                 chunker.finish(consumed)?.let { tail ->
                     queued++
@@ -257,6 +285,9 @@ class LiveDiarizeWorker @AssistedInject constructor(
                     .map { RosterVoice(it.label, it.voiceprint) },
             )
             dao.beginRun(id, recording.expectedSpeakers)
+            // After beginRun, which clears it along with every other per-run figure. The pass this
+            // enqueues turns it into the number the row shows.
+            if (captureEndedAt > 0L) dao.setCaptureEnded(id, captureEndedAt)
             DiarizeWorker.enqueue(context, id)
             Result.success()
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -332,7 +363,7 @@ class LiveDiarizeWorker @AssistedInject constructor(
 
         val rows = transcript.render(
             labels = tracker.labels(),
-            unknownLabel = "${SpeakerRepository.UNKNOWN_SPEAKER_PREFIX} ?",
+            unknownLabel = SpeakerRepository.UNATTRIBUTED_NAME,
             unknownPrefix = SpeakerRepository.UNKNOWN_SPEAKER_PREFIX,
             minSamples = SHORT_BLOCK_SECONDS * AudioRecorder.SAMPLE_RATE,
         ).map { block ->

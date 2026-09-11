@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +44,16 @@ import androidx.window.core.layout.WindowWidthSizeClass
 fun ControlsContentPanes(
     modifier: Modifier = Modifier,
     controlsWidth: Dp = ControlsPaneWidth,
+    /**
+     * Hoisted so a caller can drive the content list -- scrolling a newly added row into view, for
+     * one. Defaulted, because two of the three callers have nothing to say about scrolling.
+     *
+     * The same state serves both layouts on purpose. In the narrow layout the controls are item
+     * zero of this very list, so "scroll to the top" means the controls; in the wide layout they
+     * are a separate column and item zero is the first row. A caller asking for index 0 gets the
+     * top of the content either way, which is what it meant.
+     */
+    listState: LazyListState = rememberLazyListState(),
     controls: @Composable () -> Unit,
     content: LazyListScope.() -> Unit,
 ) {
@@ -68,6 +80,7 @@ fun ControlsContentPanes(
 
             LazyColumn(
                 Modifier.fillMaxSize(),
+                state = listState,
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 content = content,
@@ -76,6 +89,7 @@ fun ControlsContentPanes(
     } else {
         LazyColumn(
             modifier.fillMaxSize(),
+            state = listState,
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

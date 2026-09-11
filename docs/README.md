@@ -71,6 +71,7 @@ proper nouns (`Blomqvist`→`Blumkvist`, `swab`→`swap`, `site`→`side`).
 | `stt-benchmark.html` | The report |
 | `diarization-pipeline.html` | How a transcript gets attributed to a speaker — every stage, with file:line anchors and the real timeline where a backchannel is swallowed |
 | `diarization-benchmark.md` | Speaker attribution scored against sample-exact ground truth |
+| `wp30-comparison.html` | This pipeline against `~/wp30-ai-poc`, an unrelated codebase solving the same problem — stage by stage, and the one ownership decision they diverge on |
 | `wer.py` | Scorer — Ratcliff–Obershelp alignment, two normalisation modes |
 | `diarscore.py` | Diarisation scorer — recomputes the device's WER and speaker accuracy through `wer.py`, adds frame and turn accuracy |
 | `data/audit_script.txt` | English source script, with `say` silence directives |

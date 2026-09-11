@@ -114,8 +114,13 @@ object DiarizationChunks {
         nextFreeCluster: Int,
     ): Pair<List<DiarizedSegment>, Int> {
         if (turns.isEmpty()) return turns to nextFreeCluster
-        val shifted = turns.map { it.copy(cluster = it.cluster + nextFreeCluster) }
-        return shifted to (shifted.maxOf { it.cluster } + 1)
+        // The unattributed sentinel is not a cluster id and must not be shifted: shifted, it would
+        // land on the previous chunk's last real cluster and hand nobody's words to that speaker.
+        val shifted = turns.map {
+            if (it.cluster == SpeakerAlignment.UNATTRIBUTED) it else it.copy(cluster = it.cluster + nextFreeCluster)
+        }
+        val next = shifted.filter { it.cluster != SpeakerAlignment.UNATTRIBUTED }.maxOfOrNull { it.cluster + 1 }
+        return shifted to (next ?: nextFreeCluster)
     }
 
     /** Moves a chunk's turns from chunk-local samples back into compacted coordinates. */

@@ -1,9 +1,9 @@
 package com.example.aiagenttestapp.data.notes
 
 import com.example.aiagent.engine.core.normalizeSpokenText
-import com.example.aiagenttestapp.functions.MarkerEdge
-import com.example.aiagenttestapp.functions.MarkerKind
-import com.example.aiagenttestapp.functions.SpokenKeywords
+import com.example.aiagenttestapp.stt.MarkerEdge
+import com.example.aiagenttestapp.stt.MarkerKind
+import com.example.aiagenttestapp.stt.SpokenKeywords
 
 /** One possibly tagged piece of a transcript. */
 data class TranscriptBlock(

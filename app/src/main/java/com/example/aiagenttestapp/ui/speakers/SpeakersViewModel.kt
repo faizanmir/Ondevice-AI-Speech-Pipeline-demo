@@ -2,6 +2,10 @@ package com.example.aiagenttestapp.ui.speakers
 
 import android.net.Uri
 import androidx.lifecycle.viewModelScope
+import com.example.aiagenttestapp.data.SettingsStore
+import com.example.aiagenttestapp.data.audiomodels.AudioModelBundle
+import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
+import com.example.aiagenttestapp.data.audiomodels.AudioModelState
 import com.example.aiagenttestapp.data.speakers.SpeakerRecord
 import com.example.aiagenttestapp.data.speakers.EnrollResult
 import com.example.aiagenttestapp.data.speakers.SpeakerRepository
@@ -9,6 +13,9 @@ import com.example.aiagenttestapp.data.speakers.TakeAnalysis
 import com.example.aiagenttestapp.data.speakers.TakeAudioReader
 import com.example.aiagenttestapp.data.speakers.TakeProblem
 import com.example.aiagenttestapp.stt.AudioRecorder
+import com.example.aiagenttestapp.stt.SpeechModel
+import com.example.aiagenttestapp.stt.SpeechModelRepository
+import com.example.aiagenttestapp.stt.SpeechModelState
 import com.example.aiagenttestapp.ui.mvi.MviViewModel
 import com.example.aiagenttestapp.ui.mvi.UiIntent
 import com.example.aiagenttestapp.ui.mvi.UiState
@@ -16,6 +23,11 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -32,6 +44,26 @@ data class SpeakersUiState(
 
     /** Whether the speaker models are downloaded. Nothing here works without them. */
     val available: Boolean = false,
+
+    /**
+     * The embedding bundles on offer, the one selected, and each one's download state. Chosen
+     * *here* because the embedder is the model a voiceprint is made with: a print enrolled under
+     * CAM++ matches nobody under ERes2Net, so the choice belongs where the prints are made, not
+     * only on the screen that later uses them.
+     */
+    val speakerChoices: List<AudioModelBundle> = emptyList(),
+    val speakerBundleId: String = "",
+    val bundleStates: Map<String, AudioModelState> = emptyMap(),
+
+    /**
+     * The recognisers, mirrored from the transcript screen so every model choice can be made in
+     * one place. Enrolment itself never transcribes -- a voiceprint is made from the audio alone --
+     * so this row changes nothing about the prints; it sets what the next transcript will be
+     * written with. Only the timing-capable models are offered, as on the transcript screen.
+     */
+    val speechChoices: List<SpeechModel> = emptyList(),
+    val speechModelId: String = "",
+    val speechStates: Map<String, SpeechModelState> = emptyMap(),
 
     val isEnrolling: Boolean = false,
     val name: String = "",
@@ -62,6 +94,10 @@ data class SpeakersUiState(
 sealed interface SpeakersIntent : UiIntent {
     data object BeginEnroll : SpeakersIntent
     data object CancelEnroll : SpeakersIntent
+    /** Choose the embedding bundle new voiceprints are made with; downloads it first if it is not on disk. */
+    data class SetSpeakerBundle(val id: String) : SpeakersIntent
+    /** Choose the recogniser for the next transcript; downloads it first if it is not on disk. */
+    data class SetSpeechModel(val id: String) : SpeakersIntent
     data class NameChanged(val name: String) : SpeakersIntent
 
     /** The caller must already hold RECORD_AUDIO. */
@@ -100,6 +136,9 @@ class SpeakersViewModel @Inject constructor(
     private val speakers: SpeakerRepository,
     private val audioRecorder: AudioRecorder,
     private val takeAudio: TakeAudioReader,
+    private val audioModels: AudioModelRepository,
+    private val speechModels: SpeechModelRepository,
+    private val settingsStore: SettingsStore,
 ) : MviViewModel<SpeakersUiState, SpeakersIntent, Nothing>(SpeakersUiState()) {
 
     private var recordingJob: Job? = null
@@ -109,14 +148,45 @@ class SpeakersViewModel @Inject constructor(
 
     init {
         speakers.observeSpeakers().collectIntoState { list -> copy(speakers = list) }
+        val timed = speechModels.available.filter { it.kind.reportsWordTimings }
+        setState { copy(speakerChoices = audioModels.speakerBundles, speechChoices = timed) }
 
-        viewModelScope.launch {
-            // Resolved before setState: inside that lambda the receiver is the state, whose own
-            // `speakers` list would shadow the repository.
-            val ready = speakers.prepare()
-            val stale = speakers.staleSpeakers()
-            setState { copy(available = ready, stale = stale) }
+        // The Words row: selection from Settings, download state per offered recogniser.
+        settingsStore.settings.collectIntoState { copy(speechModelId = speechModels.byIdOrDefault(it.speechModelId).id) }
+        combine(timed.map { speechModels.stateOf(it.id) }) { states ->
+            timed.map { it.id }.zip(states.toList()).toMap()
+        }.collectIntoState { copy(speechStates = it) }
+
+        // Readiness and staleness both follow the bundle: a different embedder is a different set
+        // of usable voiceprints and may or may not be on disk. Re-derived whenever the selection or
+        // any bundle's download state changes -- and once at start -- so switching to a bundle that
+        // is still downloading shows the screen unavailable until the files land, then usable.
+        val selected = settingsStore.settings.map { audioModels.speaker.id }.distinctUntilChanged()
+        val downloads = combine(audioModels.speakerBundles.map { audioModels.state(it) }) { states ->
+            audioModels.speakerBundles.map { it.id }.zip(states.toList()).toMap()
         }
+        combine(selected, downloads) { id, states -> id to states }
+            .onEach { (id, states) ->
+                // Resolved before setState: inside that lambda the receiver is the state, whose own
+                // `speakers` list would shadow the repository.
+                val ready = speakers.prepare()
+                val stale = speakers.staleSpeakers()
+                setState { copy(speakerBundleId = id, bundleStates = states, available = ready, stale = stale) }
+            }
+            .launchIn(viewModelScope)
+    }
+
+    private fun setSpeechModel(id: String) {
+        val model = currentState.speechChoices.firstOrNull { it.id == id } ?: return
+        settingsStore.update { it.copy(speechModelId = id) }
+        if (!speechModels.isDownloaded(model)) speechModels.enqueueDownload(model)
+    }
+
+    /** Same contract as the diarise screen's chips: selecting is asking for it, and a tap on a missing bundle downloads it. */
+    private fun setSpeakerBundle(id: String) {
+        val bundle = currentState.speakerChoices.firstOrNull { it.id == id } ?: return
+        settingsStore.update { it.copy(speakerBundleId = id) }
+        if (!audioModels.isReady(bundle)) audioModels.enqueueDownload(bundle)
     }
 
     override fun reduce(intent: SpeakersIntent): Unit = when (intent) {
@@ -140,6 +210,8 @@ class SpeakersViewModel @Inject constructor(
         SpeakersIntent.DismissSoundsLike -> setState { copy(soundsLike = null) }
         SpeakersIntent.DismissError -> setState { copy(error = null) }
         is SpeakersIntent.Delete -> delete(intent.id)
+        is SpeakersIntent.SetSpeakerBundle -> setSpeakerBundle(intent.id)
+        is SpeakersIntent.SetSpeechModel -> setSpeechModel(intent.id)
     }
 
     private fun cancelEnroll() {

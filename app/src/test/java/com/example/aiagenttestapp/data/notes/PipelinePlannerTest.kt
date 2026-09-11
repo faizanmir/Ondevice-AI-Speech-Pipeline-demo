@@ -1,7 +1,7 @@
 package com.example.aiagenttestapp.data.notes
 
-import com.example.aiagenttestapp.functions.MarkerEdge
-import com.example.aiagenttestapp.functions.MarkerKind
+import com.example.aiagenttestapp.stt.MarkerEdge
+import com.example.aiagenttestapp.stt.MarkerKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

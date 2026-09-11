@@ -1,7 +1,7 @@
 package com.example.aiagenttestapp.prompts
 
 import com.example.aiagenttestapp.data.notes.TaggedItem
-import com.example.aiagenttestapp.functions.MarkerKind
+import com.example.aiagenttestapp.stt.MarkerKind
 import java.util.Locale
 
 /**

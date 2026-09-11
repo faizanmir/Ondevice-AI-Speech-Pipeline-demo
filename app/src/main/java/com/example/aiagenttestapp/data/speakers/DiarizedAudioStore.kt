@@ -151,11 +151,35 @@ class DiarizedAudioStore @Inject constructor(
         ),
     )
 
-    /** Removes the row and the audio behind it. */
+    /**
+     * A new row for the **same audio**, for a re-run under different models -- see
+     * [needsNewRowFor]. The file is shared, not copied: a 22-minute recording is 43 MB, and a
+     * comparison of four model sets would otherwise cost four copies of it. What carries over is
+     * what makes the two rows comparable -- the name, the duration, the expected speaker count, the
+     * reference and its language -- and what does not is everything a run writes: status, times,
+     * scores, and the models, which this row will record for itself when it finishes.
+     */
+    suspend fun sibling(of: DiarizedRecording): Long = dao.insert(
+        DiarizedRecording(
+            name = of.name,
+            audioPath = of.audioPath,
+            durationMillis = of.durationMillis,
+            createdAtMillis = System.currentTimeMillis(),
+            expectedSpeakers = of.expectedSpeakers,
+            referenceText = of.referenceText,
+            language = of.language,
+        ),
+    )
+
+    /**
+     * Removes the row, and the audio behind it only when no other row still points at it: rows
+     * that were re-run under different models share one file ([sibling]), and deleting the first
+     * of them used to take the recording out from under the rest.
+     */
     suspend fun delete(id: Long) = withContext(Dispatchers.IO) {
         val row = dao.byId(id) ?: return@withContext
         dao.delete(id) // blocks go with it via the cascade
-        File(row.audioPath).delete()
+        if (dao.countSharingAudio(row.audioPath) == 0) File(row.audioPath).delete()
     }
 
     /** Where a live take is written while it is being recorded. */

@@ -12,8 +12,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import com.example.aiagenttestapp.data.ModelDirectory
-import com.example.aiagenttestapp.data.ModelRepository
+import com.example.aiagent.llm.ModelDirectory
+import com.example.aiagent.llm.ModelRepository
 import com.example.aiagenttestapp.data.audit.AuditQueue
 import com.example.aiagenttestapp.data.chat.ChatDao
 import dagger.hilt.android.lifecycle.HiltViewModel

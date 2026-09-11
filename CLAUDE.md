@@ -50,18 +50,23 @@ Fall back to Grep/Glob/Read only when the graph does not cover what you need.
 ## Commands
 
 ```sh
-tools/fetch_llama_cpp.sh                  # once, before the first build — llama.cpp is not vendored
-./gradlew :app:assembleDebug              # first build compiles llama.cpp from source (minutes)
-./gradlew :app:testDebugUnitTest          # all unit tests (~370, JVM, no device needed)
-./gradlew :app:testDebugUnitTest --tests "*AudioSegmenterTest*"   # one test class
+./gradlew :app:assembleDebug              # no native build step; there is nothing compiled from source
+./gradlew test                            # ALL unit tests (~820, JVM, no device needed)
+./gradlew :stt:testDebugUnitTest --tests "*AudioSegmenterTest*"   # one test class, in its module
 ./gradlew :app:compileDebugKotlin         # fastest check that a change compiles
 ./gradlew :app:lint                       # stock Android lint; no ktlint/detekt/spotless configured
+./gradlew :stt:runtimeDeps                # coordinates a consumer of the AAR must declare
 ```
 
-- `-PenableLlamaCpp=false` skips the native build entirely; the app still builds and reports the
-  engine as unavailable at runtime. Use it when your change does not touch llama.cpp.
-- `-PenableLlamaCppVulkan=true` opts into the Vulkan backend (needs SPIRV-Headers on the host).
-- minSdk 31, **arm64-v8a only**. For an emulator, add `x86_64` to `llamaCppAbiFilters`.
+**`:app:testDebugUnitTest` no longer means "all tests".** The suite is split across modules -- 584 in
+`:app`, 168 in `:stt`, 63 in `:engine-core`. Use `./gradlew test`, and name the module when running
+one class.
+
+- There is no longer a vendoring step or a native build. llama.cpp was the only dependency compiled
+  from source; with it gone every dependency is a prebuilt AAR, so a clean build is minutes shorter
+  and `tools/` no longer exists.
+- minSdk 31, **arm64-v8a only** — set by `abiFilters` in `app/build.gradle.kts`. For an emulator,
+  add `x86_64` there.
 - **Do not run the test suite unless asked.** Write the tests, and use `:app:compileDebugKotlin`
   to confirm a change builds — running them is the user's call, not a step to fold into every task.
 - Most logic is deliberately pure and JVM-testable. Prefer adding a unit test over reaching for a
@@ -82,7 +87,7 @@ through `/android-cli` (the `android` CLI) rather than guessing at raw `adb`:
   acts.
 - `android run` builds, deploys and launches; `android install` pushes APKs without starting anything;
   `android info` prints the SDK path and connected devices. `android emulator` manages AVDs — but this
-  app builds **arm64-v8a only**, so an emulator needs `x86_64` in `llamaCppAbiFilters` first.
+  app builds **arm64-v8a only**, so an emulator needs `x86_64` in `abiFilters` first.
 - `android sdk install|update|remove|list` manages SDK packages instead of raw `sdkmanager`.
 - `android docs <keywords>` searches Android's own documentation. Use it before answering a platform
   API question from memory.
@@ -97,10 +102,17 @@ no `journey` subcommand; it is a convention, and the closest thing to a UI test 
 ### Engines are pluggable; nothing above them knows which is running
 
 `engine-core` holds the contracts (`InferenceEngine`, `EngineDescriptor`, `EngineAvailability`,
-`ModelSpec`, `ModelFitEvaluator`, `OutputGuard`), and `engine-litertlm` / `engine-llamacpp`
-implement them. Capability differences are **declared on `EngineDescriptor`**, not discovered by
-type checks — `supportsNativeTools`, `supportsAudioInput`, `supportsVision`. Adding a backend means
-implementing the interface and registering it with `EngineRegistry`.
+`ModelSpec`, `ModelFitEvaluator`, `OutputGuard`), and `engine-litertlm` implements them. Capability
+differences are **declared on `EngineDescriptor`**, not discovered by type checks —
+`supportsNativeTools`, `supportsAudioInput`, `supportsVision`. Adding a backend means implementing
+the interface and registering it with `EngineRegistry`.
+
+**One engine is registered, and `ModelFormat` has one value.** MNN and AICore went in `0fe20f3`,
+llama.cpp and GGUF after them. The abstraction is kept because each of those removals was a deletion
+rather than a hunt — but it is currently carrying no weight that can be observed, so do not let a
+hypothetical fourth engine justify anything new. What each removal did have to touch is worth
+knowing: the registry list, `ModelFormat`, `EngineId`, `ParamBudget.weightResidency`, and the
+catalogue.
 
 `OutputGuard` exists because no two runtimes expose the same controls: max-output-tokens and stop
 sequences are enforced uniformly in Kotlin rather than per-engine.
@@ -118,13 +130,17 @@ Voice-note transcription (`GemmaTranscriber`) and the audit pipeline both do thi
 another background consumer of the LLM, follow the same pattern or you will unload a model out from
 under a running job.
 
-### Tool calling has two mechanisms behind one catalogue
+### Tool calling has one mechanism, and a seam where the second was
 
 `functions/ToolCallingStrategy.kt` — LiteRT-LM declares tools as schemas and calls them itself
-(`RuntimeDriven`); llama.cpp is told about them in the system prompt and the app drives the
-call/result loop (`PromptDriven`). The two are *not* interchangeable by design: only `PromptDriven`
-has the parsing methods, so misuse fails to compile. `functions/AppFunctionRegistry.kt` is the single
-catalogue both paths read; app capabilities are also exported via AndroidX AppFunctions.
+(`RuntimeDriven`). `functions/AppFunctionRegistry.kt` is the single catalogue; app capabilities are
+also exported via AndroidX AppFunctions.
+
+There was a second mechanism until llama.cpp went: `PromptDriven`, where tools were described in the
+system prompt and the app drove the call/result loop by hand. Removing it took `ChatToolLoop.kt`, the
+hop branch in `ChatViewModel`, and the `maxToolHops` setting with it — which is the point of the
+`forEngine` seam, since none of that had to be hunted for. `NoToolCalling` is what an engine without
+a tool API gets now, and it is also what a chat holds before a model is loaded.
 
 ### ViewModels are MVI, uniformly
 
@@ -169,10 +185,33 @@ and the resident LLM (`GemmaTranscriber`). They tolerate very different clip len
 `maxSliceSamples` comes from the transcriber — the Gemma cap is a **crash guard**, since LiteRT-LM
 aborts the process rather than throwing on an over-long clip.
 
+### Modules, and the two that are meant to leave
+
+`:stt` and `:llm` are built to be handed over as AARs — see `docs/integration.md`. Three rules follow
+from that, and they are the ones most easily broken by a well-meaning change:
+
+- **Neither reads `SettingsStore`.** Speech takes `SttConfig`, model hosting takes `LlmConfig`, and
+  `data/SttSettings.kt` / `data/LlmSettings.kt` are the *only* files that know both. Adding a speech
+  setting means a field on `AppSettings` and one line in the mapper; the compiler will not tell you
+  about the second, but `SttSettingsTest` will.
+- **Neither carries a Hilt annotation.** A library that forces Hilt on its callers is one most hosts
+  cannot take. Their objects are constructed in `di/AppModule.kt`, and their WorkManager workers come
+  from plain `WorkerFactory`s composed into a `DelegatingWorkerFactory` in `AIAgentApplication`.
+- **`:stt` does not depend on `:llm`.** Voice notes can transcribe with the resident LLM, and that
+  one feature is behind `LlmTranscriberFactory`, bound in `:app` by `bridge/GemmaTranscriberFactory`.
+  Unbind it and three of the four speech backends still work — which is the test of whether the seam
+  is real. `bridge/` exists for exactly the classes that know both worlds; nothing else belongs there.
+
+`SttStorage` takes the storage root as a parameter, and **the resolved paths must not change** —
+`speech`, `audio-models/speaker`, `enroll`, `notes`, `diarized` all hold files on real devices, and
+transcription checkpoints are keyed to the audio beside them. `SttStorageTest` pins them.
+
 ### Layering conventions worth respecting
 
-- `data/` does not import `stt/` — see the note on `AppSettings.speechModelId`. Types Settings needs
-  live in `data/` (`OnnxProvider`, `SttBackend`).
+- The old rule that `data/` must not import `stt/` is **gone**, along with the workaround it forced:
+  `OnnxProvider`, `SliceWindow`, `SttBackend` and the rest lived in `data/` only to keep this file
+  from importing the pipeline. They are now `:stt`'s public config API and `AppSettings` merely holds
+  them, so the dependency runs app → library, which is the direction it should always have run.
 - `prompts/` centralises every prompt string. Prompt changes belong there, not inlined at call sites.
 - **Room migrations are never rewritten**, only appended. A migration describes a step that already
   ran on real devices; editing one is how a device on an old version takes an untested path.

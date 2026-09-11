@@ -191,6 +191,32 @@ data class DiarizedRecording(
     val transcribeMillis: Long? = null,
 
     /**
+     * When the audio stopped arriving, for a live session. Null for an imported recording.
+     *
+     * Scratch state between two jobs rather than something to read: the live worker stamps it the
+     * instant its last block is fed, and the whole-recording pass that follows turns it into
+     * [postCaptureMillis] and never looks at it again. It has to be a column because those are two
+     * separate WorkManager jobs -- there is nowhere in memory that outlives the handoff.
+     *
+     * Cleared by [SpeakerDao.beginRun] like every other per-run figure, which is what stops a manual
+     * re-run months later measuring itself against the day the recording was made.
+     */
+    val captureEndedAtMillis: Long? = null,
+
+    /**
+     * For a live session: how long after the audio ended the finished transcript was ready.
+     *
+     * [runMillis] cannot answer this. It starts when the whole-recording pass starts, and between
+     * the last block of audio and that moment sits the rest of the live session -- the tail chunk,
+     * the queued chunks still being consumed -- and then WorkManager deciding when to run the job.
+     * That gap is invisible in `runMillis` and it is precisely the part the user is sitting through:
+     * they watched the recording finish, and what they want to know is how much longer they waited.
+     *
+     * Null for an imported recording, where the two would measure the same thing.
+     */
+    val postCaptureMillis: Long? = null,
+
+    /**
      * The transcript this recording is scored against, speaker-tagged, or null if none is attached.
      *
      * Held on the recording rather than alongside the run, because a reference outlives any one
@@ -231,6 +257,17 @@ data class DiarizedRecording(
     val speakerAccuracyPercent: Double? = null,
 
     val error: String? = null,
+
+    /**
+     * Which recogniser and which speaker bundle produced the transcript on this row, written when
+     * a run finishes. Recorded rather than read from Settings at export time, because Settings say
+     * what the *next* run will use: switch models after a run and a header derived from them would
+     * name a model that never touched this transcript. Null on rows that finished before the
+     * columns existed, and on rows not yet run.
+     */
+    val speechModelId: String? = null,
+
+    val speakerBundleId: String? = null,
 )
 
 /** One stretch of one speaker's words, as shown on screen. */
@@ -330,6 +367,10 @@ interface DiarizedDao {
     @Query("SELECT * FROM diarized_recordings WHERE id = :id")
     fun observeById(id: Long): Flow<DiarizedRecording?>
 
+    /** How many rows point at one audio file; sibling runs under different models share theirs. */
+    @Query("SELECT COUNT(*) FROM diarized_recordings WHERE audioPath = :audioPath")
+    suspend fun countSharingAudio(audioPath: String): Int
+
     @Insert
     suspend fun insert(recording: DiarizedRecording): Long
 
@@ -350,6 +391,7 @@ interface DiarizedDao {
         UPDATE diarized_recordings
         SET status = 'Running', progress = 0.0, error = NULL, runMillis = NULL,
             diariseMillis = NULL, transcribeMillis = NULL,
+            captureEndedAtMillis = NULL, postCaptureMillis = NULL,
             coveragePercent = NULL, werPercent = NULL, speakerAccuracyPercent = NULL,
             expectedSpeakers = :expectedSpeakers
         WHERE id = :id
@@ -364,18 +406,24 @@ interface DiarizedDao {
         SET status = 'Done', progress = 1.0, error = NULL, runMillis = :runMillis,
             diariseMillis = :diariseMillis, transcribeMillis = :transcribeMillis,
             coveragePercent = :coveragePercent, werPercent = :werPercent,
-            speakerAccuracyPercent = :speakerAccuracyPercent
+            speakerAccuracyPercent = :speakerAccuracyPercent,
+            speechModelId = :speechModelId, speakerBundleId = :speakerBundleId,
+            postCaptureMillis = :postCaptureMillis
         WHERE id = :id
         """,
     )
     suspend fun finishRun(
         id: Long,
         runMillis: Long,
+        /** Null for anything that was not a live session; see [DiarizedRecording.postCaptureMillis]. */
+        postCaptureMillis: Long?,
         diariseMillis: Long?,
         transcribeMillis: Long?,
         coveragePercent: Double?,
         werPercent: Double?,
         speakerAccuracyPercent: Double?,
+        speechModelId: String,
+        speakerBundleId: String,
     )
 
     /**
@@ -418,6 +466,7 @@ interface DiarizedDao {
         UPDATE diarized_recordings
         SET status = 'Live', progress = 0.0, error = NULL, runMillis = NULL,
             diariseMillis = NULL, transcribeMillis = NULL,
+            captureEndedAtMillis = NULL, postCaptureMillis = NULL,
             coveragePercent = NULL, werPercent = NULL, speakerAccuracyPercent = NULL
         WHERE id = :id
         """,
@@ -431,6 +480,15 @@ interface DiarizedDao {
      */
     @Query("UPDATE diarized_recordings SET durationMillis = :durationMillis WHERE id = :id")
     suspend fun setDuration(id: Long, durationMillis: Long)
+
+    /**
+     * Stamps the moment a live session's audio ran out, for the whole-recording pass that follows.
+     *
+     * Written *after* [beginRun], never before: beginRun clears it along with every other per-run
+     * figure, so the other order would wipe the stamp the pass is about to read.
+     */
+    @Query("UPDATE diarized_recordings SET captureEndedAtMillis = :atMillis WHERE id = :id")
+    suspend fun setCaptureEnded(id: Long, atMillis: Long)
 
     @Query("UPDATE diarized_recordings SET status = 'Failed', error = :error WHERE id = :id")
     suspend fun fail(id: Long, error: String)
@@ -521,7 +579,7 @@ internal object SpeakerConverters {
         DiarizedRecording::class,
         DiarizedBlock::class,
     ],
-    version = 4,
+    version = 6,
     exportSchema = true,
 )
 @TypeConverters(SpeakerConverters::class)
@@ -576,6 +634,35 @@ abstract class SpeakerDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE diarized_recordings ADD COLUMN diariseMillis INTEGER")
                 db.execSQL("ALTER TABLE diarized_recordings ADD COLUMN transcribeMillis INTEGER")
+            }
+        }
+
+        /**
+         * Which models produced each transcript, so an export can say so.
+         *
+         * Nullable and not backfilled, like every column before it: the models that ran on an old
+         * row were never recorded, and filling the gap from today's Settings would be a guess
+         * dressed as a record. Those rows export with the models marked as not recorded.
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE diarized_recordings ADD COLUMN speechModelId TEXT")
+                db.execSQL("ALTER TABLE diarized_recordings ADD COLUMN speakerBundleId TEXT")
+            }
+        }
+
+        /**
+         * How long a live session took *after* its audio ended.
+         *
+         * Nullable and not backfilled, like every column before it. An old live row cannot be given
+         * this number after the fact: the moment its capture ended was never recorded, and deriving
+         * it from `createdAtMillis` plus the recording's length would be arithmetic pretending to be
+         * a measurement. Those rows keep showing `runMillis` alone, which is what they always showed.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE diarized_recordings ADD COLUMN captureEndedAtMillis INTEGER")
+                db.execSQL("ALTER TABLE diarized_recordings ADD COLUMN postCaptureMillis INTEGER")
             }
         }
     }

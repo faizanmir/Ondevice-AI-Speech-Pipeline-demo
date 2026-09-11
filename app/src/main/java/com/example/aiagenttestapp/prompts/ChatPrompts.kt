@@ -11,10 +11,11 @@ package com.example.aiagenttestapp.prompts
  * Written tight on purpose -- every token here is paid on every turn of every chat, and is charged
  * twice over, once in prefill and again as history the window can no longer hold. It says only what
  * the model cannot work out for itself: that it is offline on a phone (so it does not promise to
- * look things up or send anything), and what register to answer in. Anything about *tools* belongs
- * in llama.cpp's `ToolCallingProtocol.systemPromptSection`, which is only present when tools
- * actually are -- and on LiteRT-LM not even then, since its tools are declared to the runtime
- * rather than described in the prompt.
+ * look things up or send anything), and what register to answer in.
+ *
+ * Nothing about *tools* belongs here. On LiteRT-LM they are declared to the runtime as schemas
+ * rather than described in the prompt, so the prompt stays silent about them --
+ * [com.example.aiagenttestapp.functions.NativeToolCalling] adds no section at all.
  */
 object ChatPrompts {
     const val SYSTEM_PROMPT =

@@ -6,7 +6,6 @@ import com.example.aiagent.engine.core.EngineId
 import com.example.aiagent.engine.core.ModelFormat
 import com.example.aiagent.engine.core.ToolDefinition
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -18,10 +17,10 @@ class ToolCallingStrategyTest {
     )
 
     private fun descriptor(nativeTools: Boolean) = EngineDescriptor(
-        id = if (nativeTools) EngineId.LITE_RT_LM else EngineId.LLAMA_CPP,
+        id = EngineId.LITE_RT_LM,
         displayName = "test",
         vendor = "test",
-        supportedFormats = setOf(ModelFormat.GGUF),
+        supportedFormats = setOf(ModelFormat.LITERTLM),
         supportedAccelerators = setOf(Accelerator.CPU),
         supportsVision = false,
         supportsNativeTools = nativeTools,
@@ -29,9 +28,9 @@ class ToolCallingStrategyTest {
     )
 
     @Test
-    fun `an engine with a tool API gets the native strategy, one without gets the prompt strategy`() {
+    fun `an engine with a tool API gets the native strategy, one without is offered no tools`() {
         assertTrue(ToolCallingStrategy.forEngine(descriptor(true)) is NativeToolCalling)
-        assertTrue(ToolCallingStrategy.forEngine(descriptor(false)) is PromptToolCalling)
+        assertTrue(ToolCallingStrategy.forEngine(descriptor(false)) is NoToolCalling)
     }
 
     @Test
@@ -40,13 +39,16 @@ class ToolCallingStrategyTest {
         assertNull(NativeToolCalling.systemPromptSection(tools))
     }
 
+    /**
+     * The prompt-driven strategy that used to sit here went with llama.cpp. What replaced it offers
+     * nothing at all, which is the honest answer for an engine that cannot call a tool: declaring
+     * them to a runtime that will never invoke them would leave the model describing functions it
+     * can never reach.
+     */
     @Test
-    fun `the prompt strategy describes the tools and declares nothing`() {
-        assertEquals(emptyList<ToolDefinition>(), PromptToolCalling.declarations(tools))
-
-        val section = PromptToolCalling.systemPromptSection(tools)
-        assertNotNull(section)
-        assertTrue("the section should name the tool", section!!.contains("open_settings"))
+    fun `the no-tools strategy neither declares nor describes anything`() {
+        assertEquals(emptyList<ToolDefinition>(), NoToolCalling.declarations(tools))
+        assertNull(NoToolCalling.systemPromptSection(tools))
     }
 
     /**
@@ -55,17 +57,17 @@ class ToolCallingStrategyTest {
      * and the failure is silent: it answers with a call in neither format.
      */
     @Test
-    fun `exactly one mechanism is ever populated`() {
-        for (strategy in listOf(NativeToolCalling, PromptToolCalling)) {
+    fun `no strategy ever populates both mechanisms`() {
+        for (strategy in listOf(NativeToolCalling, NoToolCalling)) {
             val declared = strategy.declarations(tools).isNotEmpty()
             val described = strategy.systemPromptSection(tools) != null
-            assertTrue("$strategy uses neither or both mechanisms", declared != described)
+            assertTrue("$strategy uses both mechanisms at once", !(declared && described))
         }
     }
 
     @Test
-    fun `neither strategy offers anything when there are no tools`() {
-        for (strategy in listOf(NativeToolCalling, PromptToolCalling)) {
+    fun `no strategy offers anything when there are no tools`() {
+        for (strategy in listOf(NativeToolCalling, NoToolCalling)) {
             assertEquals(emptyList<ToolDefinition>(), strategy.declarations(emptyList()))
             assertNull(
                 "$strategy must not prime a model to call tools it does not have",
@@ -74,13 +76,14 @@ class ToolCallingStrategyTest {
         }
     }
 
+    /**
+     * [NoToolCalling] is what a chat holds before a model is loaded, so it must not be mistaken for
+     * a runtime-driven one -- `ChatSession.bindToolRunner` binds a tool runner on exactly that
+     * check, and binding one against an engine that has not loaded is the bug this prevents.
+     */
     @Test
-    fun `the prompt strategy reads a call back out of a reply and feeds its result forward`() {
-        val call = PromptToolCalling.parseCall("""{"tool": "open_settings", "args": {}}""")
-
-        assertEquals("open_settings", call?.name)
-        // The result has to travel back as a prompt, since a prompt-driven model has no other way
-        // of learning what its call produced.
-        assertTrue(PromptToolCalling.resultPrompt(call!!, "Settings opened.").contains("Settings opened."))
+    fun `the no-tools strategy is not runtime-driven`() {
+        assertTrue(NoToolCalling !is ToolCallingStrategy.RuntimeDriven)
+        assertTrue(NativeToolCalling is ToolCallingStrategy.RuntimeDriven)
     }
 }

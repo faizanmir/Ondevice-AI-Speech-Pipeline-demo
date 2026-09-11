@@ -5,14 +5,30 @@ import com.example.aiagent.engine.core.DeviceMemoryProfile
 import com.example.aiagent.engine.core.DeviceMemoryProbe
 import com.example.aiagent.engine.core.EngineRegistry
 import com.example.aiagent.engine.litertlm.LiteRtLmEngine
-import com.example.aiagent.engine.llamacpp.LlamaCppEngine
-import com.example.aiagenttestapp.data.CustomModelStore
+import com.example.aiagent.llm.CustomModelStore
 import com.example.aiagenttestapp.data.FileTextExtractor
-import com.example.aiagenttestapp.data.HuggingFaceAuth
-import com.example.aiagenttestapp.data.HuggingFaceClient
-import com.example.aiagenttestapp.data.ModelRepository
+import com.example.aiagent.llm.HuggingFaceAuth
+import com.example.aiagent.llm.HuggingFaceClient
+import com.example.aiagent.llm.LlmConfigSource
+import com.example.aiagent.llm.LlmWorkerFactory
+import com.example.aiagenttestapp.bridge.GemmaTranscriberFactory
+import com.example.aiagenttestapp.stt.LlmTranscriberFactory
+import com.example.aiagent.llm.LlmPaths
+import com.example.aiagenttestapp.data.ModelCatalog
+import com.example.aiagent.llm.ModelDirectory
+import com.example.aiagent.llm.ModelLoadPlanner
+import com.example.aiagent.llm.ModelRepository
+import com.example.aiagent.llm.ModelResidency
+import com.example.aiagenttestapp.data.asLlmConfigSource
+import javax.inject.Provider
 import com.example.aiagenttestapp.data.NetworkMonitor
 import com.example.aiagenttestapp.data.SettingsStore
+import com.example.aiagenttestapp.data.sttConfig
+import com.example.aiagenttestapp.stt.SttConfig
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.StateFlow
 import com.example.aiagenttestapp.data.WebSearchClient
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
 import com.example.aiagenttestapp.functions.AppFunctionDeps
@@ -33,6 +49,7 @@ import com.example.aiagenttestapp.stt.SpeechModelRepository
 import com.example.aiagenttestapp.stt.SpeechRecognizer
 import com.example.aiagenttestapp.stt.Punctuator
 import com.example.aiagenttestapp.stt.StreamingRecognizer
+import com.example.aiagenttestapp.stt.SttWorkerFactory
 import com.example.aiagenttestapp.stt.WarmPool
 import dagger.Module
 import dagger.Provides
@@ -63,16 +80,16 @@ annotation class NativeLibraryDir
 object AppModule {
 
     /**
-     * Registration order is the fallback order: a `.litertlm` model goes to LiteRT-LM and a
-     * `.gguf` to llama.cpp, because those are the only engines that can load each. Adding a
-     * backend means adding it to this list and nothing else.
+     * Registration order is the fallback order: the first engine that can load a model's format
+     * gets it. LiteRT-LM is currently the only one, which is why `.litertlm` is the only
+     * [com.example.aiagent.engine.core.ModelFormat]. Adding a backend means adding it to this list
+     * and nothing else -- MNN, AICore and llama.cpp were each removed by deleting one line here.
      */
     @Provides
     @Singleton
     fun engineRegistry(): EngineRegistry = EngineRegistry(
         listOf(
             LiteRtLmEngine(),
-            LlamaCppEngine(),
         ),
     )
 
@@ -118,6 +135,68 @@ object AppModule {
     @Singleton
     fun settingsStore(@ApplicationContext context: Context) = SettingsStore(context)
 
+    // ---- Model hosting -------------------------------------------------------------------------
+    //
+    // These four used to carry `@Inject constructor` and be built by Hilt directly. They are
+    // constructed here instead so that nothing in the model-hosting layer carries a DI annotation:
+    // a library that forces Hilt on its callers is a library most callers cannot take. The wiring
+    // that was implicit is now four lines, and it is the *app* saying how its own graph fits
+    // together, which is where that belongs.
+
+    /** The curated list is this app's editorial choice; the directory merely serves it. */
+    @Provides
+    @Singleton
+    fun modelDirectory(customModelStore: CustomModelStore) =
+        ModelDirectory(builtIn = ModelCatalog.builtIn, customModelStore = customModelStore)
+
+    @Provides
+    @Singleton
+    fun llmConfigSource(settings: SettingsStore): LlmConfigSource = settings.asLlmConfigSource()
+
+    /** Both are host facts -- this APK's cache and its unpacked native libraries. */
+    @Provides
+    @Singleton
+    fun llmPaths(
+        @CacheDirPath cacheDir: String,
+        @NativeLibraryDir nativeLibraryDir: String,
+    ) = LlmPaths(cacheDir = cacheDir, nativeLibraryDir = nativeLibraryDir)
+
+    @Provides
+    @Singleton
+    fun modelLoadPlanner(
+        models: ModelDirectory,
+        config: LlmConfigSource,
+        engines: EngineRegistry,
+        modelRepository: ModelRepository,
+        paths: LlmPaths,
+    ) = ModelLoadPlanner(models, config, engines, modelRepository, paths)
+
+    @Provides
+    @Singleton
+    fun modelResidency(deviceMemory: Provider<DeviceMemoryProfile>) =
+        ModelResidency { deviceMemory.get() }
+
+    /**
+     * The seam between speech and language.
+     *
+     * `stt/` declares [LlmTranscriberFactory] and knows nothing else about models; this binds the
+     * app's implementation. Remove this line and the voice-note pipeline still builds and runs --
+     * with three of its four backends -- which is the test of whether the seam is real.
+     */
+    @Provides
+    @Singleton
+    fun llmTranscriberFactory(real: GemmaTranscriberFactory): LlmTranscriberFactory = real
+
+    /** Composed into WorkManager's factory in [AIAgentApplication]; see the note there. */
+    @Provides
+    @Singleton
+    fun llmWorkerFactory(models: ModelDirectory, modelRepository: ModelRepository) =
+        LlmWorkerFactory(models, modelRepository)
+
+    @Provides
+    @Singleton
+    fun sttWorkerFactory(speechModels: SpeechModelRepository) = SttWorkerFactory(speechModels)
+
     @Provides
     @Singleton
     fun customModelStore(@ApplicationContext context: Context) = CustomModelStore(context)
@@ -145,15 +224,29 @@ object AppModule {
     @Singleton
     fun audioRecorder() = AudioRecorder()
 
-    /** Needs the settings store: which speech model to download and load is a Settings choice. */
+    /**
+     * The speech pipeline's view of Settings, and the only place the two are joined.
+     *
+     * Nothing under `stt/` knows `SettingsStore` exists any more -- it is handed [SttConfig], which
+     * is its own type with its own defaults, so the same code runs for a caller that has no settings
+     * store at all. `sttConfig` is what maps one onto the other.
+     *
+     * An app-lifetime scope, never cancelled, matching the singletons that collect it.
+     */
     @Provides
     @Singleton
-    fun speechModelRepository(@ApplicationContext context: Context, settings: SettingsStore) =
-        SpeechModelRepository(context, settings)
+    fun sttConfig(settings: SettingsStore): StateFlow<SttConfig> =
+        settings.sttConfig(CoroutineScope(SupervisorJob() + Dispatchers.Default))
+
+    /** Which speech model to download and load is a Settings choice, so this reads the config. */
+    @Provides
+    @Singleton
+    fun speechModelRepository(@ApplicationContext context: Context, config: StateFlow<SttConfig>) =
+        SpeechModelRepository(context, config)
 
     @Provides
     @Singleton
-    fun speechRecognizer(settings: SettingsStore) = SpeechRecognizer(settings)
+    fun speechRecognizer(config: StateFlow<SttConfig>) = SpeechRecognizer(config)
 
     /**
      * The streaming counterpart. A singleton for the same reason as the offline one: it holds a
@@ -162,12 +255,12 @@ object AppModule {
      */
     @Provides
     @Singleton
-    fun streamingRecognizer(settings: SettingsStore) = StreamingRecognizer(settings)
+    fun streamingRecognizer(config: StateFlow<SttConfig>) = StreamingRecognizer(config)
 
     /** Restores capitals and full stops on streaming transcripts. Optional; a no-op without its model. */
     @Provides
     @Singleton
-    fun punctuator(settings: SettingsStore) = Punctuator(settings)
+    fun punctuator(config: StateFlow<SttConfig>) = Punctuator(config)
 
     /** Spots spoken markers and commands during a recording, far more cheaply than re-running ASR. */
     @Provides

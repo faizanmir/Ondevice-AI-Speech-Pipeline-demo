@@ -64,7 +64,7 @@ class ChatSession(
         private set
 
     /** How this model is offered the app's functions. Fixed for the life of the load. */
-    var toolStrategy: ToolCallingStrategy = com.example.aiagenttestapp.functions.PromptToolCalling
+    var toolStrategy: ToolCallingStrategy = com.example.aiagenttestapp.functions.NoToolCalling
         private set
 
     var toolsEnabled: Boolean = false
@@ -121,9 +121,8 @@ class ChatSession(
      * Rolls the conversation up and reloads on it when it has outgrown the model's window.
      *
      * Called before a turn, because a conversation that no longer fits does not fail loudly -- it
-     * runs out of room mid-reply. llama.cpp simply stops emitting tokens once `n_past` reaches
-     * `n_ctx`, which reads as the model having finished, and LiteRT-LM raises a generation error
-     * from somewhere the user cannot connect to what they typed.
+     * runs out of room mid-reply. LiteRT-LM raises a generation error from somewhere the user
+     * cannot connect to what they typed.
      *
      * Compaction is a summary, not a truncation: the older turns become the rolling summary that a
      * resumed chat already uses, and the recent ones are refitted beneath it. So the model keeps
@@ -139,12 +138,10 @@ class ChatSession(
     /**
      * Whether the last turn ended because the window filled rather than because the model finished.
      *
-     * Inferred from the runtime's own counter rather than from a stop reason, because neither
-     * engine gives one: llama.cpp's next-token call returns null at `n_past >= n_ctx`, which is the
-     * same signal as an end-of-sequence token, so a reply that ran into the wall is indistinguishable
-     * from one that simply ended. Sitting within a hair of the ceiling afterwards is the only
-     * evidence there is -- and it is good evidence, since a model that stops on its own almost never
-     * lands exactly on the limit.
+     * Inferred from the runtime's own counter rather than from a stop reason, because the engine
+     * gives none: a reply that ran into the wall is indistinguishable from one that simply ended.
+     * Sitting within a hair of the ceiling afterwards is the only evidence there is -- and it is
+     * good evidence, since a model that stops on its own almost never lands exactly on the limit.
      */
     fun ranOutOfContext(contextTotal: Int): Boolean {
         val active = engine ?: return false

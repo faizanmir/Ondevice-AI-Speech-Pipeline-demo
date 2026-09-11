@@ -1,6 +1,6 @@
 package com.example.aiagenttestapp.data.audiomodels
 
-import com.example.aiagenttestapp.data.ArchiveEntry
+import com.example.aiagenttestapp.stt.ArchiveEntry
 
 /** One remote file that makes up a bundle. */
 internal data class AudioModelFile(
@@ -67,6 +67,15 @@ class AudioModelBundle internal constructor(
      * is never read. Meant to be re-measured.
      */
     val diariseWeight: Int = 10,
+    /**
+     * Display names of the two models a speaker bundle is made of, for anything that has to say
+     * which models produced a transcript -- the export header and file name. On the bundle, because
+     * the bundle id is all a finished run records, and "speaker-campplus" names neither the
+     * segmentation model nor the embedder to someone reading the file. Null for bundles that do
+     * not diarise.
+     */
+    val segmentationLabel: String? = null,
+    val embeddingLabel: String? = null,
 ) {
     /** Bytes that cross the network. For an archive this is the compressed size, which is what the
      *  progress bar is actually measuring. */
@@ -183,6 +192,8 @@ internal object AudioModelCatalog {
     val SPEAKER = AudioModelBundle(
         id = SPEAKER_BUNDLE_ID,
         label = "Speaker identification",
+        segmentationLabel = "pyannote 3.0",
+        embeddingLabel = "ERes2Net",
         blurb = "Recognises who is speaking in a recording and labels the transcript with their " +
             "names. Runs entirely on your phone.",
         payload = BundlePayload.DirectFiles(
@@ -226,6 +237,8 @@ internal object AudioModelCatalog {
     val SPEAKER_CAMPP = AudioModelBundle(
         id = SPEAKER_CAMPP_BUNDLE_ID,
         label = "Speaker identification (CAM++)",
+        segmentationLabel = "pyannote 3.0",
+        embeddingLabel = "CAM++",
         blurb = "The faster voiceprint model: about 2.8x quicker to compare voices, which is most " +
             "of what identifying speakers costs. People already enrolled need enrolling again.",
         payload = BundlePayload.DirectFiles(
@@ -271,6 +284,8 @@ internal object AudioModelCatalog {
     val SPEAKER_REVERB = AudioModelBundle(
         id = SPEAKER_REVERB_BUNDLE_ID,
         label = "Speaker identification (Reverb v1 segmentation · non-commercial)",
+        segmentationLabel = "Reverb v1",
+        embeddingLabel = "CAM++",
         blurb = "Rev.ai's fine-tuned segmentation model with CAM++ voiceprints. Evaluation only: " +
             "its licence does not permit commercial use. People already enrolled carry over.",
         payload = BundlePayload.DirectFiles(

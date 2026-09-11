@@ -127,6 +127,17 @@ class DiarizationChunksTest {
     }
 
     @Test
+    fun `the unattributed sentinel is never shifted and never counted as a cluster`() {
+        val nobody = SpeakerAlignment.UNATTRIBUTED
+        val chunk = listOf(seg(0, 100, 0), seg(100, 150, nobody), seg(150, 200, 1))
+
+        val (shifted, next) = DiarizationChunks.namespaced(chunk, 5)
+
+        assertEquals(listOf(5, nobody, 6), shifted.map { it.cluster })
+        assertEquals(7, next)
+    }
+
+    @Test
     fun `namespacing an empty chunk leaves the next free id alone`() {
         val (turns, next) = DiarizationChunks.namespaced(emptyList(), 7)
 

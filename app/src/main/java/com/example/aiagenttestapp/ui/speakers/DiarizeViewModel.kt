@@ -4,7 +4,9 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.viewModelScope
 import com.example.aiagenttestapp.data.SettingsStore
+import com.example.aiagenttestapp.data.audiomodels.AudioModelBundle
 import com.example.aiagenttestapp.data.audiomodels.AudioModelRepository
+import com.example.aiagenttestapp.data.audiomodels.AudioModelState
 import com.example.aiagenttestapp.data.notes.WavFile
 import com.example.aiagenttestapp.data.benchmark.ReferenceText
 import com.example.aiagenttestapp.data.speakers.DiarizationScore
@@ -14,14 +16,20 @@ import com.example.aiagenttestapp.data.speakers.DiarizedAudioStore
 import com.example.aiagenttestapp.data.speakers.DiarizedBlock
 import com.example.aiagenttestapp.data.speakers.DiarizedDao
 import com.example.aiagenttestapp.data.speakers.DiarizedRecording
+import com.example.aiagenttestapp.data.speakers.DiarizedStatus
 import com.example.aiagenttestapp.data.speakers.SpeakerRepository
+import com.example.aiagenttestapp.data.speakers.TranscriptBundle
+import com.example.aiagenttestapp.data.speakers.needsNewRowFor
 import com.example.aiagenttestapp.stt.AudioRecorder
 import com.example.aiagenttestapp.stt.SpeechEngineKind
+import com.example.aiagenttestapp.stt.SpeechModel
 import com.example.aiagenttestapp.stt.SpeechModelRepository
+import com.example.aiagenttestapp.stt.SpeechModelState
 import com.example.aiagenttestapp.stt.SpeechRecognizer
 import com.example.aiagenttestapp.stt.ThreadBudget
 import com.example.aiagenttestapp.stt.TranscribeLanes
 import com.example.aiagenttestapp.ui.mvi.MviViewModel
+import com.example.aiagenttestapp.ui.mvi.UiEffect
 import com.example.aiagenttestapp.ui.mvi.UiIntent
 import com.example.aiagenttestapp.ui.mvi.UiState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -29,9 +37,11 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.time.Instant
 import javax.inject.Inject
 
 /**
@@ -63,6 +73,21 @@ data class DiarizeUiState(
     val expectedSpeakers: Int = 0,
     /** Diarisation chunk length in minutes, 0 for the whole recording; mirrors Settings. */
     val chunkMinutes: Int = 5,
+    /**
+     * The recognisers this screen may offer: only those that report word timings, because
+     * attribution aligns words to speaker turns by time and a model without timings cannot run
+     * here at all. The full catalogue stays on the models screen; offering a model this feature
+     * would immediately refuse is a trap, not a choice.
+     */
+    val speechChoices: List<SpeechModel> = emptyList(),
+    /** The id [speechChoices] should show as selected -- the Settings choice, default resolved. */
+    val speechModelId: String = "",
+    /** Download state per offered recogniser, for the chip to show progress or a retry. */
+    val speechStates: Map<String, SpeechModelState> = emptyMap(),
+    /** The speaker segmentation+embedding bundles on offer. */
+    val speakerChoices: List<AudioModelBundle> = emptyList(),
+    val speakerBundleId: String = "",
+    val bundleStates: Map<String, AudioModelState> = emptyMap(),
     /** How many voices are enrolled, which decides whether [expectedSpeakers] is consulted at all. */
     val enrolledCount: Int = 0,
     /**
@@ -85,6 +110,14 @@ data class DiarizeUiState(
     val error: String? = null,
     /** What is missing before a run can start, or null when everything is ready. */
     val blocker: String? = null,
+    /**
+     * Rows picked for a bundled export, by id. Non-empty *is* selection mode: the list's taps toggle
+     * rows instead of opening them and the top bar becomes the selection bar. A set of ids rather
+     * than a flag plus a set, so there is no state in which the bar is up with nothing under it.
+     */
+    val selected: Set<Long> = emptySet(),
+    /** True from Export ZIP until the archive is handed over, so the bar can show it is working. */
+    val exporting: Boolean = false,
 ) : UiState
 
 sealed interface DiarizeIntent : UiIntent {
@@ -100,6 +133,18 @@ sealed interface DiarizeIntent : UiIntent {
     data class Delete(val id: Long) : DiarizeIntent
     data class SetExpectedSpeakers(val count: Int) : DiarizeIntent
     data class SetChunkMinutes(val minutes: Int) : DiarizeIntent
+    /** Choose a recogniser for the next run; downloads it first if it is not on disk. */
+    data class SetSpeechModel(val id: String) : DiarizeIntent
+    /** Choose a segmentation+embedding bundle; downloads it first if it is not on disk. */
+    data class SetSpeakerBundle(val id: String) : DiarizeIntent
+
+    /** A long-press, or a tap while selecting: puts a row into the bundled export or takes it out. */
+    data class ToggleSelected(val id: Long) : DiarizeIntent
+    /** Every row that has a transcript to export. Rows still running are left out -- see [TranscriptBundle.exportable]. */
+    data object SelectAll : DiarizeIntent
+    data object ClearSelection : DiarizeIntent
+    /** Renders every selected transcript into one ZIP and hands it to the share sheet. */
+    data object ExportSelected : DiarizeIntent
 
     /**
      * Attaches a reference transcript, and scores against it straight away.
@@ -117,6 +162,16 @@ sealed interface DiarizeIntent : UiIntent {
     data class SetLanguage(val id: Long?, val code: String) : DiarizeIntent
 
     data object ClearError : DiarizeIntent
+}
+
+sealed interface DiarizeEffect : UiEffect {
+    /**
+     * The archive is written and waiting in the cache. The screen starts the share sheet, not the
+     * ViewModel: a chooser needs an Activity to launch from, and the ViewModel only has the
+     * application. [count] is for the sheet's title -- the file name is a time stamp, which says
+     * nothing about what is inside.
+     */
+    data class ShareZip(val file: File, val count: Int) : DiarizeEffect
 }
 
 /**
@@ -137,7 +192,7 @@ class DiarizeViewModel @Inject constructor(
     private val speakers: SpeakerRepository,
     private val recognizer: SpeechRecognizer,
     private val settingsStore: SettingsStore,
-) : MviViewModel<DiarizeUiState, DiarizeIntent, Nothing>(DiarizeUiState()) {
+) : MviViewModel<DiarizeUiState, DiarizeIntent, DiarizeEffect>(DiarizeUiState()) {
 
     private var captureJob: Job? = null
 
@@ -148,12 +203,38 @@ class DiarizeViewModel @Inject constructor(
     private var capturedSamples = 0
 
     init {
-        dao.observeAll().collectIntoState { rows -> copy(recordings = rows, blocker = blockerFor()) }
+        dao.observeAll().collectIntoState { rows ->
+            // A selected row that was deleted, or that a re-run has put back to Running, drops out
+            // of the selection here rather than at export time, so the count on the bar is never
+            // higher than what Export ZIP will actually produce.
+            val stillThere = rows.filter { it.status == DiarizedStatus.Done || it.status == DiarizedStatus.Stopped }
+                .map { it.id }.toSet()
+            copy(recordings = rows, blocker = blockerFor(), selected = selected intersect stillThere)
+        }
         dao.observeAllBlocks().collectIntoState { all ->
             copy(blocks = all.groupBy { it.recordingId })
         }
         speakers.observeSpeakers().collectIntoState { copy(enrolledCount = it.size) }
-        settingsStore.settings.collectIntoState { copy(chunkMinutes = it.diarizeChunkMinutes) }
+        settingsStore.settings.collectIntoState {
+            copy(
+                chunkMinutes = it.diarizeChunkMinutes,
+                speechModelId = speechModels.byIdOrDefault(it.speechModelId).id,
+                speakerBundleId = audioModels.speaker.id,
+            )
+        }
+
+        // The model chips. Choices are fixed at construction; what moves is each one's download
+        // state, combined into one map per family so a chip can show "downloading 40%" or offer a
+        // retry. The blocker is recomputed on every change because it is what tells the user a
+        // model is still missing -- without this it would keep saying so after the download lands.
+        val timed = speechModels.available.filter { it.kind.reportsWordTimings }
+        setState { copy(speechChoices = timed, speakerChoices = audioModels.speakerBundles) }
+        combine(timed.map { m -> speechModels.stateOf(m.id) }) { states ->
+            timed.map { it.id }.zip(states.toList()).toMap()
+        }.collectIntoState { copy(speechStates = it, blocker = blockerFor()) }
+        combine(audioModels.speakerBundles.map { b -> audioModels.state(b) }) { states ->
+            audioModels.speakerBundles.map { it.id }.zip(states.toList()).toMap()
+        }.collectIntoState { copy(bundleStates = it, blocker = blockerFor()) }
 
         // A Running row whose job WorkManager has lost would show a progress bar forever.
         viewModelScope.launch { DiarizeWorker.reconcile(appContext, dao) }
@@ -223,6 +304,14 @@ class DiarizeViewModel @Inject constructor(
             setState { copy(expectedSpeakers = intent.count.coerceIn(0, MAX_SPEAKERS)) }
         is DiarizeIntent.SetChunkMinutes ->
             settingsStore.update { it.copy(diarizeChunkMinutes = intent.minutes.coerceIn(0, 60)) }
+        is DiarizeIntent.SetSpeechModel -> setSpeechModel(intent.id)
+        is DiarizeIntent.SetSpeakerBundle -> setSpeakerBundle(intent.id)
+        is DiarizeIntent.ToggleSelected -> toggleSelected(intent.id)
+        DiarizeIntent.SelectAll -> setState {
+            copy(selected = recordings.filter { TranscriptBundle.exportable(it, blocks[it.id].orEmpty()) }.map { it.id }.toSet())
+        }
+        DiarizeIntent.ClearSelection -> setState { copy(selected = emptySet()) }
+        DiarizeIntent.ExportSelected -> exportSelected()
         is DiarizeIntent.AttachReference -> attachReference(intent.id, intent.text)
         is DiarizeIntent.AttachReferenceFile -> attachReferenceFile(intent.id, intent.file)
         is DiarizeIntent.SetLanguage -> setLanguage(intent.id, intent.code)
@@ -449,7 +538,93 @@ class DiarizeViewModel @Inject constructor(
             setState { copy(error = blocker) }
             return
         }
-        viewModelScope.launch { start(id) }
+        viewModelScope.launch {
+            // Under different models the run is a comparison, not a retry, and gets its own row on
+            // the same audio; the transcript already on this row stays. See [needsNewRowFor].
+            val row = dao.byId(id) ?: return@launch
+            val target = if (row.needsNewRowFor(speechModels.selected.id, audioModels.speaker.id)) {
+                store.sibling(row)
+            } else {
+                id
+            }
+            start(target)
+        }
+    }
+
+    private fun toggleSelected(id: Long) {
+        setState {
+            val row = recordings.firstOrNull { it.id == id } ?: return@setState this
+            // Only a row with a transcript can be selected -- the same rule the archive applies, so
+            // a row that cannot be exported never shows a tick that Export ZIP then ignores.
+            if (id !in selected && !TranscriptBundle.exportable(row, blocks[id].orEmpty())) return@setState this
+            copy(selected = if (id in selected) selected - id else selected + id)
+        }
+    }
+
+    /**
+     * Renders the selected transcripts into one archive in the cache and hands the file to the screen.
+     *
+     * The blocks are read from the database rather than taken from [DiarizeUiState.blocks], which
+     * is one flow behind the rows: a row that finished a moment ago can be Done in `recordings`
+     * while `blocks` still holds the previous run's words. An export is a record and reads the
+     * record. Each row's models come from the row itself, never from the chips -- a sibling row was
+     * produced under other models and its file has to say which.
+     *
+     * Off the main thread throughout: rendering a twenty-minute transcript is string work over
+     * thousands of words, and the ZIP is deflated on the way out. The selection is cleared only
+     * once the archive exists, so a failure leaves the user's picks in place to try again.
+     */
+    private fun exportSelected() {
+        if (currentState.exporting) return
+        viewModelScope.launch {
+            setState { copy(exporting = true) }
+            val snapshot = currentState
+            val written = withContext(Dispatchers.IO) {
+                runCatching {
+                    val sources = snapshot.recordings
+                        .filter { it.id in snapshot.selected }
+                        .mapNotNull { row ->
+                            val blocks = dao.blocksFor(row.id)
+                            if (!TranscriptBundle.exportable(row, blocks)) return@mapNotNull null
+                            TranscriptBundle.Source(
+                                row, blocks, transcriptModels(row, snapshot.speechChoices, snapshot.speakerChoices),
+                            )
+                        }
+                    val entries = TranscriptBundle.entries(sources, AudioRecorder.SAMPLE_RATE)
+                    if (entries.isEmpty()) return@runCatching null
+                    val directory = File(appContext.cacheDir, "reports").apply { mkdirs() }
+                    val file = File(directory, TranscriptBundle.fileName(Instant.now()))
+                    TranscriptBundle.write(entries, file)
+                    file to entries.size
+                }.getOrNull()
+            }
+            if (written == null) {
+                setState { copy(exporting = false, error = "There is nothing to export in the selection.") }
+                return@launch
+            }
+            setState { copy(exporting = false, selected = emptySet()) }
+            emitEffect(DiarizeEffect.ShareZip(written.first, written.second))
+        }
+    }
+
+    /**
+     * Selecting a model *is* asking for it: a chip tapped while the files are missing enqueues the
+     * download rather than leaving a selection that cannot run and a blocker naming another screen.
+     * Selection is written first so the chip shows as chosen with its progress, and tapping an
+     * already-selected chip retries a failed or missing download -- the tap always means "I want
+     * this one working".
+     */
+    private fun setSpeechModel(id: String) {
+        val model = currentState.speechChoices.firstOrNull { it.id == id } ?: return
+        settingsStore.update { it.copy(speechModelId = id) }
+        if (!speechModels.isDownloaded(model)) speechModels.enqueueDownload(model)
+    }
+
+    /** Same contract as [setSpeechModel], for the segmentation+embedding bundle. */
+    private fun setSpeakerBundle(id: String) {
+        val bundle = currentState.speakerChoices.firstOrNull { it.id == id } ?: return
+        settingsStore.update { it.copy(speakerBundleId = id) }
+        if (!audioModels.isReady(bundle)) audioModels.enqueueDownload(bundle)
     }
 
     /**

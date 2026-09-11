@@ -1,25 +1,24 @@
 package com.example.aiagenttestapp.functions
 
 import com.example.aiagent.engine.core.EngineDescriptor
-import com.example.aiagent.engine.core.ToolCall
 import com.example.aiagent.engine.core.ToolDefinition
-import com.example.aiagent.engine.llamacpp.ToolCallingProtocol
 
 /**
  * How a model is offered the [AppFunctionRegistry], and how the calls it makes come back.
  *
- * There is one catalogue of functions and two ways to reach it, because the runtimes genuinely
- * differ: LiteRT-LM has a tool API, so the tools are declared to it as schemas and it calls them
- * itself; llama.cpp has none, so the same tools are described in the system prompt and the app
- * drives the call/result loop by hand.
+ * There is one catalogue of functions and, in principle, more than one way to reach it, because
+ * runtimes genuinely differ in whether they have a tool API of their own. LiteRT-LM has one, so the
+ * tools are declared to it as schemas and it calls them itself.
  *
- * That difference used to be a pair of booleans read in two places -- the planner deciding whether
- * to add a prompt section, the chat deciding whether to run a hop loop -- which is the arrangement
- * where a third engine means hunting for every `if`. Here each mechanism is one implementation, and
- * the two are not interchangeable in a way callers have to guess at: [PromptDriven] *has* the
- * parsing methods and [RuntimeDriven] does not, so a caller cannot ask a LiteRT-LM strategy to
- * parse a tool call out of a reply -- that code does not compile rather than silently returning
- * null.
+ * It used to have a second mechanism. llama.cpp had no tool API, so the same tools were described in
+ * the system prompt and the app drove the call/result loop by hand -- a `PromptDriven` strategy over
+ * a `ToolCallingProtocol` that lived in the llama.cpp module. That engine is gone and the mechanism
+ * went with it, along with the hop loop in the chat and the `maxToolHops` setting that bounded it.
+ *
+ * What is kept is the shape: the choice of mechanism is made in exactly one place ([forEngine]) and
+ * everything downstream asks the strategy rather than asking which engine it is. That is what made
+ * removing a mechanism a deletion rather than a hunt through every `if`, and it is what a fourth
+ * engine would slot into.
  */
 sealed interface ToolCallingStrategy {
 
@@ -34,19 +33,6 @@ sealed interface ToolCallingStrategy {
     fun systemPromptSection(tools: List<ToolDefinition>): String?
 
     /**
-     * The app runs the loop: the model emits a call as text, the app parses it, executes it, and
-     * feeds the result back as another turn.
-     */
-    interface PromptDriven : ToolCallingStrategy {
-
-        /** The call the model is asking for, or null when its reply is an ordinary answer. */
-        fun parseCall(reply: String): ToolCall?
-
-        /** The prompt that hands a tool's output back so the model can carry on. */
-        fun resultPrompt(call: ToolCall, output: String): String
-    }
-
-    /**
      * The runtime runs the loop: it emits the call, executes it through the tool objects it was
      * given at load, and generates the answer from the result -- all inside one generate. The app
      * supplies only the thing that runs a function
@@ -56,11 +42,15 @@ sealed interface ToolCallingStrategy {
 
     companion object {
         /**
-         * The strategy for an engine. The single place the choice is made -- everything downstream
-         * asks the strategy rather than asking which engine it is.
+         * The strategy for an engine. The single place the choice is made.
+         *
+         * An engine that does not drive its own tool loop gets [NoToolCalling] rather than a
+         * guess: with the prompt-driven mechanism gone there is no honest way to offer it tools,
+         * and silently declaring them to a runtime that cannot call them would leave the model
+         * describing functions it can never reach.
          */
         fun forEngine(descriptor: EngineDescriptor): ToolCallingStrategy =
-            if (descriptor.supportsNativeTools) NativeToolCalling else PromptToolCalling
+            if (descriptor.supportsNativeTools) NativeToolCalling else NoToolCalling
     }
 }
 
@@ -79,22 +69,15 @@ object NativeToolCalling : ToolCallingStrategy.RuntimeDriven {
 }
 
 /**
- * llama.cpp: the tools are described in the system prompt and answered as JSON.
+ * No tools at all: nothing is declared and nothing is added to the prompt.
  *
- * A thin adapter over [ToolCallingProtocol], which owns the format itself and lives in the
- * llama.cpp module with the engine it belongs to. This is what makes the choice of mechanism a
- * choice between objects rather than a branch.
+ * This is also the state a chat is in *before* a model is loaded, which is the reason it is a real
+ * object rather than a null. Deliberately not [ToolCallingStrategy.RuntimeDriven], so the check in
+ * `ChatSession.bindToolRunner` cannot bind a tool runner against an engine that has not been loaded.
  */
-object PromptToolCalling : ToolCallingStrategy.PromptDriven {
+object NoToolCalling : ToolCallingStrategy {
 
-    /** Nothing is declared to the runtime: llama.cpp has no tool API to declare anything to. */
     override fun declarations(tools: List<ToolDefinition>): List<ToolDefinition> = emptyList()
 
-    override fun systemPromptSection(tools: List<ToolDefinition>): String? =
-        ToolCallingProtocol.systemPromptSection(tools)
-
-    override fun parseCall(reply: String): ToolCall? = ToolCallingProtocol.parse(reply)
-
-    override fun resultPrompt(call: ToolCall, output: String): String =
-        ToolCallingProtocol.toolResultPrompt(call, output)
+    override fun systemPromptSection(tools: List<ToolDefinition>): String? = null
 }

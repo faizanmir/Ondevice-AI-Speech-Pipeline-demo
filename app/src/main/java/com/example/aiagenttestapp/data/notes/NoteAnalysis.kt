@@ -1,6 +1,6 @@
 package com.example.aiagenttestapp.data.notes
 
-import com.example.aiagenttestapp.functions.MarkerKind
+import com.example.aiagenttestapp.stt.MarkerKind
 import java.util.Locale
 
 /** One finding as the model reported it, before it is tied to a note. */

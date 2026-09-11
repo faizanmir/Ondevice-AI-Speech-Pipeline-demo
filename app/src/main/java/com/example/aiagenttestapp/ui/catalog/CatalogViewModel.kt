@@ -12,7 +12,7 @@ import com.example.aiagent.engine.core.ModelFitEvaluator
 import com.example.aiagent.engine.core.ModelSpec
 import com.example.aiagent.engine.core.ParamBudget
 import com.example.aiagent.engine.core.Quantization
-import com.example.aiagenttestapp.data.DownloadState
+import com.example.aiagent.llm.DownloadState
 import com.example.aiagenttestapp.ui.mvi.MviViewModel
 import com.example.aiagenttestapp.ui.mvi.UiIntent
 import com.example.aiagenttestapp.ui.mvi.UiState
@@ -21,10 +21,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
-import com.example.aiagenttestapp.data.CustomModelStore
-import com.example.aiagenttestapp.data.HuggingFaceAuth
-import com.example.aiagenttestapp.data.ModelDirectory
-import com.example.aiagenttestapp.data.ModelRepository
+import com.example.aiagent.llm.CustomModelStore
+import com.example.aiagent.llm.HuggingFaceAuth
+import com.example.aiagent.llm.ModelDirectory
+import com.example.aiagent.llm.ModelRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 
@@ -167,8 +167,9 @@ class CatalogViewModel @Inject constructor(
             .map { model ->
                 val engine = registry.defaultFor(model)?.descriptor
                     // Fall back to *any* registered engine that understands the format, so an
-                    // unavailable engine still yields an honest "needs llama.cpp" verdict rather
-                    // than the model vanishing from the list with no explanation.
+                    // engine that is unavailable on this device still yields an honest "needs
+                    // LiteRT-LM" verdict rather than the model vanishing from the list with no
+                    // explanation.
                     ?: registry.all.map { it.descriptor }.firstOrNull { it.canLoad(model.format) }
 
                 // Downloaded is the disk's call, not WorkManager's -- a finished job whose file was
@@ -234,7 +235,10 @@ class CatalogViewModel @Inject constructor(
         ModelFitEvaluator.evaluate(
             model = model,
             engine = EngineDescriptor(
-                id = EngineId.LLAMA_CPP,
+                // The id is inert on this stand-in: `supportedFormats` is empty, so
+                // ModelFitEvaluator returns UNSUPPORTED on its first check and never reaches
+                // anything that reads the id. It has to be *some* value, and there is one left.
+                id = EngineId.LITE_RT_LM,
                 displayName = "No engine",
                 vendor = "",
                 supportedFormats = emptySet(),

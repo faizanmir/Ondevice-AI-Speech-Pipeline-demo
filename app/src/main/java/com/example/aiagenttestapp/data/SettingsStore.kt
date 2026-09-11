@@ -5,7 +5,17 @@ import com.example.aiagent.engine.core.Accelerator
 import com.example.aiagent.engine.core.EngineId
 import com.example.aiagent.engine.core.SamplingParams
 import com.example.aiagenttestapp.data.notes.NoteSummaryMode
-import com.example.aiagenttestapp.data.notes.SttBackend
+// The speech settings' value types live in stt/ with the pipeline they configure, not here. They
+// used to sit in data/ purely to keep this file from importing stt -- a rule that existed because
+// stt/ imported data/ back. That direction is being unwound: the pipeline is becoming a library
+// that takes its configuration as a parameter, so the types are its public API and this layer is
+// the one that depends on it.
+import com.example.aiagenttestapp.stt.DiarizationEngine
+import com.example.aiagenttestapp.stt.OnnxProvider
+import com.example.aiagenttestapp.stt.PlatformFeedChunk
+import com.example.aiagenttestapp.stt.PlatformFeedPace
+import com.example.aiagenttestapp.stt.SliceWindow
+import com.example.aiagenttestapp.stt.SttBackend
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -84,12 +94,6 @@ data class AppSettings(
      */
     val reproducibleOutput: Boolean = false,
     /**
-     * Most tool calls a model may chain in a single turn before it must answer -- search, read a
-     * result, search again, then reply. Bounds runaway chaining by a small model that keeps calling
-     * tools. Minimum 1.
-     */
-    val maxToolHops: Int = 4,
-    /**
      * Whether reasoning models (Qwen3, DeepSeek-R1) may work through a `<think>` block before
      * answering. Off appends a directive asking them to answer directly. Baked into the system
      * prompt, so it takes effect on the next conversation.
@@ -127,6 +131,14 @@ data class AppSettings(
      * in advance -- see [OnnxProvider].
      */
     val onnxProvider: OnnxProvider = OnnxProvider.DEFAULT,
+    /**
+     * Which implementation answers "who spoke when".
+     *
+     * Exposed for the same reason [onnxProvider] is: the two are not comparable from here. They run
+     * the same two models and differ in who owns the stage between them, so the only way to know
+     * which is better on a given recording is to run it through both. See [DiarizationEngine].
+     */
+    val diarizationEngine: DiarizationEngine = DiarizationEngine.DEFAULT,
     /**
      * How fast audio is fed to the system recogniser, for the platform STT backend.
      *
@@ -222,12 +234,12 @@ class SettingsStore(context: Context) {
             noteSummaryMode = NoteSummaryMode.from(prefs.getString(KEY_NOTE_SUMMARY_MODE, null)),
             threadCount = prefs.getInt(KEY_THREAD_COUNT, 0),
             reproducibleOutput = prefs.getBoolean(KEY_REPRODUCIBLE, false),
-            maxToolHops = prefs.getInt(KEY_MAX_TOOL_HOPS, 4).coerceAtLeast(1),
             thinkingEnabled = prefs.getBoolean(KEY_THINKING, true),
             keywordMarkersEnabled = prefs.getBoolean(KEY_KEYWORD_MARKERS, false),
             vadEnabled = prefs.getBoolean(KEY_VAD, true),
             diarizeChunkMinutes = prefs.getInt(KEY_DIARIZE_CHUNK_MINUTES, 5).coerceIn(0, 60),
             onnxProvider = OnnxProvider.fromSlug(prefs.getString(KEY_ONNX_PROVIDER, null)),
+            diarizationEngine = DiarizationEngine.fromSlug(prefs.getString(KEY_DIARIZATION_ENGINE, null)),
             platformFeedPace = PlatformFeedPace.fromSlug(prefs.getString(KEY_PLATFORM_FEED_PACE, null)),
             platformFeedChunk = PlatformFeedChunk.fromSlug(prefs.getString(KEY_PLATFORM_FEED_CHUNK, null)),
             platformLanguage = prefs.getString(KEY_PLATFORM_LANGUAGE, null),
@@ -257,12 +269,12 @@ class SettingsStore(context: Context) {
             putString(KEY_NOTE_SUMMARY_MODE, next.noteSummaryMode.name)
             putInt(KEY_THREAD_COUNT, next.threadCount)
             putBoolean(KEY_REPRODUCIBLE, next.reproducibleOutput)
-            putInt(KEY_MAX_TOOL_HOPS, next.maxToolHops)
             putBoolean(KEY_THINKING, next.thinkingEnabled)
             putBoolean(KEY_KEYWORD_MARKERS, next.keywordMarkersEnabled)
             putBoolean(KEY_VAD, next.vadEnabled)
             putInt(KEY_DIARIZE_CHUNK_MINUTES, next.diarizeChunkMinutes)
             putString(KEY_ONNX_PROVIDER, next.onnxProvider.slug)
+            putString(KEY_DIARIZATION_ENGINE, next.diarizationEngine.slug)
             putString(KEY_PLATFORM_FEED_PACE, next.platformFeedPace.slug)
             putString(KEY_PLATFORM_FEED_CHUNK, next.platformFeedChunk.slug)
             putString(KEY_PLATFORM_LANGUAGE, next.platformLanguage)
@@ -297,12 +309,12 @@ class SettingsStore(context: Context) {
         private const val KEY_NOTE_SUMMARY_MODE = "note_summary_mode"
         private const val KEY_THREAD_COUNT = "thread_count"
         private const val KEY_REPRODUCIBLE = "reproducible_output"
-        private const val KEY_MAX_TOOL_HOPS = "max_tool_hops"
         private const val KEY_THINKING = "thinking_enabled"
         private const val KEY_KEYWORD_MARKERS = "keyword_markers_enabled"
         private const val KEY_VAD = "vad_enabled"
         private const val KEY_DIARIZE_CHUNK_MINUTES = "diarize_chunk_minutes"
         private const val KEY_ONNX_PROVIDER = "onnx_provider"
+        private const val KEY_DIARIZATION_ENGINE = "diarization_engine"
         private const val KEY_PLATFORM_FEED_PACE = "platform_feed_pace"
         private const val KEY_PLATFORM_FEED_CHUNK = "platform_feed_chunk"
         private const val KEY_PLATFORM_LANGUAGE = "platform_language"

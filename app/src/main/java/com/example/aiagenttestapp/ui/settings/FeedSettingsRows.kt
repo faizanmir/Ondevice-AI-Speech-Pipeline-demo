@@ -9,8 +9,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.aiagenttestapp.data.PlatformFeedChunk
-import com.example.aiagenttestapp.data.PlatformFeedPace
+import com.example.aiagenttestapp.stt.PlatformFeedChunk
+import com.example.aiagenttestapp.stt.PlatformFeedPace
 
 /*
  * The two platform-feed controls, shared by Settings and the benchmark screen.

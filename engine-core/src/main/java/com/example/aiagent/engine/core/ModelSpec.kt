@@ -2,7 +2,14 @@ package com.example.aiagent.engine.core
 
 import kotlinx.serialization.Serializable
 
-/** On-disk container format of a model. Determines which engines can load it. */
+/**
+ * On-disk container format of a model. Determines which engines can load it.
+ *
+ * One entry, because one engine is registered. `GGUF` was here for llama.cpp and `MNN` before that;
+ * both were removed with their engines, since a format no runtime can open is a model the user can
+ * download and never run. [com.example.aiagenttestapp.data.CustomModelStore] decodes saved specs one
+ * at a time so that removing a value drops only the models in that format, not the whole file.
+ */
 @Serializable
 enum class ModelFormat(
     val extension: String,
@@ -10,9 +17,6 @@ enum class ModelFormat(
 ) {
     /** Google's current on-device format, loaded by LiteRT-LM. */
     LITERTLM(".litertlm", "LiteRT-LM"),
-
-    /** llama.cpp's format. Huge community catalogue. */
-    GGUF(".gguf", "GGUF"),
 }
 
 /**
